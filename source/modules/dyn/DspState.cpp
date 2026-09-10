@@ -31,6 +31,8 @@ void DspCore::clearState()
 
     envBase = { 0.0, 0.0, 0.0, 0.0 };
     baseGainState = { 1.0, 1.0, 1.0, 1.0 };
+    smoothedTensions = { 0.0, 0.0, 0.0, 0.0 };
+    tensionSmoothingInitialised = false;
     cleanEnvPeak = { 0.0, 0.0 };
     cleanGainState = { 1.0, 1.0 };
     cleanHalfPeak = { 0.0, 0.0 };
@@ -90,6 +92,7 @@ void DspCore::updateDerivedParameters()
 
     derived.tensionFloor = dbToAmp(roundToParameterStep(parameters.tensionFloor));
     derived.tensionHysteresis = roundToParameterStep(parameters.tensionHysteresis) * 0.01;
+    derived.tensionSmoothingCoefficient = std::exp(-1.0 / (sampleRate * 0.005));
     derived.releaseLogarithmic = parameters.releaseForm == 1;
     derived.releaseCurve = derived.releaseLogarithmic ? roundToParameterStep(parameters.releaseCurve) * 0.01 : 0.0;
     derived.adaptiveOffsetDb = roundToParameterStep(parameters.adaptiveOffset);

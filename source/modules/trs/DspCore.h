@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../DspUtilities.h"
+
 #include <JuceHeader.h>
 
 #include <vector>
@@ -70,8 +72,6 @@ private:
 
     static float calculateThresholdAmount(float levelDb, float thresholdDb, float kneeDb) noexcept;
     static float makeReleaseCoefficient(float timeMs, double sampleRate) noexcept;
-    static int wrapIndex(int index, int size) noexcept;
-
     void updateDerivedParameters();
     void clearDelayBuffers() noexcept;
     void resetDetector() noexcept;

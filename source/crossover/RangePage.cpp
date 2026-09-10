@@ -80,11 +80,14 @@ public:
 
     void refreshExternalState() override
     {
-        reorderRows("gain");
+        const auto previousPreferredHeight = getPreferredHeight();
+        const auto orderChanged = reorderRows("gain");
         refreshSoloButtonState();
         updateToggleLabels();
         updateTimeModeControls();
-        resized();
+
+        if (orderChanged || previousPreferredHeight != getPreferredHeight())
+            resized();
     }
 
     int getPreferredHeight() const override
@@ -309,9 +312,11 @@ private:
             reorderGroup = spec.reorderGroup != nullptr ? spec.reorderGroup : "";
             fixedOrder = spec.fixedOrder;
             auxiliaryToggleInverted = spec.auxiliaryToggleInverted;
+            parameterTitleWidth = spec.parameterTitleWidth;
+            auxiliaryToggleWidth = spec.auxiliaryToggleWidth;
 
             if (spec.orderSuffix != nullptr && juce::String(spec.orderSuffix).isNotEmpty())
-                orderParameterId = owner.config.makeCrossoverRangeParameterId(page.rangeIndex, spec.orderSuffix);
+                orderParameterId = owner.config.makeRangeParameterId(page.rangeIndex, spec.orderSuffix);
 
             addAndMakeVisible(*control);
 
@@ -340,6 +345,12 @@ private:
             {
                 auxiliaryToggle = makeTextButton(spec.auxiliaryToggleLabel);
                 auxiliaryToggle->setClickingTogglesState(! auxiliaryToggleInverted);
+
+                if (spec.auxiliaryToggleSymbol != nullptr
+                    && juce::String(spec.auxiliaryToggleSymbol).isNotEmpty())
+                {
+                    auxiliaryToggle->setSystemSymbol(spec.auxiliaryToggleSymbol);
+                }
 
                 if (auxiliaryToggleInverted)
                     refreshAuxiliaryToggleState();
@@ -385,14 +396,21 @@ private:
                 return;
             }
 
-            const auto availableWidth = juce::jmax(0, bounds.getWidth() - (parameterGap * 2));
-            const auto columnWidth = availableWidth / 3;
-            control->setTitleWidthOverride(columnWidth);
-            control->setValueLeadingInset(columnWidth + parameterGap);
+            const auto toggleWidth = auxiliaryToggle->usesIconOnlyContent()
+                ? juce::jmin(iconControlSize, bounds.getWidth())
+                : auxiliaryToggleWidth > 0
+                    ? juce::jmin(auxiliaryToggleWidth, bounds.getWidth())
+                    : juce::jmax(0, (bounds.getWidth() - (parameterGap * 2)) / 3);
+            const auto titleWidth = parameterTitleWidth > 0
+                ? juce::jmin(parameterTitleWidth,
+                             juce::jmax(0, bounds.getWidth() - toggleWidth - (parameterGap * 2)))
+                : toggleWidth;
+            control->setTitleWidthOverride(titleWidth);
+            control->setValueLeadingInset(toggleWidth + parameterGap);
             control->setBounds(bounds);
-            auxiliaryToggle->setBounds(bounds.getX() + columnWidth + parameterGap,
+            auxiliaryToggle->setBounds(bounds.getX() + titleWidth + parameterGap,
                                        bounds.getY(),
-                                       columnWidth,
+                                       toggleWidth,
                                        bounds.getHeight());
         }
 
@@ -440,6 +458,8 @@ private:
         juce::String auxiliaryToggleId;
         juce::String enabledWhenId;
         bool auxiliaryToggleInverted = false;
+        int parameterTitleWidth = 0;
+        int auxiliaryToggleWidth = 0;
         std::unique_ptr<ParameterControl> control;
         std::unique_ptr<BoxTextButton> orderLabel;
         std::unique_ptr<BoxTextButton> auxiliaryToggle;
@@ -595,7 +615,7 @@ private:
         {
             value.setFont(makeUiFont());
             value.setColour(juce::Label::textColourId, uiWhite);
-            value.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+            value.setColour(juce::Label::backgroundColourId, uiBlack);
             value.setColour(juce::Label::outlineColourId, uiGrey500);
             value.setJustificationType(juce::Justification::centred);
             value.setBorderSize(juce::BorderSize<int> { 1 });
@@ -821,7 +841,7 @@ private:
         const auto sourceRange = spec.sourceRangeIndex >= 0
             ? static_cast<size_t>(juce::jlimit(0, static_cast<int>(CrossoverModuleComponent::numRanges - 1), spec.sourceRangeIndex))
             : rangeIndex;
-        return owner.config.makeCrossoverRangeParameterId(sourceRange, spec.suffix);
+        return owner.config.makeRangeParameterId(sourceRange, spec.suffix);
     }
 
     void addControlSpecs(const std::vector<CrossoverControlSpec>& specs, juce::Component& parent)
@@ -867,8 +887,8 @@ private:
             if (spec.kind == ControlKind::time)
             {
                 const auto valueId = getCrossoverRangeParameterId(spec);
-                const auto modeId = owner.config.makeCrossoverRangeParameterId(rangeIndex, spec.modeSuffix);
-                const auto syncId = owner.config.makeCrossoverRangeParameterId(rangeIndex, spec.syncSuffix);
+                const auto modeId = owner.config.makeRangeParameterId(rangeIndex, spec.modeSuffix);
+                const auto syncId = owner.config.makeRangeParameterId(rangeIndex, spec.syncSuffix);
                 auto row = std::make_unique<TimeRow>(owner, valueId, modeId, syncId, spec);
                 row->controlsInRow = spec.controlsInRow;
                 listenedParameterIds.push_back(modeId);
@@ -883,7 +903,7 @@ private:
             if (spec.kind == ControlKind::readout)
             {
                 const auto degreeId = getCrossoverRangeParameterId(spec);
-                const auto flipId = owner.config.makeCrossoverRangeParameterId(rangeIndex, spec.modeSuffix);
+                const auto flipId = owner.config.makeRangeParameterId(rangeIndex, spec.modeSuffix);
                 auto row = std::make_unique<ReadoutRow>(owner, degreeId, flipId, spec);
                 row->controlsInRow = spec.controlsInRow;
                 listenedParameterIds.push_back(degreeId);
@@ -897,14 +917,14 @@ private:
 
             const auto auxiliaryToggleId = spec.auxiliaryToggleSuffix != nullptr
                                                && juce::String(spec.auxiliaryToggleSuffix).isNotEmpty()
-                ? owner.config.makeCrossoverRangeParameterId(rangeIndex, spec.auxiliaryToggleSuffix)
+                ? owner.config.makeRangeParameterId(rangeIndex, spec.auxiliaryToggleSuffix)
                 : juce::String {};
             const auto sourceRange = spec.sourceRangeIndex >= 0
                 ? static_cast<size_t>(juce::jlimit(0, static_cast<int>(CrossoverModuleComponent::numRanges - 1), spec.sourceRangeIndex))
                 : rangeIndex;
             const auto enabledWhenId = spec.enabledWhenSuffix != nullptr
                                             && juce::String(spec.enabledWhenSuffix).isNotEmpty()
-                ? owner.config.makeCrossoverRangeParameterId(sourceRange, spec.enabledWhenSuffix)
+                ? owner.config.makeRangeParameterId(sourceRange, spec.enabledWhenSuffix)
                 : juce::String {};
             auto row = std::make_unique<ParameterRow>(*this,
                                                       owner,
@@ -1053,7 +1073,7 @@ private:
         }
     }
 
-    void reorderRows(const juce::String& group)
+    bool reorderRows(const juce::String& group)
     {
         auto first = std::find_if(rows.begin(), rows.end(), [&group] (const auto& row)
         {
@@ -1061,12 +1081,18 @@ private:
         });
 
         if (first == rows.end())
-            return;
+            return false;
 
         auto last = first;
 
         while (last != rows.end() && (*last)->reorderGroup == group)
             ++last;
+
+        std::vector<RowBase*> previousOrder;
+        previousOrder.reserve(static_cast<size_t>(std::distance(first, last)));
+
+        for (auto current = first; current != last; ++current)
+            previousOrder.push_back(current->get());
 
         std::stable_sort(first, last, [this] (const auto& firstRow, const auto& secondRow)
         {
@@ -1081,6 +1107,11 @@ private:
 
             return getOrder(firstRow) < getOrder(secondRow);
         });
+
+        return ! std::equal(first,
+                            last,
+                            previousOrder.begin(),
+                            [] (const auto& row, const auto* previous) { return row.get() == previous; });
     }
 
     void clearExclusiveToggleGroup(const juce::String& activeParameterId, const juce::String& exclusiveGroup)

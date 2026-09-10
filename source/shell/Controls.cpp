@@ -7,6 +7,8 @@
 
 namespace
 {
+constexpr int popupItemHeight = 30;
+
 void drawNeutralPopupItem(juce::Graphics& g,
                           const juce::Rectangle<int>& area,
                           const bool isSeparator,
@@ -27,17 +29,17 @@ void drawNeutralPopupItem(juce::Graphics& g,
         return;
     }
 
-    g.setColour(isHighlighted ? uiGrey700 : uiGrey800);
-    g.fillRect(area);
-
-    g.setColour(uiGrey500);
-    g.drawRect(area, 1);
+    juce::ignoreUnused(isHighlighted);
+    const auto itemBounds = area.withSizeKeepingCentre(area.getWidth(),
+                                                       juce::jmin(popupItemHeight, area.getHeight()));
+    g.setColour(uiGreyDark);
+    g.fillRect(itemBounds);
 
     g.setColour(textColour != nullptr ? *textColour
                                       : (isEnabled ? uiWhite : uiGrey500));
     g.setFont(makeUiFont());
     g.drawFittedText(text,
-                     area.reduced(uiGap, 0),
+                     itemBounds.reduced(uiGap, 0),
                      justification,
                      1,
                      1.0f);
@@ -65,13 +67,15 @@ void CopyPasteTextEditor::PopupLookAndFeel::drawPopupMenuBackgroundWithOptions(j
                                                                                const int height,
                                                                                const juce::PopupMenu::Options&)
 {
-    graphics.setColour(uiPopup);
+    graphics.setColour(uiGreyLight);
     graphics.fillRect(0, 0, width, height);
+    graphics.setColour(uiWhite);
+    graphics.drawRect(0, 0, width, height, 2);
 }
 
 int CopyPasteTextEditor::PopupLookAndFeel::getPopupMenuBorderSizeWithOptions(const juce::PopupMenu::Options&)
 {
-    return 1;
+    return 2;
 }
 
 void CopyPasteTextEditor::PopupLookAndFeel::getIdealPopupMenuItemSizeWithOptions(const juce::String& text,
@@ -89,7 +93,7 @@ void CopyPasteTextEditor::PopupLookAndFeel::getIdealPopupMenuItemSizeWithOptions
     }
 
     idealWidth = juce::jmax(72, getTextPixelWidth(makeUiFont(), text) + uiGapDouble);
-    idealHeight = 30;
+    idealHeight = popupItemHeight + uiGap;
 }
 
 void CopyPasteTextEditor::PopupLookAndFeel::drawPopupMenuItem(juce::Graphics& g,
@@ -227,6 +231,16 @@ void NoTickComboBox::showPopup()
     auto& lf = getLookAndFeel();
     menu.setLookAndFeel(&lf);
     const auto currentSelectedId = getSelectedId();
+    const auto shouldMarkSelectedItem = getNumItems() > 2;
+
+    for (juce::PopupMenu::MenuItemIterator iterator(menu, true); iterator.next();)
+    {
+        auto& item = iterator.getItem();
+
+        if (item.itemID != 0)
+            item.isTicked = shouldMarkSelectedItem && item.itemID == currentSelectedId;
+    }
+
     menu.showMenuAsync(lf.getOptionsForComboBoxPopupMenu(*this, *label),
                        juce::ModalCallbackFunction::create(
                            [safePointer = juce::Component::SafePointer<NoTickComboBox>(this), currentSelectedId] (int result)
@@ -307,10 +321,14 @@ void NoTickComboBox::mouseUp(const juce::MouseEvent& event)
 
 void NoTickComboBox::mouseExit(const juce::MouseEvent&)
 {
-    if (! pointerDown || ! pressHighlight)
-        return;
+    if (pointerDown)
+        pressHighlight = false;
 
-    pressHighlight = false;
+    repaint();
+}
+
+void NoTickComboBox::mouseEnter(const juce::MouseEvent&)
+{
     repaint();
 }
 
@@ -353,5 +371,5 @@ void NoTickComboBox::setChoiceEnabled(const int choiceIndex, const bool shouldEn
 
 bool NoTickComboBox::isPressedHighlightEnabled() const noexcept
 {
-    return pressHighlight;
+    return isEnabled() && (pressHighlight || isMouseOver(true));
 }

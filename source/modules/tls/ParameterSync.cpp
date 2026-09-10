@@ -1,13 +1,11 @@
 #include "Processor.h"
 
-#include "ParameterIds.h"
+#include "../../crossover/ParameterAccess.h"
 
-#include <cmath>
 #include <algorithm>
 
 namespace
 {
-using tls::parameters::makeCrossoverRangeParameterId;
 using tls::parameters::numParameterSlots;
 using tls::parameters::parameterSpecs;
 using tls::parameters::toIndex;
@@ -16,16 +14,10 @@ using tls::parameters::ParameterSlot;
 
 void TlsAudioProcessor::cacheParameterPointers()
 {
-    for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
-    {
-        for (size_t parameterIndex = 0; parameterIndex < numParameterSlots; ++parameterIndex)
-        {
-            rawRangeParameters[rangeIndex][parameterIndex] = valueTreeState.getRawParameterValue(
-                makeCrossoverRangeParameterId(rangeIndex, parameterSpecs[parameterIndex].suffix));
-
-            jassert(rawRangeParameters[rangeIndex][parameterIndex] != nullptr);
-        }
-    }
+    static_assert(numParameterSlots == parameterSpecs.size());
+    ava::crossover::parameters::cacheRangeParameterPointers(valueTreeState,
+                                                            rawRangeParameters,
+                                                            parameterSpecs);
 }
 
 tls::dsp::DspCore::Parameters TlsAudioProcessor::readCrossoverRangeParameters(const size_t rangeIndex) const

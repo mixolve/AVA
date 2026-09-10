@@ -73,6 +73,7 @@ public:
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
+    void mouseEnter(const juce::MouseEvent&) override;
     void mouseExit(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
 
@@ -100,7 +101,7 @@ private:
     bool promptActive = false;
     int dragStartViewportY = 0;
     juce::Colour outlineColour = uiGrey500;
-    juce::Colour highlightColour = uiAccent;
+    juce::Colour highlightColour = uiBlack;
     std::function<void()> customPromptAction;
     std::unique_ptr<juce::TextEditor> editor;
     bool marqueeRepaintPending = false;
@@ -117,12 +118,16 @@ public:
     void setPressFillEnabled(bool shouldEnable) noexcept;
     void setClearsParameterFocusOnMouseDown(bool shouldClear) noexcept;
     void setFillVisible(bool shouldShow) noexcept;
+    void setFillColour(juce::Colour colour) noexcept;
+    void setInteractionFillVisible(bool shouldShow) noexcept;
+    void setInteractionFillColour(juce::Colour colour) noexcept;
     void setDividerLineVisible(bool shouldShow) noexcept;
     void setTextJustification(juce::Justification justification) noexcept;
     void setBorderVisible(bool shouldShow) noexcept;
-    void setEqlFilterHeaderColouringEnabled(bool shouldEnable) noexcept;
     void setCancelClickOnLeave(bool shouldEnable) noexcept;
     void setHorizontalBidirectionalArrowVisible(bool shouldShow) noexcept;
+    void setSystemSymbol(const char* symbolName);
+    bool usesIconOnlyContent() const noexcept;
     void setTextColourOverride(juce::Colour colour);
     void clearTextColourOverride();
     void setLongPressAction(std::function<void()> action, int delayMs = 500, juce::String promptText = "RESET?");
@@ -142,6 +147,8 @@ public:
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
+    void mouseMove(const juce::MouseEvent& event) override;
+    void mouseEnter(const juce::MouseEvent&) override;
     void mouseExit(const juce::MouseEvent&) override;
 
 private:
@@ -153,6 +160,9 @@ private:
     bool pressFillEnabled = true;
     bool clearsParameterFocusOnMouseDown = true;
     bool fillVisible = true;
+    juce::Colour fillColour = uiGrey800;
+    bool interactionFillVisible = true;
+    juce::Colour interactionFillColour = uiGreyLight;
     bool dividerLineVisible = false;
     bool pointerDown = false;
     bool dragActive = false;
@@ -161,8 +171,9 @@ private:
     bool pressCanceled = false;
     juce::Justification textJustification = juce::Justification::centred;
     bool borderVisible = true;
-    bool eqlFilterHeaderColouringEnabled = false;
     bool horizontalBidirectionalArrowVisible = false;
+    juce::Image horizontalBidirectionalArrowImage;
+    juce::Image systemSymbolImage;
     bool hasTextColourOverride = false;
     juce::Colour textColourOverride;
     bool dragTargetOutlineVisible = false;
@@ -183,6 +194,7 @@ private:
     bool actionPromptGlobalListenerActive = false;
     bool consumeNextMouseUp = false;
     int actionPromptPressedIndex = -1;
+    int actionPromptHoverIndex = -1;
     bool moveOnNextDrag = false;
     juce::String moveArmedOriginalText;
     juce::String actionPromptOriginalText;

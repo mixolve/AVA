@@ -1,9 +1,7 @@
 #include "EditorControls.h"
-#include "EqlHeaderRenderer.h"
+#include "SystemSymbols.h"
 
 #include <utility>
-
-using namespace eql_header_renderer;
 
 class BoxTextButton::PromptDismissListener final : public juce::MouseListener
 {
@@ -53,7 +51,23 @@ void BoxTextButton::setHorizontalBidirectionalArrowVisible(const bool shouldShow
         return;
 
     horizontalBidirectionalArrowVisible = shouldShow;
+
+    if (shouldShow && horizontalBidirectionalArrowImage.isNull())
+        horizontalBidirectionalArrowImage = loadSystemSymbolImage("arrow.left.arrow.right", iconGlyphSize);
+
     repaint();
+}
+
+void BoxTextButton::setSystemSymbol(const char* symbolName)
+{
+    systemSymbolImage = loadSystemSymbolImage(symbolName, iconGlyphSize);
+    repaint();
+}
+
+bool BoxTextButton::usesIconOnlyContent() const noexcept
+{
+    return systemSymbolImage.isValid()
+        || (horizontalBidirectionalArrowVisible && getButtonText().isEmpty());
 }
 
 void BoxTextButton::setToggleAccentVisible(const bool shouldShow) noexcept
@@ -84,6 +98,33 @@ void BoxTextButton::setFillVisible(const bool shouldShow) noexcept
     repaint();
 }
 
+void BoxTextButton::setFillColour(const juce::Colour colour) noexcept
+{
+    if (fillColour == colour)
+        return;
+
+    fillColour = colour;
+    repaint();
+}
+
+void BoxTextButton::setInteractionFillVisible(const bool shouldShow) noexcept
+{
+    if (interactionFillVisible == shouldShow)
+        return;
+
+    interactionFillVisible = shouldShow;
+    repaint();
+}
+
+void BoxTextButton::setInteractionFillColour(const juce::Colour colour) noexcept
+{
+    if (interactionFillColour == colour)
+        return;
+
+    interactionFillColour = colour;
+    repaint();
+}
+
 void BoxTextButton::setDividerLineVisible(const bool shouldShow) noexcept
 {
     if (dividerLineVisible == shouldShow)
@@ -105,15 +146,6 @@ void BoxTextButton::setBorderVisible(const bool shouldShow) noexcept
         return;
 
     borderVisible = shouldShow;
-    repaint();
-}
-
-void BoxTextButton::setEqlFilterHeaderColouringEnabled(const bool shouldEnable) noexcept
-{
-    if (eqlFilterHeaderColouringEnabled == shouldEnable)
-        return;
-
-    eqlFilterHeaderColouringEnabled = shouldEnable;
     repaint();
 }
 
@@ -191,6 +223,7 @@ void BoxTextButton::showActionPrompt()
     actionPromptOriginalText = getButtonText();
     actionPromptActive = true;
     actionPromptPressedIndex = -1;
+    actionPromptHoverIndex = getActionPromptHitIndex(getMouseXYRelative());
     consumeNextMouseUp = true;
 
     if (promptDismissListener == nullptr)
@@ -244,6 +277,7 @@ void BoxTextButton::dismissActionPrompt()
     actionPromptGlobalListenerActive = false;
     actionPromptActive = false;
     actionPromptPressedIndex = -1;
+    actionPromptHoverIndex = -1;
 
     if (actionPromptOriginalText.isNotEmpty() && getButtonText() != actionPromptOriginalText)
         setButtonText(actionPromptOriginalText);
@@ -254,16 +288,21 @@ void BoxTextButton::dismissActionPrompt()
 
 void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
 {
-    const auto buttonDown = isEnabled()
+    const auto interactionHighlight = isEnabled()
         && pressFillEnabled
-        && pressHighlight;
+        && (isMouseOver(true) || pressHighlight);
     const auto accentActive = isEnabled() && (alwaysAccentOutline || (toggleAccentVisible && getToggleState()));
-    const auto fill = buttonDown ? uiGrey700 : uiGrey800;
+    const auto whiteOutlineActive = confirmationFlashActive
+        || dragTargetOutlineVisible
+        || (accentActive && accentColour == uiWhite);
+    const auto fill = actionPromptActive
+        ? uiGreyDark
+        : (interactionHighlight ? interactionFillColour : fillColour);
     const auto outline = (confirmationFlashActive || dragTargetOutlineVisible)
-        ? juce::Colour { 0xFF99CCCC }
+        ? uiWhite
         : (accentActive ? accentColour : uiGrey500);
 
-    if (fillVisible)
+    if (actionPromptActive || fillVisible || (interactionHighlight && interactionFillVisible))
     {
         graphics.setColour(fill);
         graphics.fillRect(getLocalBounds());
@@ -272,11 +311,11 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
     if (borderVisible)
     {
         graphics.setColour(outline);
-        graphics.drawRect(getLocalBounds(), 1);
+        graphics.drawRect(getLocalBounds(), whiteOutlineActive ? 2 : 1);
     }
 
     const auto textColour = isEnabled()
-        ? (hasTextColourOverride ? textColourOverride : uiWhite)
+        ? (interactionHighlight ? uiBlack : (hasTextColourOverride ? textColourOverride : uiWhite))
         : uiGrey500;
     const auto drawBottomDivider = [&graphics, this]
     {
@@ -312,14 +351,16 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
         {
             const auto isLastAction = index + 1 == promptLabels.size();
             const auto actionBounds = promptBounds.removeFromLeft(isLastAction ? promptBounds.getWidth() : actionWidth);
+            const auto promptHighlighted = actionPromptPressedIndex == index
+                || (actionPromptPressedIndex < 0 && actionPromptHoverIndex == index);
 
-            if (actionPromptPressedIndex == index)
+            if (promptHighlighted)
             {
-                graphics.setColour(uiGrey700);
+                graphics.setColour(uiGreyLight);
                 graphics.fillRect(actionBounds);
             }
 
-            graphics.setColour(textColour);
+            graphics.setColour(promptHighlighted ? uiBlack : uiWhite);
             if (drawLoopingText(graphics,
                                 promptLabels[index],
                                 actionBounds.reduced(uiGap, 0),
@@ -339,8 +380,34 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
         return;
     }
 
+    const auto iconBounds = getLocalBounds()
+        .withSizeKeepingCentre(static_cast<int>(iconGlyphSize), static_cast<int>(iconGlyphSize))
+        .toFloat();
+
+    if (systemSymbolImage.isValid())
+    {
+        graphics.setColour(interactionHighlight ? uiBlack : uiWhite);
+        graphics.drawImage(systemSymbolImage,
+                           iconBounds,
+                           juce::RectanglePlacement::centred,
+                           true);
+        drawBottomDivider();
+        return;
+    }
+
     if (horizontalBidirectionalArrowVisible && getButtonText().isEmpty())
     {
+        if (horizontalBidirectionalArrowImage.isValid())
+        {
+            graphics.setColour(interactionHighlight ? uiBlack : uiWhite);
+            graphics.drawImage(horizontalBidirectionalArrowImage,
+                               iconBounds,
+                               juce::RectanglePlacement::centred,
+                               true);
+            drawBottomDivider();
+            return;
+        }
+
         const auto centreY = static_cast<float>(getHeight()) * 0.5f;
         const auto leftX = 6.0f;
         const auto rightX = juce::jmax(leftX + 8.0f, static_cast<float>(getWidth()) - 7.0f);
@@ -366,19 +433,6 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
     {
         drawLoopingText(graphics, getButtonText(), textBounds, font, textJustification);
         scheduleMarqueeRepaint();
-        drawBottomDivider();
-        return;
-    }
-
-    if (eqlFilterHeaderColouringEnabled
-        && drawFilterHeaderHighlight(graphics, getButtonText(), textBounds, font, textJustification))
-    {
-        drawBottomDivider();
-        return;
-    }
-
-    if (drawChannelTokenHighlight(graphics, getButtonText(), textBounds, font, textJustification))
-    {
         drawBottomDivider();
         return;
     }
@@ -451,6 +505,7 @@ void BoxTextButton::mouseDown(const juce::MouseEvent& event)
         }
 
         actionPromptPressedIndex = actionIndex;
+        actionPromptHoverIndex = actionIndex;
         repaint();
         return;
     }
@@ -676,9 +731,10 @@ void BoxTextButton::mouseExit(const juce::MouseEvent&)
 
     if (actionPromptActive)
     {
-        if (actionPromptPressedIndex >= 0)
+        if (actionPromptPressedIndex >= 0 || actionPromptHoverIndex >= 0)
         {
             actionPromptPressedIndex = -1;
+            actionPromptHoverIndex = -1;
             repaint();
         }
 
@@ -686,7 +742,10 @@ void BoxTextButton::mouseExit(const juce::MouseEvent&)
     }
 
     if (! pointerDown || ! pressHighlight)
+    {
+        repaint();
         return;
+    }
 
     if (cancelClickOnLeave && ! dragHoldArmed)
     {
@@ -705,6 +764,26 @@ void BoxTextButton::mouseExit(const juce::MouseEvent&)
         stopTimer();
     }
     repaint();
+}
+
+void BoxTextButton::mouseMove(const juce::MouseEvent& event)
+{
+    if (! isEnabled() || ! actionPromptActive || actionPromptPressedIndex >= 0)
+        return;
+
+    const auto hoverIndex = getActionPromptHitIndex(event.getPosition());
+
+    if (actionPromptHoverIndex == hoverIndex)
+        return;
+
+    actionPromptHoverIndex = hoverIndex;
+    repaint();
+}
+
+void BoxTextButton::mouseEnter(const juce::MouseEvent&)
+{
+    if (isEnabled())
+        repaint();
 }
 
 void BoxTextButton::timerCallback()

@@ -4,6 +4,8 @@
 
 #include "ProcessorSupport.h"
 
+#include <algorithm>
+
 void EqlModuleProcessor::SecondOrderSection::reset() noexcept
 {
     for (auto& channelState : state)
@@ -14,31 +16,75 @@ void EqlModuleProcessor::SecondOrderSection::setIdentity() noexcept
 {
     b = { 1.0, 0.0, 0.0 };
     a = { 0.0, 0.0 };
+    targetB = b;
+    targetA = a;
+    coefficientBStep.fill(0.0);
+    coefficientAStep.fill(0.0);
+    transitionSamplesRemaining = 0;
     reset();
+}
+
+void EqlModuleProcessor::SecondOrderSection::transitionTo(const SecondOrderSection& target,
+                                                          const int transitionSamples) noexcept
+{
+    targetB = target.b;
+    targetA = target.a;
+
+    if (transitionSamples <= 0)
+    {
+        b = targetB;
+        a = targetA;
+        coefficientBStep.fill(0.0);
+        coefficientAStep.fill(0.0);
+        transitionSamplesRemaining = 0;
+        return;
+    }
+
+    transitionSamplesRemaining = transitionSamples;
+
+    for (size_t index = 0; index < b.size(); ++index)
+        coefficientBStep[index] = (targetB[index] - b[index]) / static_cast<double>(transitionSamples);
+
+    for (size_t index = 0; index < a.size(); ++index)
+        coefficientAStep[index] = (targetA[index] - a[index]) / static_cast<double>(transitionSamples);
+}
+
+bool EqlModuleProcessor::SecondOrderSection::isTransitioning() const noexcept
+{
+    return transitionSamplesRemaining > 0;
 }
 
 void EqlModuleProcessor::SecondOrderSection::process(juce::AudioBuffer<float>& buffer, const int numChannels) noexcept
 {
     const auto channelLimit = juce::jlimit(0, static_cast<int>(maxSupportedChannels), numChannels);
 
-    for (int channel = 0; channel < channelLimit; ++channel)
+    for (int sampleIndex = 0; sampleIndex < buffer.getNumSamples(); ++sampleIndex)
     {
-        auto* samples = buffer.getWritePointer(channel);
-        auto& s = state[static_cast<size_t>(channel)];
-        auto s1 = s[0];
-        auto s2 = s[1];
-
-        for (int sampleIndex = 0; sampleIndex < buffer.getNumSamples(); ++sampleIndex)
+        if (transitionSamplesRemaining > 0)
         {
-            const auto x = static_cast<double>(samples[sampleIndex]);
-            const auto y = (b[0] * x) + s1;
-            s1 = (b[1] * x) - (a[0] * y) + s2;
-            s2 = (b[2] * x) - (a[1] * y);
-            samples[sampleIndex] = static_cast<float>(y);
+            for (size_t index = 0; index < b.size(); ++index)
+                b[index] += coefficientBStep[index];
+
+            for (size_t index = 0; index < a.size(); ++index)
+                a[index] += coefficientAStep[index];
+
+            if (--transitionSamplesRemaining == 0)
+            {
+                b = targetB;
+                a = targetA;
+            }
         }
 
-        s[0] = s1;
-        s[1] = s2;
+        for (int channel = 0; channel < channelLimit; ++channel)
+        {
+            auto* samples = buffer.getWritePointer(channel);
+            auto& s = state[static_cast<size_t>(channel)];
+            const auto x = static_cast<double>(samples[sampleIndex]);
+            const auto y = (b[0] * x) + s[0];
+            s[0] = (b[1] * x) - (a[0] * y) + s[1];
+            s[1] = (b[2] * x) - (a[1] * y);
+            samples[sampleIndex] = static_cast<float>(y);
+        }
     }
 }
 
@@ -118,9 +164,31 @@ void EqlModuleProcessor::BiquadCascade::reset() noexcept
 void EqlModuleProcessor::BiquadCascade::setIdentity() noexcept
 {
     stageCount = 0;
+    targetStageCount = 0;
 
     for (auto& section : sections)
         section.setIdentity();
+}
+
+void EqlModuleProcessor::BiquadCascade::transitionTo(const BiquadCascade& target,
+                                                     const int transitionSamples) noexcept
+{
+    targetStageCount = target.stageCount;
+    const auto transitionStageCount = juce::jmax(stageCount, targetStageCount);
+    SecondOrderSection identitySection;
+
+    for (int sectionIndex = 0; sectionIndex < transitionStageCount; ++sectionIndex)
+    {
+        const auto& targetSection = sectionIndex < targetStageCount
+            ? target.sections[static_cast<size_t>(sectionIndex)]
+            : identitySection;
+        sections[static_cast<size_t>(sectionIndex)].transitionTo(targetSection, transitionSamples);
+    }
+
+    stageCount = transitionStageCount;
+
+    if (transitionSamples <= 0)
+        stageCount = targetStageCount;
 }
 
 void EqlModuleProcessor::BiquadCascade::process(juce::AudioBuffer<float>& buffer, const int numChannels) noexcept
@@ -130,6 +198,18 @@ void EqlModuleProcessor::BiquadCascade::process(juce::AudioBuffer<float>& buffer
 
     for (int sectionIndex = 0; sectionIndex < stageCount; ++sectionIndex)
         sections[static_cast<size_t>(sectionIndex)].process(buffer, numChannels);
+
+    const auto transitionComplete = std::none_of(sections.begin(),
+                                                 sections.begin() + static_cast<std::ptrdiff_t>(stageCount),
+                                                 [] (const auto& section) { return section.isTransitioning(); });
+
+    if (transitionComplete && stageCount != targetStageCount)
+    {
+        for (int sectionIndex = targetStageCount; sectionIndex < stageCount; ++sectionIndex)
+            sections[static_cast<size_t>(sectionIndex)].setIdentity();
+
+        stageCount = targetStageCount;
+    }
 }
 
 void EqlModuleProcessor::PhaseFirFilter::reset() noexcept

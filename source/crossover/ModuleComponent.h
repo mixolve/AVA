@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Splitter.h"
+
 #include <JuceHeader.h>
 
 #include <array>
@@ -41,6 +43,7 @@ public:
         const char* exclusiveGroup = "";
         const char* auxiliaryToggleSuffix = "";
         const char* auxiliaryToggleLabel = "";
+        const char* auxiliaryToggleSymbol = "";
         const char* enabledWhenSuffix = "";
         const char* reorderGroup = "";
         const char* orderSuffix = "";
@@ -49,6 +52,8 @@ public:
         bool auxiliaryToggleInverted = false;
         bool showTimeModeButton = true;
         int topGapMultiplier = 1;
+        int parameterTitleWidth = 0;
+        int auxiliaryToggleWidth = 0;
         int sourceRangeIndex = -1;
         int controlsInRow = 1;
     };
@@ -62,7 +67,7 @@ public:
         std::function<void()> markParametersDirty;
         std::function<bool()> refreshExternalState;
         std::function<bool(const juce::String&, const juce::String&, float)> assignHostSlot;
-        std::function<juce::String(size_t, const char*)> makeCrossoverRangeParameterId;
+        std::function<juce::String(size_t, const char*)> makeRangeParameterId;
         std::function<juce::String(const char*)> makeCrossoverParameterId;
         std::function<juce::String(size_t)> makeCrossoverSoloParameterId;
         std::function<juce::String()> makeCrossoverSplitCountParameterId;
@@ -110,8 +115,7 @@ public:
     void setExternalCrossoverRange(size_t rangeIndex);
 
 private:
-    static constexpr size_t numRanges = 6;
-    static constexpr size_t numCrossoverSlots = 5;
+    static constexpr size_t numRanges = ava::crossover::Splitter::numRanges;
     static constexpr size_t numMonitorButtons = numRanges + 1;
 
     void loadUiState();
@@ -161,6 +165,7 @@ private:
     juce::Component* pinnedHeaderComponent = nullptr;
     juce::Component* pinnedTailComponent = nullptr;
     bool uiStateLoaded = false;
+    bool pageScrollRestored = false;
     size_t visibleRangeIndex = 0;
     int restoredPageScrollY = 0;
     juce::String uiStateSignature;

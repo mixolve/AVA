@@ -37,7 +37,7 @@ public:
         textEditor.setColour(juce::TextEditor::backgroundColourId, uiGrey800);
         textEditor.setColour(juce::TextEditor::outlineColourId, uiGrey500);
         textEditor.setColour(juce::TextEditor::focusedOutlineColourId, uiAccent);
-        textEditor.setColour(juce::TextEditor::highlightColourId, uiAccent);
+        textEditor.setColour(juce::TextEditor::highlightColourId, uiBlack);
         textEditor.setColour(juce::TextEditor::highlightedTextColourId, uiWhite);
         textEditor.setText(std::move(currentText), false);
         textEditor.setReturnKeyStartsNewLine(false);
@@ -54,8 +54,7 @@ public:
 
     void paint(juce::Graphics& graphics) override
     {
-        graphics.setColour(uiPopup);
-        graphics.fillAll();
+        juce::ignoreUnused(graphics);
     }
 
     void resized() override

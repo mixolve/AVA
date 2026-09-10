@@ -1,13 +1,11 @@
 #include "Processor.h"
 
-#include "ParameterIds.h"
+#include "../../crossover/ParameterAccess.h"
 
-#include <cmath>
 #include <algorithm>
 
 namespace
 {
-using dyn::parameters::makeCrossoverRangeParameterId;
 using dyn::parameters::numParameterSlots;
 using dyn::parameters::parameterSpecs;
 using dyn::parameters::toIndex;
@@ -16,16 +14,10 @@ using dyn::parameters::ParameterSlot;
 
 void DynAudioProcessor::cacheParameterPointers()
 {
-    for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
-    {
-        for (size_t parameterIndex = 0; parameterIndex < numParameterSlots; ++parameterIndex)
-        {
-            rawRangeParameters[rangeIndex][parameterIndex] = valueTreeState.getRawParameterValue(
-                makeCrossoverRangeParameterId(rangeIndex, parameterSpecs[parameterIndex].suffix));
-
-            jassert(rawRangeParameters[rangeIndex][parameterIndex] != nullptr);
-        }
-    }
+    static_assert(numParameterSlots == parameterSpecs.size());
+    ava::crossover::parameters::cacheRangeParameterPointers(valueTreeState,
+                                                            rawRangeParameters,
+                                                            parameterSpecs);
 }
 
 dyn::dsp::DspCore::Parameters DynAudioProcessor::readCrossoverRangeParameters(const size_t rangeIndex) const

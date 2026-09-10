@@ -1,7 +1,7 @@
 #include "Parameters.h"
 
+#include "../../crossover/ParameterIds.h"
 #include "DspCore.h"
-#include "ParameterIds.h"
 
 #include <array>
 #include <algorithm>
@@ -10,6 +10,10 @@
 
 namespace dyn::parameters
 {
+using ava::crossover::parameters::makeRangeGroupId;
+using ava::crossover::parameters::makeRangeGroupName;
+using ava::crossover::parameters::makeRangeParameterId;
+
 namespace
 {
 struct ParameterOrderEntry
@@ -148,8 +152,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 
     for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
     {
-        auto group = std::make_unique<juce::AudioProcessorParameterGroup>(makeCrossoverGroupId(rangeIndex),
-                                                                          makeCrossoverGroupName(rangeIndex),
+        auto group = std::make_unique<juce::AudioProcessorParameterGroup>(makeRangeGroupId(rangeIndex),
+                                                                          makeRangeGroupName(rangeIndex),
                                                                           " | ");
 
         for (const auto& entry : dynCrossoverOrder)
@@ -162,7 +166,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
             if (it == parameterSpecs.end())
                 continue;
 
-            const auto parameterId = makeCrossoverRangeParameterId(rangeIndex, it->suffix);
+            const auto parameterId = makeRangeParameterId(rangeIndex, it->suffix);
             const auto parameterName = makeCrossoverHostName(rangeIndex, "DYN", entry.label);
 
             if (it->type == ParameterType::boolean)

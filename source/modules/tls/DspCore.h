@@ -6,18 +6,13 @@
 #include <JuceHeader.h>
 
 #include <array>
-#include <cmath>
 #include <vector>
 
 namespace tls::dsp
 {
 using ava::modules::dsp::dbToAmp;
+using ava::modules::dsp::roundToParameterStep;
 using ava::modules::dsp::wrapIndex;
-
-inline double roundToParameterStep(const double value)
-{
-    return std::floor((value * 100.0) + 0.5) * 0.01;
-}
 
 class DspCore
 {
@@ -125,6 +120,7 @@ private:
         double orthogonalM21 = 0.0;
         double orthogonalM22 = 1.0;
         ListenMode listenMode = ListenMode::neutral;
+        bool signalTransformEnabled = false;
         int leftDelaySamples = 0;
         int rightDelaySamples = 0;
         bool delayEnabled = false;

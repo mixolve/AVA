@@ -284,7 +284,7 @@ ParameterControl::ParameterControl(juce::AudioProcessorValueTreeState& state,
                                                        : parseNumericInput(text);
     };
     valueBox->setOutlineColour(uiGrey500);
-    valueBox->setHighlightColour(uiAccent);
+    valueBox->setHighlightColour(uiBlack);
 
     addAndMakeVisible(*titleButton);
     addChildComponent(slider);

@@ -12,7 +12,7 @@ void clearFocusIfNotShowing(juce::Component& owner) noexcept;
 
 namespace parameter_control_support
 {
-inline const juce::Colour titleFocusColour { 0xFF99CC99 };
+inline const juce::Colour titleFocusColour { uiWhite };
 
 void focusTitleButton(BoxTextButton* button, juce::Slider* valueSlider);
 bool isTitleButtonFocused(const BoxTextButton* button, const juce::Slider* valueSlider) noexcept;

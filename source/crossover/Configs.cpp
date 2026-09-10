@@ -1,8 +1,8 @@
 #include "Configs.h"
+#include "ParameterIds.h"
+#include "../shell/UiConstants.h"
 #include "../shell/EditorFilterSection.h"
-#include "../modules/tls/ParameterIds.h"
 #include "../modules/tls/Processor.h"
-#include "../modules/dyn/ParameterIds.h"
 #include "../modules/dyn/Processor.h"
 #include "../modules/trs/Processor.h"
 
@@ -62,7 +62,10 @@ CrossoverControlSpec parameterToggleControl(const char* suffix,
                                        const char* reorderGroup = "",
                                        const char* orderSuffix = "",
                                        const bool fixedOrder = false,
-                                       const bool toggleInverted = false)
+                                       const bool toggleInverted = false,
+                                       const int parameterTitleWidth = 0,
+                                       const int auxiliaryToggleWidth = 0,
+                                       const char* auxiliaryToggleSymbol = "")
 {
     auto spec = parameterControl(suffix, label, decimals);
     spec.auxiliaryToggleSuffix = toggleSuffix;
@@ -71,6 +74,9 @@ CrossoverControlSpec parameterToggleControl(const char* suffix,
     spec.orderSuffix = orderSuffix;
     spec.fixedOrder = fixedOrder;
     spec.auxiliaryToggleInverted = toggleInverted;
+    spec.parameterTitleWidth = parameterTitleWidth;
+    spec.auxiliaryToggleWidth = auxiliaryToggleWidth;
+    spec.auxiliaryToggleSymbol = auxiliaryToggleSymbol;
     return spec;
 }
 
@@ -145,10 +151,6 @@ CrossoverModuleComponent::Config makeCrossoverConfig(AvaAudioProcessor& processo
     config.moduleKey = "crossover";
     config.valueTreeState = &processor.getValueTreeState();
     config.markParametersDirty = [&processor] { processor.notifyHostOfStateChange(); };
-    config.makeCrossoverRangeParameterId = [] (const size_t, const char*)
-    {
-        return juce::String {};
-    };
     config.makeCrossoverParameterId = [] (const char* suffix)
     {
         return AvaAudioProcessor::getCrossoverParameterId(suffix);
@@ -176,17 +178,14 @@ CrossoverModuleComponent::Config makeTlsCrossoverConfig(TlsAudioProcessor& proce
     config.valueTreeState = &processor.getValueTreeState();
     config.undoManager = &processor.getUndoManager();
     config.markParametersDirty = [&processor] { processor.markParametersDirty(); };
-    config.makeCrossoverRangeParameterId = [] (const size_t rangeIndex, const char* suffix)
-    {
-        return tls::parameters::makeCrossoverRangeParameterId(rangeIndex, suffix);
-    };
+    config.makeRangeParameterId = ava::crossover::parameters::makeRangeParameterId;
     config.crossoverDecimals = 2;
     config.showCrossoverControls = false;
     config.showCrossoverNavigation = false;
     config.showCrossoverSolo = false;
     config.pinModuleHeading = true;
     config.rangeControls = {
-        headingControl("LISTEN", 1),
+        headingControl("LISTEN", 0),
         toggleControl("listenLc", "LC", "", "", "listen", 1, 4),
         toggleControl("listenRc", "RC", "", "", "listen"),
         toggleControl("listenMc", "MC", "", "", "listen"),
@@ -197,11 +196,11 @@ CrossoverModuleComponent::Config makeTlsCrossoverConfig(TlsAudioProcessor& proce
         toggleControl("listenSs", "SS", "", "", "listen"),
 
         headingControl("GAIN", 2),
-        parameterToggleControl("gainLr", "STEREO", 2, "gainLrMute", "MUTE", "gain", "", true),
-        parameterToggleControl("gainL", "LEFT", 2, "gainLMute", "MUTE", "gain", "gainLOrder"),
-        parameterToggleControl("gainR", "RIGHT", 2, "gainRMute", "MUTE", "gain", "gainROrder"),
-        parameterToggleControl("gainMid", "MID", 2, "gainMidMute", "MUTE", "gain", "gainMidOrder"),
-        parameterToggleControl("gainSide", "SIDE", 2, "gainSideMute", "MUTE", "gain", "gainSideOrder"),
+        parameterToggleControl("gainLr", "STEREO", 2, "gainLrMute", "MUTE", "gain", "", true, false, 95, iconControlSize, "speaker.slash"),
+        parameterToggleControl("gainL", "LEFT", 2, "gainLMute", "MUTE", "gain", "gainLOrder", false, false, 95, iconControlSize, "speaker.slash"),
+        parameterToggleControl("gainR", "RIGHT", 2, "gainRMute", "MUTE", "gain", "gainROrder", false, false, 95, iconControlSize, "speaker.slash"),
+        parameterToggleControl("gainMid", "MID", 2, "gainMidMute", "MUTE", "gain", "gainMidOrder", false, false, 95, iconControlSize, "speaker.slash"),
+        parameterToggleControl("gainSide", "SIDE", 2, "gainSideMute", "MUTE", "gain", "gainSideOrder", false, false, 95, iconControlSize, "speaker.slash"),
 
         headingControl("DELAY", 2),
         parameterControl("stereoDelay", "STEREO", 2),
@@ -247,16 +246,13 @@ CrossoverModuleComponent::Config makeDynCrossoverConfig(DynAudioProcessor& proce
     config.valueTreeState = &processor.getValueTreeState();
     config.undoManager = &processor.getUndoManager();
     config.markParametersDirty = [&processor] { processor.markParametersDirty(); };
-    config.makeCrossoverRangeParameterId = [] (const size_t rangeIndex, const char* suffix)
-    {
-        return dyn::parameters::makeCrossoverRangeParameterId(rangeIndex, suffix);
-    };
+    config.makeRangeParameterId = ava::crossover::parameters::makeRangeParameterId;
     config.showCrossoverControls = false;
     config.showCrossoverNavigation = false;
     config.showCrossoverSolo = false;
     config.pinModuleHeading = true;
     config.rangeControls = {
-        headingControl("GENERAL", 1),
+        headingControl("GENERAL", 0),
         parameterControl("morph", "MORPH", 2, 0),
         parameterControl("ratio", "RATIO", 2, 0),
         parameterControl("knee", "KNEE", 2, 0),
@@ -310,16 +306,13 @@ CrossoverModuleComponent::Config makeTrsCrossoverConfig(TrsModuleProcessor& proc
     config.processorIdentity = &processor;
     config.moduleKey = "trs";
     config.valueTreeState = &processor.getValueTreeState();
-    config.makeCrossoverRangeParameterId = [] (const size_t rangeIndex, const char* suffix)
-    {
-        return TrsModuleProcessor::makeCrossoverRangeParameterId(rangeIndex, suffix);
-    };
+    config.makeRangeParameterId = ava::crossover::parameters::makeRangeParameterId;
     config.showCrossoverControls = false;
     config.showCrossoverNavigation = false;
     config.showCrossoverSolo = false;
     config.pinModuleHeading = true;
     config.rangeControls = {
-        headingControl("TRANSIENT", 1),
+        headingControl("TRANSIENT", 0),
         parameterToggleControl(TrsModuleProcessor::paramTransGainId,
                                "GAIN",
                                2,

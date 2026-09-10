@@ -388,8 +388,6 @@ static bool writePresetCollectionToDirectory(const juce::File& directory,
         auto presetCopy = std::make_unique<juce::XmlElement>(*child);
         presetCopy->removeAttribute(EqlModuleProcessor::filterPresetLastSelectedStateKey);
         presetCopy->removeAttribute(EqlModuleProcessor::filterPresetDefaultSelectedStateKey);
-        presetCopy->removeAttribute("last_selected");
-        presetCopy->removeAttribute("default_selected");
 
         if (auto* stateElement = presetCopy->getChildByName("eql_state"))
         {
@@ -526,9 +524,6 @@ std::unique_ptr<juce::XmlElement> createSerializableStateXml(juce::AudioProcesso
 
         const auto parameterId = childCopy->getStringAttribute("id").trim();
         const auto filterIndex = getStoredFilterParameterIndex(parameterId);
-
-        if (parameterId.startsWithIgnoreCase("eql_"))
-            continue;
 
         if (filterIndex < 0 && parameterId.startsWithIgnoreCase("filter_"))
             continue;

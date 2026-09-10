@@ -4,9 +4,10 @@
 
 namespace
 {
-constexpr int promptPanelPadding = uiGap;
+constexpr int promptPanelHorizontalPadding = 0;
+constexpr int promptPanelVerticalPadding = uiGap;
 constexpr int promptItemHeight = 30;
-constexpr int promptItemGap = uiGap;
+constexpr int promptItemGap = 0;
 
 class FloatingChoicePrompt final : public PromptComponent
 {
@@ -53,7 +54,11 @@ public:
             auto button = std::make_unique<BoxTextButton>(uiAccent);
             button->setButtonText(choices[index]);
             button->setTextJustification(itemJustification);
-            button->setAlwaysAccentOutline(index == selectedIndex);
+            button->setBorderVisible(true);
+            button->setAlwaysAccentOutline(choices.size() > 2 && index == selectedIndex);
+            button->setFillColour(uiGreyDark);
+            button->setInteractionFillColour(uiGreyLight);
+            button->setTextColourOverride(uiWhite);
             const auto isEnabled = itemEnabled(index);
             button->setEnabled(isEnabled);
             button->setAlpha(1.0f);
@@ -67,10 +72,10 @@ public:
         }
     }
 
-    void paint(juce::Graphics& graphics) override
+    void paintOverChildren(juce::Graphics& graphics) override
     {
-        graphics.setColour(uiPopupPanel);
-        graphics.fillRect(panelBounds);
+        graphics.setColour(uiWhite);
+        graphics.drawRect(choiceViewport.getBounds(), 2);
     }
 
     void resized() override
@@ -79,21 +84,23 @@ public:
         const auto itemCount = static_cast<int>(choices.size());
         const auto itemBlockHeight = (itemCount * promptItemHeight)
             + (juce::jmax(0, itemCount - 1) * promptItemGap);
-        const auto availableWidth = juce::jmax(0, visibleBounds.getWidth() - (promptPanelPadding * 2));
+        const auto availableWidth = juce::jmax(0, visibleBounds.getWidth() - (promptPanelHorizontalPadding * 2));
         const auto promptWidth = juce::jmax(1, juce::jmin(availableWidth, anchorBounds.getWidth()));
-        const auto promptHeight = juce::jmin(juce::jmax(anchorBounds.getHeight(), itemBlockHeight + (promptPanelPadding * 2)),
-                                             juce::jmax(0, visibleBounds.getHeight() - (promptPanelPadding * 2)));
+        const auto promptHeight = juce::jmin(juce::jmax(anchorBounds.getHeight(), itemBlockHeight + (promptPanelVerticalPadding * 2)),
+                                             juce::jmax(0, visibleBounds.getHeight() - (promptPanelVerticalPadding * 2)));
         const auto alignedItemIndex = juce::isPositiveAndBelow(selectedIndex, itemCount) ? selectedIndex : 0;
-        const auto alignedItemCentreY = promptPanelPadding
+        const auto alignedItemCentreY = promptPanelVerticalPadding
             + (alignedItemIndex * (promptItemHeight + promptItemGap))
             + (promptItemHeight / 2);
 
         panelBounds = juce::Rectangle<int>(promptWidth, promptHeight);
         panelBounds.setX(anchorBounds.getX());
         panelBounds.setY(anchorBounds.getCentreY() - alignedItemCentreY);
-        panelBounds = panelBounds.constrainedWithin(visibleBounds.reduced(promptPanelPadding));
+        panelBounds = panelBounds.constrainedWithin(visibleBounds.reduced(promptPanelHorizontalPadding,
+                                                                            promptPanelVerticalPadding));
 
-        const auto viewportBounds = panelBounds.reduced(promptPanelPadding);
+        const auto viewportBounds = panelBounds.reduced(promptPanelHorizontalPadding,
+                                                         promptPanelVerticalPadding);
         choiceViewport.setBounds(viewportBounds);
         choiceContent.setSize(viewportBounds.getWidth(), juce::jmax(viewportBounds.getHeight(), itemBlockHeight));
 

@@ -9,7 +9,7 @@ inline constexpr int initialEditorWidth = 360;
 inline constexpr int minimumEditorWidth = 250;
 inline constexpr int maximumEditorWidth = 4096;
 #else
-inline constexpr int initialEditorWidth = 300;
+inline constexpr int initialEditorWidth = 400;
 inline constexpr int minimumEditorWidth = initialEditorWidth;
 inline constexpr int maximumEditorWidth = initialEditorWidth;
 #endif
@@ -22,27 +22,24 @@ inline constexpr float editorInsetBottomRatio = 0.04f;
 inline constexpr int parameterGap = uiGap;
 inline constexpr int verticalGap = uiGap;
 inline constexpr int moduleContentBottomGap = verticalGap;
-inline constexpr int viewportToPotentiometerGap = verticalGap * 2;
+inline constexpr int viewportToPotentiometerGap = verticalGap;
 inline constexpr int footerHeight = 30;
 inline constexpr int globalToFilterGap = uiGap;
 inline constexpr int addFilterToFooterGap = uiGap;
-inline constexpr int addFilterToPresetsGap = uiGap;
 inline constexpr int rowHeight = 30;
 inline constexpr int fftInlineAnalyserHeight = rowHeight * fftInlineAnalyserHeightRows;
 inline constexpr int presetRowGap = uiGap;
 inline constexpr float uiFontSize = 22.0f;
 
 inline const auto uiWhite = juce::Colour(0xffffffff);
-inline const auto uiAccent = juce::Colour(0xff9999ff);
-inline const auto uiClip = juce::Colour(0xffffcc99);
-inline const auto uiPopup = juce::Colour(0xbf444444);
-inline const auto uiPopupPanel = juce::Colour(0xff444444);
-inline const auto uiGrey800 = juce::Colour(0xff333333);
-inline const auto uiGrey700 = juce::Colour(0xff666666);
-inline const auto uiGrey500 = juce::Colour(0xff666666);
-inline const auto analyserLeftColour = juce::Colour(0xff99cc99);
-inline const auto analyserRightColour = juce::Colour(0xffff9999);
-inline const auto analyserPhaseColour = juce::Colour(0xffffcc99);
+inline const auto uiGreyLight = juce::Colour(0xffbbbbbb);
+inline const auto uiGreyDark = juce::Colour(0xff444444);
+inline const auto uiBlack = juce::Colour(0xff000000);
+inline const auto uiAccent = uiWhite;
+inline const auto uiClip = uiWhite;
+inline const auto uiPopup = uiGreyDark;
+inline const auto uiGrey800 = uiGreyDark;
+inline const auto uiGrey500 = uiGreyLight;
 
 int getEditorInsetX(int width);
 int getEditorInsetTop(int height);

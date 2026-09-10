@@ -82,7 +82,7 @@ void AvaAudioProcessorEditor::timerCallback()
             && now - lastClipIndicatorTimeMs < clipIndicatorHoldMs;
 
         if (showClipIndicator)
-            clipButton->setTextColourOverride(juce::Colour(0xffff9999));
+            clipButton->setTextColourOverride(uiGreyLight);
         else
             clipButton->clearTextColourOverride();
     }
@@ -138,8 +138,8 @@ void AvaAudioProcessorEditor::syncFocusedParameterControl()
             focusedParameterControl->setValue(getFocusedParameterControlValueForTarget(),
                                               juce::dontSendNotification);
             focusedParameterControl->setEnabled(true);
-            focusedParameterControl->setColour(juce::Slider::backgroundColourId, uiGrey700);
-            focusedParameterControl->setColour(juce::Slider::trackColourId, juce::Colour(0xFF99CC99));
+            focusedParameterControl->setColour(juce::Slider::backgroundColourId, uiGrey800);
+            focusedParameterControl->setColour(juce::Slider::trackColourId, uiWhite);
             focusedParameterControl->setAlpha(1.0f);
         }
         else

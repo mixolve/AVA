@@ -1,6 +1,6 @@
 #include "Processor.h"
 
-#include "ParameterIds.h"
+#include "../../crossover/ParameterAccess.h"
 
 #include <array>
 #include <cmath>
@@ -10,13 +10,13 @@ void DynAudioProcessor::setRangeParameterValue(const size_t rangeIndex,
                                                 const dyn::parameters::ParameterSlot targetSlot,
                                                 const float targetValue)
 {
-    using dyn::parameters::makeCrossoverRangeParameterId;
+    using ava::crossover::parameters::makeRangeParameterId;
     using dyn::parameters::parameterSpecs;
     using dyn::parameters::toIndex;
 
     const auto targetIndex = toIndex(targetSlot);
     auto* target = dynamic_cast<juce::RangedAudioParameter*>(valueTreeState.getParameter(
-        makeCrossoverRangeParameterId(rangeIndex, parameterSpecs[targetIndex].suffix)));
+        makeRangeParameterId(rangeIndex, parameterSpecs[targetIndex].suffix)));
 
     if (target == nullptr)
         return;
@@ -65,26 +65,16 @@ void DynAudioProcessor::syncUpDownParameterPairs(const size_t rangeIndex,
 
 void DynAudioProcessor::setParameterListenersEnabled(const bool enabled)
 {
-    using dyn::parameters::makeCrossoverRangeParameterId;
-    using dyn::parameters::parameterSpecs;
-
-    for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
-    {
-        for (const auto& spec : parameterSpecs)
-        {
-            const auto parameterId = makeCrossoverRangeParameterId(rangeIndex, spec.suffix);
-
-            if (enabled)
-                valueTreeState.addParameterListener(parameterId, this);
-            else
-                valueTreeState.removeParameterListener(parameterId, this);
-        }
-    }
+    ava::crossover::parameters::setRangeParameterListenersEnabled(valueTreeState,
+                                                                  *this,
+                                                                  dyn::parameters::parameterSpecs,
+                                                                  numRanges,
+                                                                  enabled);
 }
 
 void DynAudioProcessor::parameterChanged(const juce::String& parameterID, float)
 {
-    using dyn::parameters::makeCrossoverRangeParameterId;
+    using ava::crossover::parameters::makeRangeParameterId;
     using dyn::parameters::parameterSpecs;
     using dyn::parameters::ParameterSlot;
     using dyn::parameters::toIndex;
@@ -101,7 +91,7 @@ void DynAudioProcessor::parameterChanged(const juce::String& parameterID, float)
         {
             const auto slot = static_cast<ParameterSlot>(slotIndex);
 
-            if (id == makeCrossoverRangeParameterId(rangeIndex, parameterSpecs[slotIndex].suffix))
+            if (id == makeRangeParameterId(rangeIndex, parameterSpecs[slotIndex].suffix))
                 return slot;
         }
 

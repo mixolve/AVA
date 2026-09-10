@@ -567,10 +567,16 @@ void EqlModuleProcessor::rebuildCutBlendFilter(const size_t filterIndex,
                                               const double frequency,
                                               const double slope) noexcept
 {
-    buildCutBlendFilter(cutBlendFilters[filterIndex],
-                        filterType,
-                        frequency,
-                        slope);
+    BiquadCascade target;
+    buildCutBlendFilter(target, filterType, frequency, slope);
+    const auto& cachedState = cachedFilterStates[filterIndex];
+    const auto isContinuousUpdate = cachedState.valid
+        && cachedState.active
+        && cachedState.type == filterType;
+    const auto transitionSamples = isContinuousUpdate
+        ? juce::jmax(1, juce::roundToInt(currentSampleRate * coefficientTransitionSeconds))
+        : 0;
+    cutBlendFilters[filterIndex].transitionTo(target, transitionSamples);
 }
 
 void EqlModuleProcessor::buildCutBlendFilter(BiquadCascade& baseFilter,

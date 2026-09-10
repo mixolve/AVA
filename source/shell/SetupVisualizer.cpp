@@ -33,11 +33,11 @@ public:
         if (bounds.getWidth() <= 0.0f || bounds.getHeight() <= 0.0f)
             return;
 
-        paintReduction(g, bounds, leftReductionData, analyserPhaseColour,
+        paintReduction(g, bounds, leftReductionData, uiWhite,
                        juce::jmax(0.01f, -reductionDisplayFloor));
 
         if (! phaseCorrMode)
-            paintReduction(g, bounds, rightReductionData, analyserPhaseColour,
+            paintReduction(g, bounds, rightReductionData, uiWhite,
                            juce::jmax(0.01f, -reductionDisplayFloor));
     }
 
@@ -64,7 +64,7 @@ private:
 
         path.lineTo(bounds.getRight(), bounds.getY());
         path.closeSubPath();
-        g.setColour(colour.withAlpha(0.55f));
+        g.setColour(uiGreyDark);
         g.fillPath(path);
         g.setColour(colour);
         g.strokePath(path, juce::PathStrokeType(1.0f));

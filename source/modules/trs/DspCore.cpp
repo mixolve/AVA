@@ -6,6 +6,8 @@
 
 namespace trs::dsp
 {
+using ava::modules::dsp::wrapIndex;
+
 namespace
 {
 constexpr auto gainMinDb = -48.0f;
@@ -89,19 +91,6 @@ float DspCore::makeReleaseCoefficient(const float timeMs, const double sampleRat
     const auto timeSeconds = juce::jmax(0.001f, timeMs * 0.001f);
     const auto samples = juce::jmax(1.0, static_cast<double>(timeSeconds) * sampleRate);
     return static_cast<float>(std::exp(-1.0 / samples));
-}
-
-int DspCore::wrapIndex(int index, const int size) noexcept
-{
-    if (size <= 0)
-        return 0;
-
-    index %= size;
-
-    if (index < 0)
-        index += size;
-
-    return index;
 }
 
 void DspCore::updateDerivedParameters()

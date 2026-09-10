@@ -1,6 +1,6 @@
 #include "Processor.h"
 
-#include "ParameterIds.h"
+#include "../../crossover/ParameterAccess.h"
 
 TlsAudioProcessor::TlsAudioProcessor()
     : juce::AudioProcessor(BusesProperties()
@@ -181,21 +181,11 @@ void TlsAudioProcessor::markParametersDirty() noexcept
 
 void TlsAudioProcessor::setParameterListenersEnabled(const bool enabled)
 {
-    using tls::parameters::makeCrossoverRangeParameterId;
-    using tls::parameters::parameterSpecs;
-
-    for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
-    {
-        for (const auto& spec : parameterSpecs)
-        {
-            const auto parameterId = makeCrossoverRangeParameterId(rangeIndex, spec.suffix);
-
-            if (enabled)
-                valueTreeState.addParameterListener(parameterId, this);
-            else
-                valueTreeState.removeParameterListener(parameterId, this);
-        }
-    }
+    ava::crossover::parameters::setRangeParameterListenersEnabled(valueTreeState,
+                                                                  *this,
+                                                                  tls::parameters::parameterSpecs,
+                                                                  numRanges,
+                                                                  enabled);
 }
 
 void TlsAudioProcessor::parameterChanged(const juce::String&, float)

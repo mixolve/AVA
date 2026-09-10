@@ -1,6 +1,6 @@
 #include "Processor.h"
 
-#include "ParameterIds.h"
+#include "../../crossover/ParameterIds.h"
 
 void DynAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
@@ -16,7 +16,7 @@ void DynAudioProcessor::setStateInformation(const void* data, const int sizeInBy
         {
             valueTreeState.replaceState(juce::ValueTree::fromXml(*xmlState));
 
-            using dyn::parameters::makeCrossoverRangeParameterId;
+            using ava::crossover::parameters::makeRangeParameterId;
             using dyn::parameters::parameterSpecs;
             using dyn::parameters::ParameterSlot;
             using dyn::parameters::toIndex;
@@ -24,9 +24,9 @@ void DynAudioProcessor::setStateInformation(const void* data, const int sizeInBy
             for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
             {
                 auto* linkLeftRight = dynamic_cast<juce::RangedAudioParameter*>(valueTreeState.getParameter(
-                    makeCrossoverRangeParameterId(rangeIndex, parameterSpecs[toIndex(ParameterSlot::linkLeftRight)].suffix)));
+                    makeRangeParameterId(rangeIndex, parameterSpecs[toIndex(ParameterSlot::linkLeftRight)].suffix)));
                 auto* linkUpDown = dynamic_cast<juce::RangedAudioParameter*>(valueTreeState.getParameter(
-                    makeCrossoverRangeParameterId(rangeIndex, parameterSpecs[toIndex(ParameterSlot::linkUpDown)].suffix)));
+                    makeRangeParameterId(rangeIndex, parameterSpecs[toIndex(ParameterSlot::linkUpDown)].suffix)));
 
                 if (linkLeftRight == nullptr || linkUpDown == nullptr)
                     continue;
@@ -58,43 +58,40 @@ void DynAudioProcessor::setStateInformation(const void* data, const int sizeInBy
                 }
             }
 
-            if (numRanges > 0)
+            const auto syncGlobalFromRange0 = [&] (const ParameterSlot slot)
             {
-                const auto syncGlobalFromRange0 = [&] (const ParameterSlot slot)
-                {
-                    const auto* source = rawRangeParameters[0][toIndex(slot)];
+                const auto* source = rawRangeParameters[0][toIndex(slot)];
 
-                    if (source == nullptr)
-                        return;
+                if (source == nullptr)
+                    return;
 
-                    const auto sourceValue = source->load(std::memory_order_relaxed);
+                const auto sourceValue = source->load(std::memory_order_relaxed);
 
-                    for (size_t targetRange = 0; targetRange < numRanges; ++targetRange)
-                        setRangeParameterValue(targetRange, slot, sourceValue);
-                };
+                for (size_t targetRange = 0; targetRange < numRanges; ++targetRange)
+                    setRangeParameterValue(targetRange, slot, sourceValue);
+            };
 
-                syncGlobalFromRange0(ParameterSlot::morph);
-                syncGlobalFromRange0(ParameterSlot::ratio);
-                syncGlobalFromRange0(ParameterSlot::knee);
-                syncGlobalFromRange0(ParameterSlot::peakHoldMs);
-                syncGlobalFromRange0(ParameterSlot::lookahead);
-                syncGlobalFromRange0(ParameterSlot::tensionFloor);
-                syncGlobalFromRange0(ParameterSlot::tensionHysteresis);
-                syncGlobalFromRange0(ParameterSlot::releaseForm);
-                syncGlobalFromRange0(ParameterSlot::adaptiveOffset);
-                syncGlobalFromRange0(ParameterSlot::adaptiveAttack);
-                syncGlobalFromRange0(ParameterSlot::adaptiveHold);
-                syncGlobalFromRange0(ParameterSlot::adaptiveRelease);
+            syncGlobalFromRange0(ParameterSlot::morph);
+            syncGlobalFromRange0(ParameterSlot::ratio);
+            syncGlobalFromRange0(ParameterSlot::knee);
+            syncGlobalFromRange0(ParameterSlot::peakHoldMs);
+            syncGlobalFromRange0(ParameterSlot::lookahead);
+            syncGlobalFromRange0(ParameterSlot::tensionFloor);
+            syncGlobalFromRange0(ParameterSlot::tensionHysteresis);
+            syncGlobalFromRange0(ParameterSlot::releaseForm);
+            syncGlobalFromRange0(ParameterSlot::adaptiveOffset);
+            syncGlobalFromRange0(ParameterSlot::adaptiveAttack);
+            syncGlobalFromRange0(ParameterSlot::adaptiveHold);
+            syncGlobalFromRange0(ParameterSlot::adaptiveRelease);
 
-                if (readRangeParameterValue(0, ParameterSlot::releaseForm) < 0.5f)
-                {
-                    for (size_t targetRange = 0; targetRange < numRanges; ++targetRange)
-                        setRangeParameterValue(targetRange, ParameterSlot::releaseCurve, 0.0f);
-                }
-                else
-                {
-                    syncGlobalFromRange0(ParameterSlot::releaseCurve);
-                }
+            if (readRangeParameterValue(0, ParameterSlot::releaseForm) < 0.5f)
+            {
+                for (size_t targetRange = 0; targetRange < numRanges; ++targetRange)
+                    setRangeParameterValue(targetRange, ParameterSlot::releaseCurve, 0.0f);
+            }
+            else
+            {
+                syncGlobalFromRange0(ParameterSlot::releaseCurve);
             }
 
             markParametersDirty();

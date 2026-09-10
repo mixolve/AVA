@@ -17,7 +17,8 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
       valueTreeState(*config.valueTreeState)
 {
     jassert(config.valueTreeState != nullptr);
-    jassert(config.makeCrossoverRangeParameterId != nullptr);
+    jassert((config.rangeControls.empty() && config.rangeTailControls.empty())
+            || config.makeRangeParameterId != nullptr);
 
     const auto requiresCrossoverState = config.showCrossoverControls || config.showCrossoverNavigation || config.showCrossoverSolo;
 
@@ -75,7 +76,8 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
 
     if (config.showCrossoverNavigation)
     {
-        auto allButton = makeTextButton("=");
+        auto allButton = makeTextButton({});
+        allButton->setSystemSymbol("gearshape");
         allButton->setClickingTogglesState(false);
         allButton->onClick = [this] { showCrossoverSettings(); };
         addAndMakeVisible(*allButton);
@@ -114,6 +116,7 @@ void CrossoverModuleComponent::loadUiState()
                                                        static_cast<int>(numRanges - 1),
                                                        getInt(state, config.moduleKey, "visibleRangeIndex", 0)));
     restoredPageScrollY = juce::jmax(0, getInt(state, config.moduleKey, "pageScrollY", 0));
+    pageScrollRestored = false;
 
     manualSoloMask = {};
 
@@ -132,7 +135,9 @@ void CrossoverModuleComponent::loadUiState()
 void CrossoverModuleComponent::saveUiState()
 {
     auto& state = valueTreeState.state;
-    restoredPageScrollY = pageViewport.getViewPositionY();
+
+    if (pageScrollRestored)
+        restoredPageScrollY = pageViewport.getViewPositionY();
     setBool(state, config.moduleKey, "autoSoloEnabled", autoSoloEnabled);
     setBool(state, config.moduleKey, "manualSoloInclusive", manualSoloInclusive);
     setBool(state, config.moduleKey, "crossoverSettingsActive", crossoverSettingsActive);
@@ -237,7 +242,6 @@ void CrossoverModuleComponent::resized()
             currentPage->layoutPinnedTail();
     }
     updatePageViewport();
-    saveUiState();
 }
 
 void CrossoverModuleComponent::mouseDown(const juce::MouseEvent&)
@@ -278,7 +282,9 @@ void CrossoverModuleComponent::refreshCurrentPageLayout()
 
 void CrossoverModuleComponent::refreshExternalState()
 {
-    if (! restoreUiStateIfChanged() && pageViewport.getViewPositionY() != restoredPageScrollY)
+    if (! restoreUiStateIfChanged()
+        && pageScrollRestored
+        && pageViewport.getViewPositionY() != restoredPageScrollY)
         saveUiState();
 
     if (config.refreshExternalState != nullptr && ! config.refreshExternalState())
@@ -629,6 +635,7 @@ void CrossoverModuleComponent::updatePageViewport()
     currentPage->setSize(viewportBounds.getWidth(), pageHeight);
     const auto maxScrollY = juce::jmax(0, pageHeight - viewportBounds.getHeight());
     pageViewport.setViewPosition(0, juce::jlimit(0, maxScrollY, previousScrollY));
+    pageScrollRestored = true;
 }
 
 size_t CrossoverModuleComponent::getActiveSplitCount() const

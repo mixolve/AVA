@@ -70,6 +70,13 @@ void EqlModuleProcessor::updateFilters()
                            filterBandwidthParams[filterArrayIndex]->load(std::memory_order_relaxed))
             : 1.0f;
         const auto gainDb = effectiveFilterGainDb[filterArrayIndex];
+        const auto& cachedState = cachedFilterStates[filterArrayIndex];
+        const auto isContinuousUpdate = cachedState.valid
+            && cachedState.active
+            && cachedState.type == filterType;
+        const auto transitionSamples = isContinuousUpdate
+            ? juce::jmax(1, juce::roundToInt(currentSampleRate * coefficientTransitionSeconds))
+            : 0;
 
         if (isVolumeFilterType(filterType))
         {
@@ -124,6 +131,40 @@ void EqlModuleProcessor::updateFilters()
         {
             if (! filterDesignMatches(filterArrayIndex, true, filterType, frequency, cachedBandwidth, cachedSlope, gainDb))
             {
+                if (isContinuousUpdate && isTiltFilterType(filterType))
+                {
+                    setBellIdentityResponse(filterArrayIndex);
+                    setShelfIdentityResponse(filterArrayIndex);
+                    setCutIdentityResponse(filterArrayIndex);
+                    BiquadCascade target;
+                    tiltFilters[filterArrayIndex].transitionTo(target, transitionSamples);
+                    setPhaseIdentityResponse(filterArrayIndex);
+                    storeFilterDesignState(filterArrayIndex, true, filterType, frequency, 0.0f, 0.0f, gainDb);
+                    continue;
+                }
+
+                if (isContinuousUpdate && isShelfFilterType(filterType))
+                {
+                    setBellIdentityResponse(filterArrayIndex);
+                    setCutIdentityResponse(filterArrayIndex);
+                    setTiltIdentityResponse(filterArrayIndex);
+                    const auto slopeBlend = mapShelfSlopeToBlend(static_cast<double>(slope));
+
+                    for (int order = 1; order <= static_cast<int>(maxShelfOrder); ++order)
+                    {
+                        BiquadCascade target;
+                        const auto orderIsAudible = order == slopeBlend.lowerOrder
+                            || order == slopeBlend.upperOrder;
+                        shelfOrderFilters[filterArrayIndex][static_cast<size_t>(order - 1)].transitionTo(
+                            target,
+                            orderIsAudible ? transitionSamples : 0);
+                    }
+
+                    setPhaseIdentityResponse(filterArrayIndex);
+                    storeFilterDesignState(filterArrayIndex, true, filterType, frequency, bandwidth, slope, gainDb);
+                    continue;
+                }
+
                 setBellIdentityResponse(filterArrayIndex);
                 setShelfIdentityResponse(filterArrayIndex);
                 setCutIdentityResponse(filterArrayIndex);
@@ -171,9 +212,9 @@ void EqlModuleProcessor::updateFilters()
             setBellIdentityResponse(filterArrayIndex);
             setShelfIdentityResponse(filterArrayIndex);
             setCutIdentityResponse(filterArrayIndex);
-            updateTiltFilter(tiltFilters[filterArrayIndex],
-                             designFrequency,
-                             static_cast<double>(gainDb));
+            BiquadCascade target;
+            updateTiltFilter(target, designFrequency, static_cast<double>(gainDb));
+            tiltFilters[filterArrayIndex].transitionTo(target, transitionSamples);
             updatePhaseFirFilter(phaseFirFilters[filterArrayIndex],
                                  filterType,
                                  designFrequency,
@@ -188,15 +229,23 @@ void EqlModuleProcessor::updateFilters()
         setBellIdentityResponse(filterArrayIndex);
         setCutIdentityResponse(filterArrayIndex);
         setTiltIdentityResponse(filterArrayIndex);
+        const auto slopeBlend = mapShelfSlopeToBlend(static_cast<double>(slope));
 
         for (int order = 1; order <= static_cast<int>(maxShelfOrder); ++order)
         {
-            updateShelfOrderFilterRaw(shelfOrderFilters[filterArrayIndex][static_cast<size_t>(order - 1)],
+            BiquadCascade target;
+            updateShelfOrderFilterRaw(target,
                                       filterType,
                                       order,
                                       designFrequency,
                                       static_cast<double>(bandwidth),
                                       gain);
+            const auto orderIsAudible = order == slopeBlend.lowerOrder
+                || order == slopeBlend.upperOrder;
+            shelfOrderFilters[filterArrayIndex][static_cast<size_t>(order - 1)].transitionTo(target,
+                                                                                             orderIsAudible
+                                                                                                 ? transitionSamples
+                                                                                                 : 0);
         }
 
         updatePhaseFirFilter(phaseFirFilters[filterArrayIndex],

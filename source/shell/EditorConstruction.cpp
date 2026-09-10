@@ -271,9 +271,9 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     focusedParameterControl->setVelocityBasedMode(false);
     focusedParameterControl->setScrollWheelEnabled(true);
     focusedParameterControl->setColour(juce::Slider::backgroundColourId, uiGrey800);
-    focusedParameterControl->setColour(juce::Slider::trackColourId, uiGrey500);
-    focusedParameterControl->setColour(juce::Slider::thumbColourId, uiGrey500);
-    focusedParameterControl->setColour(juce::Slider::rotarySliderFillColourId, uiGrey500);
+    focusedParameterControl->setColour(juce::Slider::trackColourId, uiWhite);
+    focusedParameterControl->setColour(juce::Slider::thumbColourId, uiWhite);
+    focusedParameterControl->setColour(juce::Slider::rotarySliderFillColourId, uiWhite);
     focusedParameterControl->setColour(juce::Slider::rotarySliderOutlineColourId, uiGrey500);
     focusedParameterControl->setRange(0.0, 1.0, 0.0);
     focusedParameterControl->setValue(0.5, juce::dontSendNotification);
@@ -352,8 +352,9 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
 
     restoreEditorStateFromValueTree();
 
-    footerTab = std::make_unique<BoxTextButton>(uiGrey500);
-    footerTab->setButtonText("MIXOLVE");
+    footerTab = std::make_unique<BoxTextButton>(uiAccent);
+    footerTab->setButtonText({});
+    footerTab->setSystemSymbol("info.circle");
     footerTab->onClick = [this]
     {
         showInfoPrompt(shell_setup_support::getMixolveInfoMarkdown());

@@ -2,6 +2,8 @@
 
 namespace
 {
+constexpr int popupItemHeight = 30;
+
 class ScrollingComboBoxLabel final : public juce::Label
 {
 public:
@@ -82,13 +84,15 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::drawPopupMenuBackgroundWithOptions
                                                                                  const int height,
                                                                                  const juce::PopupMenu::Options&)
 {
-    graphics.setColour(uiPopup);
+    graphics.setColour(uiBlack);
     graphics.fillRect(0, 0, width, height);
+    graphics.setColour(uiWhite);
+    graphics.drawRect(0, 0, width, height, 2);
 }
 
 int AvaAudioProcessorEditor::AvaLookAndFeel::getPopupMenuBorderSizeWithOptions(const juce::PopupMenu::Options&)
 {
-    return 1;
+    return 2;
 }
 
 void AvaAudioProcessorEditor::AvaLookAndFeel::getIdealPopupMenuItemSizeWithOptions(const juce::String& text,
@@ -106,13 +110,15 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::getIdealPopupMenuItemSizeWithOptio
     }
 
     idealWidth = juce::jmax(80, getTextPixelWidth(makeUiFont(), text) + uiGapDouble);
-    idealHeight = 30;
+    idealHeight = popupItemHeight;
 }
 
 void AvaAudioProcessorEditor::AvaLookAndFeel::drawCallOutBoxBackground(juce::CallOutBox&, juce::Graphics& graphics, const juce::Path& path, juce::Image&)
 {
     graphics.setColour(uiPopup);
     graphics.fillPath(path);
+    graphics.setColour(uiGrey500);
+    graphics.strokePath(path, juce::PathStrokeType(1.0f));
 }
 
 int AvaAudioProcessorEditor::AvaLookAndFeel::getCallOutBoxBorderSize(const juce::CallOutBox&)
@@ -151,8 +157,9 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::drawComboBox(juce::Graphics& g,
     }
 
     const auto* noTickBox = dynamic_cast<NoTickComboBox*>(&box);
-    const auto backgroundColour = noTickBox != nullptr && noTickBox->isPressedHighlightEnabled()
-        ? uiGrey700
+    const auto interactionHighlight = noTickBox != nullptr && noTickBox->isPressedHighlightEnabled();
+    const auto backgroundColour = interactionHighlight
+        ? uiGreyLight
         : box.findColour(juce::ComboBox::backgroundColourId);
 
     g.setColour(backgroundColour);
@@ -161,6 +168,10 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::drawComboBox(juce::Graphics& g,
     g.setColour(noTickBox != nullptr && noTickBox->isPressedHighlightEnabled() ? uiGrey500
                                                                                : box.findColour(juce::ComboBox::outlineColourId));
     g.drawRect(0, 0, width, height, 1);
+
+    if (auto* label = dynamic_cast<juce::Label*>(box.getChildComponent(0)))
+        label->setColour(juce::Label::textColourId,
+                         interactionHighlight ? uiBlack : box.findColour(juce::ComboBox::textColourId));
 }
 
 void AvaAudioProcessorEditor::AvaLookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& label)
@@ -191,18 +202,35 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::drawPopupMenuItem(juce::Graphics& 
                                                                 const juce::Drawable* icon,
                                                                 const juce::Colour* textColour)
 {
-    juce::ignoreUnused(isTicked);
-    juce::LookAndFeel_V4::drawPopupMenuItem(g,
-                                            area,
-                                            isSeparator,
-                                            isActive,
-                                            isHighlighted,
-                                            false,
-                                            hasSubMenu,
-                                            text,
-                                            shortcutKeyText,
-                                            icon,
-                                            textColour);
+    juce::ignoreUnused(hasSubMenu, shortcutKeyText, icon, textColour);
+
+    if (isSeparator)
+    {
+        g.setColour(uiGrey500);
+        g.fillRect(area.withHeight(1).withCentre(area.getCentre()));
+        return;
+    }
+
+    const auto itemBounds = area.withSizeKeepingCentre(area.getWidth(),
+                                                       juce::jmin(popupItemHeight, area.getHeight()));
+    g.setColour(isHighlighted && isActive ? uiGreyLight : uiGreyDark);
+    g.fillRect(itemBounds);
+    g.setColour(uiGreyLight);
+    g.drawRect(itemBounds, 1);
+
+    if (isTicked)
+    {
+        g.setColour(uiWhite);
+        g.drawRect(itemBounds, 2);
+    }
+
+    g.setColour(isActive ? (isHighlighted ? uiBlack : uiWhite) : uiGreyLight);
+    g.setFont(makeUiFont());
+    g.drawFittedText(text,
+                     itemBounds.reduced(uiGap, 0),
+                     juce::Justification::centred,
+                     1,
+                     1.0f);
 }
 
 void AvaAudioProcessorEditor::AvaLookAndFeel::drawPopupMenuItemWithOptions(juce::Graphics& g,
@@ -218,19 +246,26 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::drawPopupMenuItemWithOptions(juce:
         return;
     }
 
-    g.setColour(isHighlighted ? uiGrey700 : uiGrey800);
-    g.fillRect(area);
+    const auto itemBounds = area.withSizeKeepingCentre(area.getWidth(),
+                                                       juce::jmin(popupItemHeight, area.getHeight()));
+    g.setColour(isHighlighted && item.isEnabled ? uiGreyLight : uiGreyDark);
+    g.fillRect(itemBounds);
+    g.setColour(uiGreyLight);
+    g.drawRect(itemBounds, 1);
 
-    g.setColour(uiGrey500);
-    g.drawRect(area, 1);
+    if (item.isTicked)
+    {
+        g.setColour(uiWhite);
+        g.drawRect(itemBounds, 2);
+    }
 
-    g.setColour(item.isEnabled ? uiWhite : uiGrey500);
+    g.setColour(item.isEnabled ? (isHighlighted ? uiBlack : uiWhite) : uiGreyLight);
     g.setFont(makeUiFont());
     const auto isNoTickTarget = dynamic_cast<NoTickComboBox*>(options.getTargetComponent()) != nullptr;
     const auto justification = isNoTickTarget ? dynamic_cast<NoTickComboBox*>(options.getTargetComponent())->getPopupMenuTextJustification()
                                               : juce::Justification::centred;
     g.drawFittedText(item.text,
-                     area.reduced(uiGap, 0),
+                     itemBounds.reduced(uiGap, 0),
                      justification,
                      1,
                      1.0f);

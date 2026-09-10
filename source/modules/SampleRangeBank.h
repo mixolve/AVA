@@ -105,6 +105,9 @@ public:
         auto* rightChannel = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : nullptr;
         auto& processor = *rangeProcessors[rangeIndex];
 
+        if (processor.isNeutral())
+            return;
+
         for (int sampleIndex = 0; sampleIndex < buffer.getNumSamples(); ++sampleIndex)
         {
             const auto leftInput = static_cast<double>(leftChannel[sampleIndex]);

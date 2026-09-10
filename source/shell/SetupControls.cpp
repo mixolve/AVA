@@ -25,6 +25,7 @@ void AvaAudioProcessorEditor::setupShellControls()
     undoButton = std::make_unique<BoxTextButton>(uiGrey500);
     undoButton->setButtonText("U");
     undoButton->setTextJustification(juce::Justification::centred);
+    undoButton->setSystemSymbol("arrow.uturn.backward");
     undoButton->onClick = [this]
     {
         performUndo();
@@ -35,6 +36,7 @@ void AvaAudioProcessorEditor::setupShellControls()
     redoButton = std::make_unique<BoxTextButton>(uiGrey500);
     redoButton->setButtonText("R");
     redoButton->setTextJustification(juce::Justification::centred);
+    redoButton->setSystemSymbol("arrow.uturn.forward");
     redoButton->onClick = [this]
     {
         performRedo();
@@ -179,6 +181,7 @@ void AvaAudioProcessorEditor::clearHostSlot(const int slotIndex)
     auto& assignment = hostSlotAssignments[static_cast<size_t>(slotIndex)];
     assignment.parameterId.clear();
     assignment.parameterName.clear();
+    storeEditorStateToValueTree();
 
     if (auto* slotParameter = valueTreeState.getParameter(AvaAudioProcessor::getHostSlotParameterId(slotIndex));
         slotParameter != nullptr)

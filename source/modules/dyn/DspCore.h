@@ -86,6 +86,7 @@ private:
         double clipKneeDb = 0.0;
         double tensionFloor = 0.0;
         double tensionHysteresis = 0.0;
+        double tensionSmoothingCoefficient = 0.0;
         bool releaseLogarithmic = false;
         double releaseCurve = 0.0;
         double adaptiveOffsetDb = 0.0;
@@ -142,6 +143,8 @@ private:
 
     std::array<double, branchCount> envBase { 0.0, 0.0, 0.0, 0.0 };
     std::array<double, branchCount> baseGainState { 1.0, 1.0, 1.0, 1.0 };
+    std::array<double, branchCount> smoothedTensions { 0.0, 0.0, 0.0, 0.0 };
+    bool tensionSmoothingInitialised = false;
     std::array<double, channelCount> cleanEnvPeak { 0.0, 0.0 };
     std::array<double, channelCount> cleanGainState { 1.0, 1.0 };
     std::array<double, channelCount> cleanHalfPeak { 0.0, 0.0 };

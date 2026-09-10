@@ -50,7 +50,6 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
 
     header->setButtonText({});
     header->setTextJustification(juce::Justification::centred);
-    header->setEqlFilterHeaderColouringEnabled(true);
     header->setClickingTogglesState(false);
     header->setToggleAccentVisible(true);
     header->setCancelClickOnLeave(true);

@@ -59,6 +59,12 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
     const auto inL = leftInput;
     const auto inR = rightInput;
 
+    if (! tensionSmoothingInitialised)
+    {
+        smoothedTensions = derived.tensions;
+        tensionSmoothingInitialised = true;
+    }
+
     dryL[static_cast<size_t>(bufPosDry)] = inL;
     dryR[static_cast<size_t>(bufPosDry)] = inR;
 
@@ -120,11 +126,14 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
             + (adaptiveThresholdDb - manualThresholdDb) * derived.adaptiveAmounts[branchIndex];
         effectiveThresholds[branchIndex] = dbToAmp(thresholdDb);
 
+        auto& smoothedTension = smoothedTensions[branchIndex];
+        smoothedTension = derived.tensionSmoothingCoefficient * smoothedTension
+            + (1.0 - derived.tensionSmoothingCoefficient) * derived.tensions[branchIndex];
         const auto targetBase = tensionTarget(envBase[branchIndex],
                                               effectiveThresholds[branchIndex],
                                               derived.tensionFloor,
                                               derived.tensionHysteresis,
-                                              derived.tensions[branchIndex]);
+                                              smoothedTension);
         const auto baseGainTarget = envBase[branchIndex] > epsilon ? (targetBase / envBase[branchIndex]) : 1.0;
         baseGainState[branchIndex] = baseGainTarget;
 

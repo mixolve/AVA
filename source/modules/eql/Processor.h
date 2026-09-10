@@ -85,16 +85,24 @@ private:
     static constexpr int phaseFirOrder = 13;
     static constexpr int phaseFirSize = 1 << phaseFirOrder;
     static constexpr int phaseFirLatencySamples = phaseFirSize / 2;
+    static constexpr double coefficientTransitionSeconds = 0.01;
 
     struct SecondOrderSection
     {
         void reset() noexcept;
         void setIdentity() noexcept;
+        void transitionTo(const SecondOrderSection& target, int transitionSamples) noexcept;
+        bool isTransitioning() const noexcept;
         void process(juce::AudioBuffer<float>& buffer, int numChannels) noexcept;
 
         std::array<double, 3> b { 1.0, 0.0, 0.0 };
         std::array<double, 2> a { 0.0, 0.0 };
+        std::array<double, 3> targetB { 1.0, 0.0, 0.0 };
+        std::array<double, 2> targetA { 0.0, 0.0 };
+        std::array<double, 3> coefficientBStep {};
+        std::array<double, 2> coefficientAStep {};
         std::array<std::array<double, 2>, maxSupportedChannels> state {};
+        int transitionSamplesRemaining = 0;
     };
 
     struct FourthOrderSection
@@ -122,9 +130,11 @@ private:
     {
         void reset() noexcept;
         void setIdentity() noexcept;
+        void transitionTo(const BiquadCascade& target, int transitionSamples) noexcept;
         void process(juce::AudioBuffer<float>& buffer, int numChannels) noexcept;
 
         int stageCount = 0;
+        int targetStageCount = 0;
         std::array<SecondOrderSection, maxShelfOrder> sections;
     };
 

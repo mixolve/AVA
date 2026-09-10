@@ -132,15 +132,16 @@ void ValueBoxComponent::paint(juce::Graphics& g)
                                                             : slider.getTextFromValue(slider.getValue());
     auto backgroundColour = uiGrey800;
     auto borderColour = outlineColour;
+    const auto interactionHighlight = interactionEnabled && (pressHighlight || isMouseOver(true));
 
     if (promptActive)
     {
-        backgroundColour = uiGrey700;
+        backgroundColour = uiGreyLight;
         borderColour = uiAccent;
     }
-    else if (pressHighlight)
+    else if (interactionHighlight)
     {
-        backgroundColour = uiGrey700;
+        backgroundColour = uiGreyLight;
     }
 
     g.setColour(backgroundColour);
@@ -149,7 +150,9 @@ void ValueBoxComponent::paint(juce::Graphics& g)
     g.setColour(borderColour);
     g.drawRect(getLocalBounds(), 1);
 
-    g.setColour(interactionEnabled ? getDisplayTextColour(displayText) : uiGrey500);
+    g.setColour(interactionEnabled
+                    ? ((promptActive || interactionHighlight) ? uiBlack : getDisplayTextColour(displayText))
+                    : uiGrey500);
     g.setFont(makeUiFont());
     if (drawLoopingText(g,
                         displayText,
@@ -258,14 +261,15 @@ void ValueBoxComponent::mouseUp(const juce::MouseEvent& event)
 
 void ValueBoxComponent::mouseExit(const juce::MouseEvent&)
 {
-    if (! pointerDown)
-        return;
-
-    if (pressHighlight)
-    {
+    if (pointerDown)
         pressHighlight = false;
-        repaint();
-    }
+
+    repaint();
+}
+
+void ValueBoxComponent::mouseEnter(const juce::MouseEvent&)
+{
+    repaint();
 }
 
 void ValueBoxComponent::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
@@ -333,6 +337,7 @@ void ValueBoxComponent::showEditor()
     textEditor->setColour(juce::TextEditor::outlineColourId, outlineColour);
     textEditor->setColour(juce::TextEditor::focusedOutlineColourId, outlineColour);
     textEditor->setColour(juce::TextEditor::highlightColourId, highlightColour);
+    textEditor->setColour(juce::TextEditor::highlightedTextColourId, uiWhite);
     textEditor->setText(editorText, false);
     textEditor->onReturnKey = [this] { hideEditor(false); };
     textEditor->onEscapeKey = [this] { hideEditor(true); };

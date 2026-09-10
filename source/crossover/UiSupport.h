@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Splitter.h"
 #include "../shell/EditorControls.h"
 #include "../shell/UiStyle.h"
 
@@ -10,7 +11,7 @@
 
 namespace crossover_ui
 {
-inline constexpr size_t crossoverSlotCount = 5;
+inline constexpr size_t crossoverSlotCount = ava::crossover::Splitter::numSplits;
 
 inline constexpr std::array<const char*, crossoverSlotCount> crossoverSuffixes {
     "xover1", "xover2", "xover3", "xover4", "xover5"

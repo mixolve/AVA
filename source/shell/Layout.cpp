@@ -103,59 +103,130 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
     hostParametersViewport.setBounds({});
     hostParametersContent.setSize(0, 0);
 
-    auto globalControlsBounds = bounds.removeFromTop(rowHeight);
-
-    std::array<BoxTextButton*, 5> panelButtons {
+    std::array<BoxTextButton*, 9> panelButtons {
+        abSlotAButton.get(),
+        abSwitchButton.get(),
+        abSlotBButton.get(),
         undoButton.get(),
         redoButton.get(),
         globalBypassButton.get(),
         clipButton.get(),
-        hostButton.get()
+        hostButton.get(),
+        footerTab.get()
     };
 
-    auto visiblePanelButtonCount = 0;
+    const auto buttonWidth = [] (const BoxTextButton* button)
+    {
+        return button != nullptr && button->usesIconOnlyContent() ? iconControlSize : rowHeight;
+    };
+    auto visibleButtonCount = 0;
+    auto iconButtonCount = 0;
+    auto textButtonCount = 0;
 
     for (auto* button : panelButtons)
+    {
+        if (button == nullptr || ! button->isVisible())
+            continue;
+
+        ++visibleButtonCount;
+        if (button->usesIconOnlyContent())
+            ++iconButtonCount;
+        else
+            ++textButtonCount;
+    }
+
+    const auto minimumSingleRowWidth = (iconButtonCount * iconControlSize)
+        + (textButtonCount * rowHeight)
+        + (juce::jmax(0, visibleButtonCount - 1) * parameterGap);
+    const auto distributeTextButtons = textButtonCount > 0
+        && bounds.getWidth() >= minimumSingleRowWidth;
+    auto globalRowCount = 0;
+    auto currentRowWidth = 0;
+
+    if (distributeTextButtons)
+    {
+        globalRowCount = visibleButtonCount > 0 ? 1 : 0;
+    }
+    else for (auto* button : panelButtons)
     {
         if (button == nullptr)
             continue;
 
         button->setBounds({});
 
-        if (button->isVisible())
-            ++visiblePanelButtonCount;
+        if (! button->isVisible())
+            continue;
+
+        const auto additionalWidth = currentRowWidth == 0
+            ? buttonWidth(button)
+            : parameterGap + buttonWidth(button);
+
+        if (currentRowWidth > 0 && currentRowWidth + additionalWidth > bounds.getWidth())
+        {
+            ++globalRowCount;
+            currentRowWidth = buttonWidth(button);
+        }
+        else
+        {
+            currentRowWidth += additionalWidth;
+        }
     }
 
-    if (visiblePanelButtonCount > 0)
+    if (currentRowWidth > 0)
+        ++globalRowCount;
+
+    if (globalRowCount > 0)
     {
-        auto remainingBounds = globalControlsBounds;
-        const auto totalGap = parameterGap * (visiblePanelButtonCount - 1);
-        const auto availableButtonWidth = juce::jmax(0, remainingBounds.getWidth() - totalGap);
-        const auto equalButtonWidth = juce::jmax(0, availableButtonWidth / visiblePanelButtonCount);
-        auto widthRemainder = juce::jmax(0, availableButtonWidth - (equalButtonWidth * visiblePanelButtonCount));
-        auto placedButtonCount = 0;
+        const auto globalControlsHeight = (globalRowCount * rowHeight)
+            + ((globalRowCount - 1) * verticalGap);
+        auto globalControlsBounds = bounds.removeFromTop(globalControlsHeight);
+        auto rowBounds = globalControlsBounds.withHeight(rowHeight);
 
-        for (auto* button : panelButtons)
+        if (distributeTextButtons)
         {
-            if (button == nullptr || ! button->isVisible())
-                continue;
+            const auto textButtonWidthBudget = rowBounds.getWidth()
+                - (iconButtonCount * iconControlSize)
+                - (juce::jmax(0, visibleButtonCount - 1) * parameterGap);
+            const auto textButtonWidth = textButtonWidthBudget / textButtonCount;
+            auto textButtonWidthRemainder = textButtonWidthBudget % textButtonCount;
+            auto textButtonIndex = 0;
 
-            const auto isLastButton = placedButtonCount + 1 == visiblePanelButtonCount;
-            auto buttonWidth = equalButtonWidth;
-
-            if (widthRemainder > 0)
+            for (auto* button : panelButtons)
             {
-                ++buttonWidth;
-                --widthRemainder;
+                if (button == nullptr || ! button->isVisible())
+                    continue;
+
+                const auto width = button->usesIconOnlyContent()
+                    ? iconControlSize
+                    : textButtonWidth + (textButtonIndex++ < textButtonWidthRemainder ? 1 : 0);
+                button->setBounds(rowBounds.removeFromLeft(width));
+
+                if (! rowBounds.isEmpty())
+                    rowBounds.removeFromLeft(parameterGap);
             }
+        }
+        else
+        {
+            auto usedRowWidth = 0;
 
-            auto buttonBounds = isLastButton ? remainingBounds
-                                             : remainingBounds.removeFromLeft(buttonWidth);
-            button->setBounds(buttonBounds);
-            ++placedButtonCount;
+            for (auto* button : panelButtons)
+            {
+                if (button == nullptr || ! button->isVisible())
+                    continue;
 
-            if (! isLastButton)
-                remainingBounds.removeFromLeft(parameterGap);
+                const auto width = buttonWidth(button);
+                const auto additionalWidth = usedRowWidth == 0 ? width : parameterGap + width;
+
+                if (usedRowWidth > 0 && usedRowWidth + additionalWidth > rowBounds.getWidth())
+                {
+                    rowBounds.translate(0, rowHeight + verticalGap);
+                    usedRowWidth = 0;
+                }
+
+                const auto x = rowBounds.getX() + (usedRowWidth == 0 ? 0 : usedRowWidth + parameterGap);
+                button->setBounds(x, rowBounds.getY(), width, rowHeight);
+                usedRowWidth += usedRowWidth == 0 ? width : parameterGap + width;
+            }
         }
     }
 
@@ -217,22 +288,8 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
 
 void AvaAudioProcessorEditor::layoutFooter(juce::Rectangle<int>& bounds)
 {
-    auto footerBounds = bounds.removeFromBottom(footerHeight);
-    auto abControlsBounds = footerBounds;
-
-    abSlotAButton->setBounds(abControlsBounds.removeFromLeft(rowHeight));
-    abControlsBounds.removeFromLeft(uiGap);
-    abSwitchButton->setBounds(abControlsBounds.removeFromLeft(40));
-    abControlsBounds.removeFromLeft(uiGap);
-    abSlotBButton->setBounds(abControlsBounds.removeFromLeft(rowHeight));
-    abControlsBounds.removeFromLeft(uiGap);
-    footerTab->setBounds(abControlsBounds);
-
     if (focusedParameterControl == nullptr)
         return;
-
-    if (! bounds.isEmpty())
-        bounds.removeFromBottom(verticalGap);
 
     auto focusedBounds = bounds.removeFromBottom(footerHeight);
     focusedParameterControl->setBounds(focusedBounds);

@@ -54,8 +54,6 @@ public:
     const juce::AudioProcessorValueTreeState& getValueTreeState() const noexcept;
     static juce::StringArray getHostSyncChoices();
     static int getDefaultHostSyncChoiceIndex() noexcept;
-    static juce::String makeCrossoverRangeParameterId(size_t rangeIndex, const char* suffix);
-
 private:
     using ProcessorBank = ava::modules::SampleRangeBank<trs::dsp::DspCore>;
 

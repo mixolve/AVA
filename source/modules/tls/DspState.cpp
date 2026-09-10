@@ -156,32 +156,33 @@ void DspCore::updateDerivedParameters()
     derived.leftPhaseSine = std::sin(phaseL);
     derived.rightPhaseCosine = std::cos(phaseR);
     derived.rightPhaseSine = std::sin(phaseR);
+    derived.signalTransformEnabled = ! isNear(derived.midGain, 1.0)
+        || ! isNear(derived.sideGain, 1.0)
+        || ! isNear(derived.leftGain, 1.0)
+        || ! isNear(derived.rightGain, 1.0)
+        || ! isNear(derived.linkedGain, 1.0)
+        || ! isNear(derived.gLL, 1.0)
+        || ! isNear(derived.gLR, 0.0)
+        || ! isNear(derived.gRL, 0.0)
+        || ! isNear(derived.gRR, 1.0)
+        || ! isNear(derived.impactAmount, 0.0)
+        || ! isNear(derived.midAmount, 0.0)
+        || ! isNear(derived.sideAmount, 0.0)
+        || ! isNear(derived.orthogonalM11, 1.0)
+        || ! isNear(derived.orthogonalM12, 0.0)
+        || ! isNear(derived.orthogonalM21, 0.0)
+        || ! isNear(derived.orthogonalM22, 1.0)
+        || derived.listenMode != ListenMode::neutral
+        || parameters.halfPositive
+        || parameters.halfNegative
+        || parameters.fullPositive
+        || parameters.fullNegative;
 }
 
 bool DspCore::isNeutral() const noexcept
 {
-    return isNear(derived.midGain, 1.0)
-        && isNear(derived.sideGain, 1.0)
-        && isNear(derived.leftGain, 1.0)
-        && isNear(derived.rightGain, 1.0)
-        && isNear(derived.linkedGain, 1.0)
-        && isNear(derived.gLL, 1.0)
-        && isNear(derived.gLR, 0.0)
-        && isNear(derived.gRL, 0.0)
-        && isNear(derived.gRR, 1.0)
-        && isNear(derived.impactAmount, 0.0)
-        && isNear(derived.midAmount, 0.0)
-        && isNear(derived.sideAmount, 0.0)
-        && isNear(derived.orthogonalM11, 1.0)
-        && isNear(derived.orthogonalM12, 0.0)
-        && isNear(derived.orthogonalM21, 0.0)
-        && isNear(derived.orthogonalM22, 1.0)
-        && derived.listenMode == ListenMode::neutral
+    return ! derived.signalTransformEnabled
         && ! derived.delayEnabled
-        && ! derived.phaseEnabled
-        && ! parameters.halfPositive
-        && ! parameters.halfNegative
-        && ! parameters.fullPositive
-        && ! parameters.fullNegative;
+        && ! derived.phaseEnabled;
 }
 } // namespace tls::dsp

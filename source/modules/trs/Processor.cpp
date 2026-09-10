@@ -1,4 +1,5 @@
 #include "Processor.h"
+#include "../../crossover/ParameterIds.h"
 #include "../DspUtilities.h"
 
 #include <array>
@@ -8,6 +9,10 @@
 
 namespace
 {
+using ava::crossover::parameters::makeRangeGroupId;
+using ava::crossover::parameters::makeRangeGroupName;
+using ava::crossover::parameters::makeRangeParameterId;
+
 struct ParameterOrderEntry
 {
     const char* key;
@@ -209,11 +214,6 @@ int TrsModuleProcessor::getDefaultHostSyncChoiceIndex() noexcept
     return 4;
 }
 
-juce::String TrsModuleProcessor::makeCrossoverRangeParameterId(const size_t rangeIndex, const char* suffix)
-{
-    return "crossover" + juce::String(static_cast<int>(rangeIndex + 1)) + "_" + suffix;
-}
-
 juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createParameterLayout()
 {
     using Layout = juce::AudioProcessorValueTreeState::ParameterLayout;
@@ -270,14 +270,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
     for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
     {
         auto crossoverGroup = std::make_unique<juce::AudioProcessorParameterGroup>(
-            "crossover" + juce::String(static_cast<int>(rangeIndex + 1)),
-            "Crossover " + juce::String(static_cast<int>(rangeIndex + 1)),
+            makeRangeGroupId(rangeIndex),
+            makeRangeGroupName(rangeIndex),
             " | ");
 
         for (const auto& entry : trsCrossoverOrder)
         {
             const auto key = juce::String(entry.key);
-            const auto id = makeCrossoverRangeParameterId(rangeIndex, entry.key);
+            const auto id = makeRangeParameterId(rangeIndex, entry.key);
             const auto name = "TRS / CROSSOVER " + juce::String(static_cast<int>(rangeIndex + 1))
                 + " / TRANSIENT PROCESSOR / " + juce::String(entry.label);
 
@@ -396,22 +396,22 @@ void TrsModuleProcessor::cacheParameterPointers()
     for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
     {
         auto& crossover = rawRangeParameters[rangeIndex];
-        crossover.transOn = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramTransOnId));
-        crossover.transGain = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramTransGainId));
-        crossover.sustainOn = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramSusOnId));
-        crossover.sustainGain = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramSusGainId));
-        crossover.hold = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramTimeHoldId));
-        crossover.holdMode = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramTimeHoldModeId));
-        crossover.holdSync = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramTimeHoldSyncId));
-        crossover.release = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramTimeReleaseId));
-        crossover.releaseCurve = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramTimeReleaseCurveId));
-        crossover.releaseMode = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramTimeReleaseModeId));
-        crossover.releaseSync = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramTimeReleaseSyncId));
-        crossover.threshold = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramSensThresholdId));
-        crossover.knee = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramSensKneeId));
-        crossover.retrigger = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramSensRetriggerId));
-        crossover.oneShot = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramSensOneShotId));
-        crossover.lookahead = parameters.getRawParameterValue(makeCrossoverRangeParameterId(rangeIndex, paramLookaheadId));
+        crossover.transOn = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTransOnId));
+        crossover.transGain = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTransGainId));
+        crossover.sustainOn = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSusOnId));
+        crossover.sustainGain = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSusGainId));
+        crossover.hold = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeHoldId));
+        crossover.holdMode = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeHoldModeId));
+        crossover.holdSync = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeHoldSyncId));
+        crossover.release = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeReleaseId));
+        crossover.releaseCurve = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeReleaseCurveId));
+        crossover.releaseMode = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeReleaseModeId));
+        crossover.releaseSync = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeReleaseSyncId));
+        crossover.threshold = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSensThresholdId));
+        crossover.knee = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSensKneeId));
+        crossover.retrigger = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSensRetriggerId));
+        crossover.oneShot = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSensOneShotId));
+        crossover.lookahead = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramLookaheadId));
     }
 
 }
