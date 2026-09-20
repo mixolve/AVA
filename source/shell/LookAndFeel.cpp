@@ -1,4 +1,5 @@
-#include "EditorControls.h"
+#include "Editor.h"
+#include "LookAndFeel.h"
 
 namespace
 {

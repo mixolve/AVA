@@ -1,4 +1,5 @@
 #include "Editor.h"
+#include "Processor.h"
 
 bool AvaAudioProcessor::hasEditor() const
 {

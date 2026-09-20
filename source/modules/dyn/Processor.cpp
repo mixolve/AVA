@@ -1,164 +1,93 @@
 #include "Processor.h"
 
-DynAudioProcessor::DynAudioProcessor()
-    : juce::AudioProcessor(BusesProperties()
-                               .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                               .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-      valueTreeState(*this, &undoManager, "PARAMETERS", createParameterLayout())
+#include "../shared/DspUtilities.h"
+
+DynModuleProcessor::DynModuleProcessor(juce::AudioProcessor& owner)
+    : ownerProcessor(owner),
+      valueTreeState(moduleParameterHost, &undoManager, "dyn_state", createParameterLayout())
 {
     cacheParameterPointers();
     setParameterListenersEnabled(true);
 }
 
-DynAudioProcessor::~DynAudioProcessor()
+DynModuleProcessor::~DynModuleProcessor()
 {
     setParameterListenersEnabled(false);
 }
 
-void DynAudioProcessor::prepareToPlay(const double sampleRate, const int samplesPerBlock)
+void DynModuleProcessor::prepareToPlay(const double sampleRate, const int samplesPerBlock)
 {
-    processorBank.prepare(sampleRate, samplesPerBlock, getTotalNumOutputChannels());
+    processorBank.prepare(sampleRate, samplesPerBlock, ownerProcessor.getTotalNumOutputChannels());
     syncParameters(true);
     processorBank.reset();
 }
 
-void DynAudioProcessor::releaseResources()
+void DynModuleProcessor::releaseResources()
 {
     processorBank.releaseResources();
 }
 
-void DynAudioProcessor::reset()
+void DynModuleProcessor::resetProcessingState() noexcept
 {
     processorBank.reset();
 }
 
-bool DynAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
-{
-    return ava::modules::dsp::supportsMatchingMonoOrStereoLayout(layouts);
-}
-
-void DynAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void DynModuleProcessor::processBlock(juce::AudioBuffer<float>& buffer)
 {
     juce::ScopedNoDenormals noDenormals;
-
-    ava::modules::dsp::clearOutputOnlyChannels(*this, buffer);
-
+    ava::modules::dsp::clearOutputOnlyChannels(ownerProcessor, buffer);
     syncParameters();
-
     processorBank.processRange(0, buffer);
 }
 
-juce::AudioProcessorEditor* DynAudioProcessor::createEditor()
-{
-    return nullptr;
-}
-
-bool DynAudioProcessor::hasEditor() const
-{
-    return false;
-}
-
-const juce::String DynAudioProcessor::getName() const
-{
-    return JucePlugin_Name;
-}
-
-bool DynAudioProcessor::acceptsMidi() const
-{
-    return false;
-}
-
-bool DynAudioProcessor::producesMidi() const
-{
-    return false;
-}
-
-bool DynAudioProcessor::isMidiEffect() const
-{
-    return false;
-}
-
-double DynAudioProcessor::getTailLengthSeconds() const
-{
-    return 0.0;
-}
-
-int DynAudioProcessor::getNumPrograms()
-{
-    return 1;
-}
-
-int DynAudioProcessor::getCurrentProgram()
-{
-    return 0;
-}
-
-void DynAudioProcessor::setCurrentProgram(const int)
-{
-}
-
-const juce::String DynAudioProcessor::getProgramName(const int)
-{
-    return {};
-}
-
-void DynAudioProcessor::changeProgramName(const int, const juce::String&)
-{
-}
-
-juce::AudioProcessorValueTreeState& DynAudioProcessor::getValueTreeState() noexcept
+juce::AudioProcessorValueTreeState& DynModuleProcessor::getValueTreeState() noexcept
 {
     return valueTreeState;
 }
 
-const juce::AudioProcessorValueTreeState& DynAudioProcessor::getValueTreeState() const noexcept
+const juce::AudioProcessorValueTreeState& DynModuleProcessor::getValueTreeState() const noexcept
 {
     return valueTreeState;
 }
 
-juce::UndoManager& DynAudioProcessor::getUndoManager() noexcept
+juce::UndoManager& DynModuleProcessor::getUndoManager() noexcept
 {
     return undoManager;
 }
 
-const juce::UndoManager& DynAudioProcessor::getUndoManager() const noexcept
+const juce::UndoManager& DynModuleProcessor::getUndoManager() const noexcept
 {
     return undoManager;
 }
 
-int DynAudioProcessor::getModuleLatencySamples() const noexcept
-{
-    return moduleLatencySamples;
-}
-
-dyn::dsp::ProcessorBank::RangeLatencies DynAudioProcessor::getRangeLatencies() const noexcept
+dyn::dsp::ProcessorBank::RangeLatencies DynModuleProcessor::getRangeLatencies() const noexcept
 {
     return processorBank.getRangeLatencies();
 }
 
-size_t DynAudioProcessor::ensureRangeCount(const size_t rangeCount)
+size_t DynModuleProcessor::ensureRangeCount(const size_t rangeCount)
 {
     const auto createdRangeCount = processorBank.ensureRangeCount(rangeCount);
     processorBank.setRangeParameters(currentRangeParameters);
     return createdRangeCount;
 }
 
-size_t DynAudioProcessor::getCreatedRangeCount() const noexcept
+size_t DynModuleProcessor::getCreatedRangeCount() const noexcept
 {
     return processorBank.getCreatedRangeCount();
 }
 
-void DynAudioProcessor::processRange(const size_t rangeIndex, juce::AudioBuffer<float>& buffer)
+void DynModuleProcessor::processRange(const size_t rangeIndex, juce::AudioBuffer<float>& buffer)
 {
     processorBank.processRange(rangeIndex, buffer);
 }
 
-void DynAudioProcessor::markParametersDirty() noexcept
+void DynModuleProcessor::markParametersDirty() noexcept
 {
     parametersDirty.store(true, std::memory_order_relaxed);
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout DynAudioProcessor::createParameterLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout DynModuleProcessor::createParameterLayout()
 {
     return dyn::parameters::createParameterLayout();
 }

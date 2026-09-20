@@ -39,4 +39,4 @@ int DspCore::getMaximumLatencySamples(const double sampleRate) noexcept
     const auto safeSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
     return msToSamples(maximumCombinedDelayMs, safeSampleRate) + phaseFilterLatency;
 }
-} // namespace tls::dsp
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Processor.h"
+#include "../modules/eql/Processor.h"
 
 #include <JuceHeader.h>
 #include <array>
@@ -52,11 +53,7 @@ private:
     void toggleHostParametersSection();
     void showModulePicker();
     void closeActiveModule();
-    void loadEqlModule();
-    void loadFftModule();
-    void loadTlsModule();
-    void loadDynModule();
-    void loadTrsModule();
+    void loadModule(AvaAudioProcessor::ActiveModule module);
     void selectFilterSection(int filterIndex);
     void refreshFilterPresetList(const juce::String& preferredSelection = {});
     void reloadFilterPresetFromProcessor();
@@ -90,7 +87,7 @@ public:
 private:
     void dismissTextPrompt();
     void timerCallback() override;
-    void normalizeSlopeForType(int filterIndex);
+    void normalizeOrderForType(int filterIndex);
     void sortFilterSectionsByPlace();
     void sortFilterSectionsByFrequency();
     void sortFilterSectionsByDuo();
@@ -100,20 +97,27 @@ private:
     void switchABState();
     void captureCurrentABState();
     void copyCurrentABStateToOtherSlot();
-    void restoreABStateSnapshot(const juce::MemoryBlock& snapshot);
+    bool restoreABStateSnapshot(const juce::MemoryBlock& snapshot);
     void refreshABCompareButton();
     void refreshEqlFilterSectionsFromProcessor();
     void applyFilterSortOrder(const std::vector<int>& orderedIndices);
     void moveFilterSectionTo(int filterIndex, int destinationOrderPosition);
     void enforceSingleExpandedFilterSection(int preferredFilterIndex = -1);
     void restoreEditorStateFromValueTree();
+    void restoreFilterDisplayOrderFromValueTree();
+    void storeFilterDisplayOrderToValueTree() noexcept;
     void storeEditorStateToValueTree() noexcept;
     void setLoadedModuleFlags(AvaAudioProcessor::ActiveModule activeModule) noexcept;
     juce::Point<int> getRestoredEditorSize() const noexcept;
     juce::Rectangle<int> getFilterSectionBounds(int filterIndex) const;
-    void resetFilterSectionStoredValues(int filterIndex);
-    void removeFilterSectionStoredValues(int removedIndex, int previousCount);
+    void resetFilterSectionUiState(int filterIndex);
+    void removeFilterSectionUiState(int removedIndex, int previousCount);
     void updateSectionStates();
+    void setPresetsVisible(bool shouldShow);
+    void setEqlFilterSectionsVisible(bool shouldShow);
+    void setEqlControlsVisible(bool shouldShow);
+    void setFftControlsVisible(bool shouldShow);
+    void updateEqlSectionStates(int activeFilterCount);
     void syncEditorWidthToBounds();
     void refreshFftAnalyserResponse();
     void syncFocusedParameterControl();
@@ -145,7 +149,7 @@ private:
     const EqlModuleProcessor* getActiveEqlProcessor() const noexcept;
     void scheduleHistorySnapshot();
     void commitPendingHistorySnapshot(bool force = false);
-    void applyHistorySnapshot(const juce::MemoryBlock& snapshot);
+    bool applyHistorySnapshot(const juce::MemoryBlock& snapshot);
     void updateUndoRedoButtons();
     int getActiveFilterContentHeight() const;
     int getFilterContentHeight() const;
@@ -187,6 +191,9 @@ private:
     std::unique_ptr<BoxTextButton> fftGeneralProcessorHeader;
     std::unique_ptr<BoxTextButton> fftDynamicProcessorHeader;
     std::unique_ptr<ChoiceControl> fftDynamicModeControl;
+    std::unique_ptr<ChoiceControl> fftCorrelationTypeControl;
+    std::unique_ptr<ChoiceControl> fftDynamicDirectionControl;
+    std::unique_ptr<ParameterControl> fftCorrelationSmoothingControl;
     std::unique_ptr<ParameterControl> fftAttackControl;
     std::unique_ptr<ParameterControl> fftReleaseControl;
     std::unique_ptr<ParameterControl> fftKneeControl;
@@ -194,7 +201,7 @@ private:
     std::unique_ptr<ParameterControl> fftFloorControl;
     std::unique_ptr<ChoiceControl> fftDspFftSizeControl;
     std::unique_ptr<ParameterControl> fftDspSlopeControl;
-    std::unique_ptr<ParameterControl> fftPhaseImpactControl;
+    std::unique_ptr<ParameterControl> fftCorrelationImpactControl;
     std::unique_ptr<BoxTextButton> fftDeltaButton;
     std::unique_ptr<ButtonAttachment> fftDeltaAttachment;
     std::unique_ptr<ParameterControl> fftDualMonoLeftThresholdControl;
@@ -208,9 +215,13 @@ private:
     std::unique_ptr<ParameterControl> fftAdaptiveAttackControl;
     std::unique_ptr<ParameterControl> fftAdaptiveHoldControl;
     std::unique_ptr<ParameterControl> fftAdaptiveReleaseControl;
+    std::unique_ptr<BoxTextButton> fftDetectorRangeHeader;
+    std::unique_ptr<ParameterControl> fftDetectorLowCutControl;
+    std::unique_ptr<ParameterControl> fftDetectorHighCutControl;
     std::unique_ptr<ChoiceControl> fftDspOverlapControl;
-    std::unique_ptr<LocalParameterControl> fftAnalyserRangeControl;
     std::unique_ptr<LocalParameterControl> fftAnalyserTimeControl;
+    std::unique_ptr<LocalParameterControl> fftAnalyserHighControl;
+    std::unique_ptr<LocalParameterControl> fftAnalyserLowControl;
     std::unique_ptr<BoxTextButton> globalBypassButton;
     std::unique_ptr<ButtonAttachment> globalBypassAttachment;
     std::unique_ptr<BoxTextButton> undoButton;
@@ -223,8 +234,8 @@ private:
     std::unique_ptr<BoxTextButton> sortDuoButton;
     std::array<std::unique_ptr<BoxTextButton>, AvaAudioProcessor::hostAutomationSlotCount> hostSlotNameFields;
     std::array<std::unique_ptr<BoxTextButton>, AvaAudioProcessor::hostAutomationSlotCount> hostSlotButtons;
-    std::array<std::unique_ptr<BoxTextButton>, AvaAudioProcessor::maxEqlFilterCount> filterOrderLabels;
-    std::array<std::unique_ptr<FilterSection>, AvaAudioProcessor::maxEqlFilterCount> filterSections;
+    std::array<std::unique_ptr<BoxTextButton>, EqlModuleProcessor::maxFilterCount> filterOrderLabels;
+    std::array<std::unique_ptr<FilterSection>, EqlModuleProcessor::maxFilterCount> filterSections;
     juce::AudioProcessorValueTreeState* boundEqlState = nullptr;
     juce::Viewport hostParametersViewport;
     ParameterFocusClearingComponent hostParametersContent;

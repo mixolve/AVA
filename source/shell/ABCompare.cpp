@@ -1,5 +1,6 @@
-#include "EditorFilterSection.h"
-#include "EditorState.h"
+#include "Editor.h"
+#include "FilterSection.h"
+#include "WindowState.h"
 
 void AvaAudioProcessorEditor::captureCurrentABState()
 {
@@ -10,15 +11,15 @@ void AvaAudioProcessorEditor::captureCurrentABState()
     audioProcessor.setABCompareSnapshot(activeSlot, snapshot);
 }
 
-void AvaAudioProcessorEditor::restoreABStateSnapshot(const juce::MemoryBlock& snapshot)
+bool AvaAudioProcessorEditor::restoreABStateSnapshot(const juce::MemoryBlock& snapshot)
 {
     if (snapshot.isEmpty())
-        return;
+        return false;
 
     auto stateXml = AvaAudioProcessor::getXmlFromBinary(snapshot.getData(), static_cast<int>(snapshot.getSize()));
 
     if (stateXml == nullptr || ! stateXml->hasTagName(valueTreeState.state.getType().toString()))
-        return;
+        return false;
 
     preserveEditorWindowState(*stateXml, valueTreeState.state);
 
@@ -45,8 +46,17 @@ void AvaAudioProcessorEditor::restoreABStateSnapshot(const juce::MemoryBlock& sn
         // Root-property callbacks are synchronous, so rebind only after replacement.
         const juce::ScopedValueSetter<bool> suppressResync(suppressProcessorStateResync, true);
         detachModuleEditorBindings();
-        audioProcessor.applyStateInformationForABCompare(restoredSnapshot.getData(),
-                                                          static_cast<int>(restoredSnapshot.getSize()));
+
+        if (! audioProcessor.applyStateInformationForABCompare(restoredSnapshot.getData(),
+                                                                static_cast<int>(restoredSnapshot.getSize())))
+        {
+            restoreEditorStateFromValueTree();
+            ensureModuleTitle();
+            updateSectionStates();
+            resized();
+            refreshABCompareButton();
+            return false;
+        }
     }
 
     restoreEditorStateFromValueTree();
@@ -54,7 +64,7 @@ void AvaAudioProcessorEditor::restoreABStateSnapshot(const juce::MemoryBlock& sn
 
     if (auto* eqlProcessor = getActiveEqlProcessor())
     {
-        refreshFilterPresetList(eqlProcessor->getLastFilterPresetName());
+        refreshFilterPresetList(eqlProcessor->getSelectedFilterPresetName());
         refreshEqlFilterSectionsFromProcessor();
     }
     else
@@ -72,9 +82,8 @@ void AvaAudioProcessorEditor::restoreABStateSnapshot(const juce::MemoryBlock& sn
     const auto filterMaxOffset = juce::jmax(0, getActiveFilterContentHeight() - filterViewport.getHeight());
     filterViewport.setViewPosition(0, juce::jlimit(0, filterMaxOffset, preservedUiState.filterScrollY));
 
-    audioProcessor.getStateInformation(committedHistorySnapshot);
-    updateUndoRedoButtons();
-    refreshABCompareButton();
+    audioProcessor.getStateInformationForABCompareSnapshot(committedHistorySnapshot);
+    return true;
 }
 
 void AvaAudioProcessorEditor::switchABState()
@@ -85,19 +94,13 @@ void AvaAudioProcessorEditor::switchABState()
     const auto nextSlot = currentSlot == 0 ? 1 : 0;
     const auto currentSnapshot = audioProcessor.getABCompareSnapshot(currentSlot);
 
-    audioProcessor.setABCompareActiveSlot(nextSlot);
     const auto nextSnapshot = audioProcessor.getABCompareSnapshot(nextSlot);
 
-    if (nextSnapshot != currentSnapshot)
-    {
-        restoreABStateSnapshot(nextSnapshot);
-    }
-    else
-    {
-        updateUndoRedoButtons();
-        refreshABCompareButton();
-    }
+    if (nextSnapshot == currentSnapshot || restoreABStateSnapshot(nextSnapshot))
+        audioProcessor.setABCompareActiveSlot(nextSlot);
 
+    updateUndoRedoButtons();
+    refreshABCompareButton();
     clearKeyboardFocus(*this);
 }
 

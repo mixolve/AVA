@@ -1,185 +1,122 @@
 #include "Processor.h"
+#include "../shared/StateUtilities.h"
 
 #include "../../crossover/ParameterAccess.h"
+#include "../../crossover/UiState.h"
+#include "../shared/DspUtilities.h"
 
-TlsAudioProcessor::TlsAudioProcessor()
-    : juce::AudioProcessor(BusesProperties()
-                               .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                               .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-      valueTreeState(*this, &undoManager, "PARAMETERS", createParameterLayout())
+TlsModuleProcessor::TlsModuleProcessor(juce::AudioProcessor& owner)
+    : ownerProcessor(owner),
+      valueTreeState(moduleParameterHost, &undoManager, "tls_state", createParameterLayout())
 {
     cacheParameterPointers();
     setParameterListenersEnabled(true);
 }
 
-TlsAudioProcessor::~TlsAudioProcessor()
+TlsModuleProcessor::~TlsModuleProcessor()
 {
     setParameterListenersEnabled(false);
 }
 
-void TlsAudioProcessor::prepareToPlay(const double sampleRate, const int samplesPerBlock)
+void TlsModuleProcessor::prepareToPlay(const double sampleRate, const int samplesPerBlock)
 {
-    processorBank.prepare(sampleRate, samplesPerBlock, getTotalNumOutputChannels());
+    processorBank.prepare(sampleRate, samplesPerBlock, ownerProcessor.getTotalNumOutputChannels());
     syncParameters(true);
     processorBank.reset();
 }
 
-void TlsAudioProcessor::releaseResources()
+void TlsModuleProcessor::releaseResources()
 {
     processorBank.releaseResources();
 }
 
-void TlsAudioProcessor::reset()
+void TlsModuleProcessor::resetProcessingState() noexcept
 {
     processorBank.reset();
 }
 
-bool TlsAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
-{
-    return ava::modules::dsp::supportsMatchingMonoOrStereoLayout(layouts);
-}
-
-void TlsAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void TlsModuleProcessor::processBlock(juce::AudioBuffer<float>& buffer)
 {
     juce::ScopedNoDenormals noDenormals;
-
-    ava::modules::dsp::clearOutputOnlyChannels(*this, buffer);
-
+    ava::modules::dsp::clearOutputOnlyChannels(ownerProcessor, buffer);
     syncParameters();
-
     processorBank.processRange(0, buffer);
 }
 
-juce::AudioProcessorEditor* TlsAudioProcessor::createEditor()
+void TlsModuleProcessor::getStateInformation(juce::MemoryBlock& destData) const
 {
-    return nullptr;
+    if (auto stateXml = const_cast<juce::AudioProcessorValueTreeState&>(valueTreeState).copyState().createXml())
+        juce::AudioProcessor::copyXmlToBinary(*stateXml, destData);
 }
 
-bool TlsAudioProcessor::hasEditor() const
+bool TlsModuleProcessor::setStateInformation(const void* data, const int sizeInBytes)
 {
-    return false;
+    auto xmlState = juce::AudioProcessor::getXmlFromBinary(data, sizeInBytes);
+
+    if (xmlState == nullptr)
+        return false;
+
+    auto restoredState = juce::ValueTree::fromXml(*xmlState);
+
+    if (! ava::modules::state::hasExactParameterState(restoredState, valueTreeState)
+        || ! crossover_ui::hasCurrentStateProperties(restoredState, "tls"))
+        return false;
+
+    valueTreeState.replaceState(restoredState);
+    cacheParameterPointers();
+    markParametersDirty();
+    syncParameters(true);
+    return true;
 }
 
-const juce::String TlsAudioProcessor::getName() const
-{
-    return JucePlugin_Name;
-}
-
-bool TlsAudioProcessor::acceptsMidi() const
-{
-    return false;
-}
-
-bool TlsAudioProcessor::producesMidi() const
-{
-    return false;
-}
-
-bool TlsAudioProcessor::isMidiEffect() const
-{
-    return false;
-}
-
-double TlsAudioProcessor::getTailLengthSeconds() const
-{
-    return 0.0;
-}
-
-int TlsAudioProcessor::getNumPrograms()
-{
-    return 1;
-}
-
-int TlsAudioProcessor::getCurrentProgram()
-{
-    return 0;
-}
-
-void TlsAudioProcessor::setCurrentProgram(const int)
-{
-}
-
-const juce::String TlsAudioProcessor::getProgramName(const int)
-{
-    return {};
-}
-
-void TlsAudioProcessor::changeProgramName(const int, const juce::String&)
-{
-}
-
-void TlsAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
-{
-    if (auto stateXml = valueTreeState.copyState().createXml())
-        copyXmlToBinary(*stateXml, destData);
-}
-
-void TlsAudioProcessor::setStateInformation(const void* data, const int sizeInBytes)
-{
-    if (auto xmlState = getXmlFromBinary(data, sizeInBytes))
-    {
-        if (xmlState->hasTagName(valueTreeState.state.getType()))
-        {
-            valueTreeState.replaceState(juce::ValueTree::fromXml(*xmlState));
-            markParametersDirty();
-            syncParameters(true);
-        }
-    }
-}
-
-juce::AudioProcessorValueTreeState& TlsAudioProcessor::getValueTreeState() noexcept
+juce::AudioProcessorValueTreeState& TlsModuleProcessor::getValueTreeState() noexcept
 {
     return valueTreeState;
 }
 
-const juce::AudioProcessorValueTreeState& TlsAudioProcessor::getValueTreeState() const noexcept
+const juce::AudioProcessorValueTreeState& TlsModuleProcessor::getValueTreeState() const noexcept
 {
     return valueTreeState;
 }
 
-juce::UndoManager& TlsAudioProcessor::getUndoManager() noexcept
+juce::UndoManager& TlsModuleProcessor::getUndoManager() noexcept
 {
     return undoManager;
 }
 
-const juce::UndoManager& TlsAudioProcessor::getUndoManager() const noexcept
+const juce::UndoManager& TlsModuleProcessor::getUndoManager() const noexcept
 {
     return undoManager;
 }
 
-int TlsAudioProcessor::getModuleLatencySamples() const noexcept
-{
-    return moduleLatencySamples.load(std::memory_order_acquire);
-}
-
-tls::dsp::ProcessorBank::RangeLatencies TlsAudioProcessor::getRangeLatencies() const noexcept
+tls::dsp::ProcessorBank::RangeLatencies TlsModuleProcessor::getRangeLatencies() const noexcept
 {
     return processorBank.getRangeLatencies();
 }
 
-size_t TlsAudioProcessor::ensureRangeCount(const size_t rangeCount)
+size_t TlsModuleProcessor::ensureRangeCount(const size_t rangeCount)
 {
     const auto createdRangeCount = processorBank.ensureRangeCount(rangeCount);
     processorBank.setRangeParameters(currentRangeParameters);
     return createdRangeCount;
 }
 
-size_t TlsAudioProcessor::getCreatedRangeCount() const noexcept
+size_t TlsModuleProcessor::getCreatedRangeCount() const noexcept
 {
     return processorBank.getCreatedRangeCount();
 }
 
-void TlsAudioProcessor::processRange(const size_t rangeIndex, juce::AudioBuffer<float>& buffer)
+void TlsModuleProcessor::processRange(const size_t rangeIndex, juce::AudioBuffer<float>& buffer)
 {
     processorBank.processRange(rangeIndex, buffer);
 }
 
-void TlsAudioProcessor::markParametersDirty() noexcept
+void TlsModuleProcessor::markParametersDirty() noexcept
 {
     parametersDirty.store(true, std::memory_order_relaxed);
 }
 
-void TlsAudioProcessor::setParameterListenersEnabled(const bool enabled)
+void TlsModuleProcessor::setParameterListenersEnabled(const bool enabled)
 {
     ava::crossover::parameters::setRangeParameterListenersEnabled(valueTreeState,
                                                                   *this,
@@ -188,12 +125,12 @@ void TlsAudioProcessor::setParameterListenersEnabled(const bool enabled)
                                                                   enabled);
 }
 
-void TlsAudioProcessor::parameterChanged(const juce::String&, float)
+void TlsModuleProcessor::parameterChanged(const juce::String&, float)
 {
     markParametersDirty();
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout TlsAudioProcessor::createParameterLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout TlsModuleProcessor::createParameterLayout()
 {
     return tls::parameters::createParameterLayout();
 }

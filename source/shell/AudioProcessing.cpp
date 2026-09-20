@@ -14,24 +14,24 @@ void AvaAudioProcessor::prepareToPlay(const double sampleRate, const int samples
     const juce::ScopedLock lock(processingLock);
 
     currentSampleRate = sampleRate;
-    lastProcessedBlockSize = juce::jmax(1, samplesPerBlock);
+    preparedBlockSize = juce::jmax(1, samplesPerBlock);
     preparedNumChannels = juce::jlimit(1, static_cast<int>(maxSupportedChannels), getTotalNumOutputChannels());
     const auto maximumRangeLatencySamples = static_cast<int>(std::ceil(sampleRate * 0.25)) + 16384;
     crossoverRouter.prepare(sampleRate,
-                            samplesPerBlock,
+                            preparedBlockSize,
                             preparedNumChannels,
                             maximumRangeLatencySamples);
 
     if (eqlProcessorBank != nullptr)
-        eqlProcessorBank->prepareToPlay(sampleRate, samplesPerBlock);
+        eqlProcessorBank->prepareToPlay(sampleRate, preparedBlockSize);
     if (fftProcessorBank != nullptr)
-        fftProcessorBank->prepareToPlay(sampleRate, samplesPerBlock);
+        fftProcessorBank->prepareToPlay(sampleRate, preparedBlockSize);
     if (tlsModuleProcessor != nullptr)
-        tlsModuleProcessor->prepareToPlay(sampleRate, samplesPerBlock);
+        tlsModuleProcessor->prepareToPlay(sampleRate, preparedBlockSize);
     if (dynModuleProcessor != nullptr)
-        dynModuleProcessor->prepareToPlay(sampleRate, samplesPerBlock);
+        dynModuleProcessor->prepareToPlay(sampleRate, preparedBlockSize);
     if (trsModuleProcessor != nullptr)
-        trsModuleProcessor->prepareToPlay(sampleRate, samplesPerBlock);
+        trsModuleProcessor->prepareToPlay(sampleRate, preparedBlockSize);
 
     updateShellLatency();
     processingPrepared.store(true, std::memory_order_release);
@@ -55,7 +55,7 @@ void AvaAudioProcessor::releaseResources()
 
     crossoverRouter.reset();
 
-    setLatencySamples(0);
+    requestLatencySamples(0);
     currentSampleRate = 0.0;
 }
 
@@ -68,9 +68,9 @@ void AvaAudioProcessor::reset()
     if (fftProcessorBank != nullptr)
         fftProcessorBank->resetProcessingState();
     if (tlsModuleProcessor != nullptr)
-        tlsModuleProcessor->reset();
+        tlsModuleProcessor->resetProcessingState();
     if (dynModuleProcessor != nullptr)
-        dynModuleProcessor->reset();
+        dynModuleProcessor->resetProcessingState();
     if (trsModuleProcessor != nullptr)
         trsModuleProcessor->resetProcessingState();
 
@@ -129,6 +129,24 @@ int AvaAudioProcessor::getActiveModuleLatencySamples() const noexcept
     return 0;
 }
 
+void AvaAudioProcessor::requestLatencySamples(const int latencySamples) noexcept
+{
+    const auto constrainedLatency = juce::jmax(0, latencySamples);
+    const auto previousRequest = requestedLatencySamples.exchange(constrainedLatency, std::memory_order_acq_rel);
+
+    if (previousRequest == constrainedLatency)
+        return;
+
+    if (auto* messageManager = juce::MessageManager::getInstanceWithoutCreating();
+        messageManager != nullptr && messageManager->isThisTheMessageThread())
+    {
+        applyPendingShellUpdates();
+        return;
+    }
+
+    triggerAsyncUpdate();
+}
+
 void AvaAudioProcessor::updateShellLatency() noexcept
 {
     auto totalLatencySamples = getActiveModuleLatencySamples();
@@ -139,8 +157,7 @@ void AvaAudioProcessor::updateShellLatency() noexcept
                                          abCompareLatencyFloorSamples.load(std::memory_order_acquire));
     }
 
-    if (getLatencySamples() != totalLatencySamples)
-        setLatencySamples(totalLatencySamples);
+    requestLatencySamples(totalLatencySamples);
 }
 
 bool AvaAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -159,8 +176,6 @@ void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
 {
     juce::ScopedNoDenormals noDenormals;
 
-    lastProcessedBlockSize = juce::jmax(1, buffer.getNumSamples());
-
     for (auto channel = getTotalNumInputChannels(); channel < getTotalNumOutputChannels(); ++channel)
         buffer.clear(channel, 0, buffer.getNumSamples());
 
@@ -177,6 +192,7 @@ void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         globalClipIndicator.store(0.0f, std::memory_order_relaxed);
         return;
     }
+
 
     const auto active = activeModule.load(std::memory_order_acquire);
     auto crossoverSettings = getCrossoverSettings();
@@ -199,22 +215,22 @@ void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         globalClipIndicator.store(clipped ? 1.0f : 0.0f, std::memory_order_relaxed);
     };
 
-    const auto readGlobalListen = [this] (const char* suffix)
+    const auto readGlobalListen = [this] (const size_t index) noexcept
     {
-        if (const auto* value = parameters.getRawParameterValue(getCrossoverParameterId(suffix)))
+        if (const auto* value = globalListenParams[index])
             return value->load(std::memory_order_relaxed) >= 0.5f;
 
         return false;
     };
 
     const auto applyGlobalListen = [&buffer,
-                                    listenLc = readGlobalListen("listenLc"),
-                                    listenRc = readGlobalListen("listenRc"),
-                                    listenMc = readGlobalListen("listenMc"),
-                                    listenSc = readGlobalListen("listenSc"),
-                                    listenLl = readGlobalListen("listenLl"),
-                                    listenRr = readGlobalListen("listenRr"),
-                                    listenSs = readGlobalListen("listenSs")]
+                                    listenLc = readGlobalListen(0),
+                                    listenRc = readGlobalListen(1),
+                                    listenMc = readGlobalListen(2),
+                                    listenSc = readGlobalListen(3),
+                                    listenLl = readGlobalListen(4),
+                                    listenRr = readGlobalListen(5),
+                                    listenSs = readGlobalListen(6)]
     {
         if (! (listenLc || listenRc || listenMc || listenSc || listenLl || listenRr || listenSs)
             || buffer.getNumChannels() < 2)
@@ -258,9 +274,7 @@ void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
 
     if (globalBypassActive)
     {
-        if (getLatencySamples() != 0)
-            setLatencySamples(0);
-
+        requestLatencySamples(0);
         globalClipIndicator.store(0.0f, std::memory_order_relaxed);
         return;
     }
@@ -320,8 +334,9 @@ void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
             break;
     }
 
-    crossoverSettings.activeSplitCount = std::min(crossoverSettings.activeSplitCount,
-                                                  availableRangeCount - 1);
+    crossoverSettings.activeSplitCount = availableRangeCount > 0
+        ? std::min(crossoverSettings.activeSplitCount, availableRangeCount - 1)
+        : 0;
     crossoverRouter.setSettings(crossoverSettings);
     crossoverRouter.setRangeLatencies(rangeLatencies);
     updateShellLatency();

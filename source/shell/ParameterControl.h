@@ -45,6 +45,7 @@ public:
 private:
     juce::String formatDisplayValue(double value) const;
     juce::String formatEditorValue() const;
+    double parseText(const juce::String& text) const;
 
     juce::String parameterId;
     juce::RangedAudioParameter* parameter = nullptr;

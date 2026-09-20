@@ -4,6 +4,9 @@
 
 #include <JuceHeader.h>
 
+#include <atomic>
+#include <utility>
+
 namespace ava::crossover::parameters
 {
 template <typename PointerGrid, typename ParameterSpecs>
@@ -42,4 +45,24 @@ void setRangeParameterListenersEnabled(juce::AudioProcessorValueTreeState& state
         }
     }
 }
-} // namespace ava::crossover::parameters
+
+template <typename RangeParameters, typename ReadRangeParameters, typename ProcessorBank>
+bool syncRangeParameters(std::atomic<bool>& dirty,
+                         const bool force,
+                         RangeParameters& currentParameters,
+                         ReadRangeParameters&& readRangeParameters,
+                         ProcessorBank& processorBank)
+{
+    if (! force && ! dirty.exchange(false, std::memory_order_acq_rel))
+        return false;
+
+    if (force)
+        dirty.store(false, std::memory_order_release);
+
+    for (size_t rangeIndex = 0; rangeIndex < currentParameters.size(); ++rangeIndex)
+        currentParameters[rangeIndex] = readRangeParameters(rangeIndex);
+
+    processorBank.setRangeParameters(currentParameters);
+    return true;
+}
+}

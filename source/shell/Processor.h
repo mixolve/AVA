@@ -4,14 +4,14 @@
 #include <array>
 #include <atomic>
 
-#include "../modules/eql/Processor.h"
 #include "../crossover/BufferRouter.h"
 
 class FftModuleProcessor;
+class EqlModuleProcessor;
 class FftProcessorBank;
 class EqlProcessorBank;
-class TlsAudioProcessor;
-class DynAudioProcessor;
+class TlsModuleProcessor;
+class DynModuleProcessor;
 class TrsModuleProcessor;
 
 class AvaAudioProcessor final : public juce::AudioProcessor,
@@ -20,11 +20,9 @@ class AvaAudioProcessor final : public juce::AudioProcessor,
                                private juce::AsyncUpdater
 {
 public:
-    using FilterType = EqlModuleProcessor::FilterType;
-
     inline static constexpr auto paramGlobalBypassId = "global_bypass";
     inline static constexpr auto paramCrossoverPrefix = "crossover_";
-    inline static constexpr auto paramCrossoverActiveSplitCountId = "crossover_activeXovers";
+    inline static constexpr auto paramCrossoverActiveSplitCountId = "crossover_active_split_count";
     inline static constexpr auto paramHostSlotPrefix = "host_slot_";
     inline static constexpr auto activeModuleStateKey = "ava.active_module";
     inline static constexpr auto eqlModuleStateKey = "ava.eql_state";
@@ -42,7 +40,7 @@ public:
     inline static constexpr auto trsModuleId = "trs";
     inline static constexpr auto editorWidthStateKey = "ava.editor.width";
     inline static constexpr auto editorHeightStateKey = "ava.editor.height";
-    static constexpr int maxEqlFilterCount = EqlModuleProcessor::maxFilterCount;
+    inline static constexpr auto editorHostParametersExpandedStateKey = "ava.editor.host_parameters_expanded";
     static constexpr int hostAutomationSlotCount = 64;
 
     enum class ActiveModule
@@ -54,17 +52,6 @@ public:
         dyn,
         trs,
     };
-    inline static constexpr std::array<FilterType, 7> filterTypePresetOrder
-    {
-        FilterType::lowCut,
-        FilterType::lowShelf,
-        FilterType::bell,
-        FilterType::tilt,
-        FilterType::highShelf,
-        FilterType::highCut,
-        FilterType::volume
-    };
-
     explicit AvaAudioProcessor();
     ~AvaAudioProcessor() override;
 
@@ -94,9 +81,7 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void getStateInformationForABCompareSnapshot(juce::MemoryBlock& destData);
     void setStateInformation(const void* data, int sizeInBytes) override;
-    bool setStateInformationPreservingLoadedModule(const void* data,
-                                                   int sizeInBytes,
-                                                   bool suspendProcessingForRestore = true);
+    bool applyHistoryStateInformation(const void* data, int sizeInBytes);
     bool applyStateInformationForABCompare(const void* data, int sizeInBytes);
     static void removeModuleStateProperties(juce::ValueTree& state);
     int getABCompareActiveSlot() const noexcept;
@@ -110,6 +95,7 @@ public:
     static juce::String getHostSlotParameterId(int slotIndex);
     static juce::String getHostSlotLetterLabel(int slotIndex);
     static juce::String getHostSlotTargetStateKey(int slotIndex);
+    static juce::String getEditorFilterDisplayOrderStateKey(size_t rangeIndex);
     static juce::String getCrossoverParameterId(const char* suffix);
     static juce::String getCrossoverSoloParameterId(size_t rangeIndex);
     ava::crossover::Settings getCrossoverSettings() const noexcept;
@@ -123,19 +109,21 @@ public:
     EqlProcessorBank* getEqlProcessorBank() noexcept;
     const EqlProcessorBank* getEqlProcessorBank() const noexcept;
     void setSelectedCrossoverRange(size_t rangeIndex);
+    size_t getSelectedCrossoverRange() const noexcept;
     FftModuleProcessor* getFftModuleProcessor() noexcept;
     const FftModuleProcessor* getFftModuleProcessor() const noexcept;
     FftProcessorBank* getFftProcessorBank() noexcept;
     const FftProcessorBank* getFftProcessorBank() const noexcept;
-    TlsAudioProcessor* getTlsModuleProcessor() noexcept;
-    const TlsAudioProcessor* getTlsModuleProcessor() const noexcept;
-    DynAudioProcessor* getDynModuleProcessor() noexcept;
-    const DynAudioProcessor* getDynModuleProcessor() const noexcept;
+    TlsModuleProcessor* getTlsModuleProcessor() noexcept;
+    const TlsModuleProcessor* getTlsModuleProcessor() const noexcept;
+    DynModuleProcessor* getDynModuleProcessor() noexcept;
+    const DynModuleProcessor* getDynModuleProcessor() const noexcept;
     TrsModuleProcessor* getTrsModuleProcessor() noexcept;
     const TrsModuleProcessor* getTrsModuleProcessor() const noexcept;
     juce::Point<int> getLastEditorSize() const noexcept;
     void setLastEditorSize(int width, int height) noexcept;
     void notifyHostOfStateChange();
+    void refreshHostSlotTargets();
 
     float getGlobalClipIndicator() const noexcept
     {
@@ -169,11 +157,17 @@ private:
     void resetModuleProcessors() noexcept;
     static ActiveModule moduleFromStateId(const juce::String& moduleId);
     int getActiveModuleLatencySamples() const noexcept;
+    void requestLatencySamples(int latencySamples) noexcept;
     void updateShellLatency() noexcept;
-    void restoreLoadedModuleFromStateText(const juce::String& text, bool publishActiveModule = true);
+    void applyPendingShellUpdates();
     void registerActiveModuleStateListeners();
     void clearActiveModuleStateListeners();
     void writeStateInformation(juce::MemoryBlock& destData, bool includeABCompareState);
+    bool restoreStateInformation(const void* data, int sizeInBytes, bool includeABCompareState);
+    bool restoreStateInformationPreservingLoadedModule(const void* data,
+                                                       int sizeInBytes,
+                                                       bool includeABCompareState,
+                                                       bool suspendProcessingForRestore);
     void parameterChanged(const juce::String& parameterID, float newValue) override;
     void valueTreePropertyChanged(juce::ValueTree& treeWhosePropertyHasChanged,
                                   const juce::Identifier& property) override;
@@ -187,26 +181,34 @@ private:
     std::vector<juce::String> observedModuleParameterIds;
     juce::ValueTree observedModuleState;
     std::atomic<float>* globalBypassParam = nullptr;
+    std::atomic<float>* crossoverActiveSplitCountParam = nullptr;
+    std::array<std::atomic<float>*, ava::crossover::BufferRouter::numSplits> crossoverSplitFrequencyParams {};
+    std::array<std::atomic<float>*, ava::crossover::BufferRouter::numRanges> crossoverSoloParams {};
+    std::array<std::atomic<float>*, 7> globalListenParams {};
+    std::array<juce::String, hostAutomationSlotCount> hostSlotParameterIds {};
+    std::array<std::atomic<juce::RangedAudioParameter*>, hostAutomationSlotCount> hostSlotTargets {};
     std::atomic<float> globalClipIndicator { 0.0f };
     std::unique_ptr<EqlProcessorBank> eqlProcessorBank;
     std::unique_ptr<FftProcessorBank> fftProcessorBank;
-    std::unique_ptr<TlsAudioProcessor> tlsModuleProcessor;
-    std::unique_ptr<DynAudioProcessor> dynModuleProcessor;
+    std::unique_ptr<TlsModuleProcessor> tlsModuleProcessor;
+    std::unique_ptr<DynModuleProcessor> dynModuleProcessor;
     std::unique_ptr<TrsModuleProcessor> trsModuleProcessor;
     std::atomic<ActiveModule> activeModule { ActiveModule::none };
     std::atomic<bool> processingPrepared { false };
     std::atomic<int> lastEditorWidth { 0 };
     std::atomic<int> lastEditorHeight { 0 };
     std::atomic<bool> suppressHostStateNotifications { false };
+    std::atomic<bool> pendingHostStateNotification { false };
+    std::atomic<int> requestedLatencySamples { 0 };
     std::atomic<size_t> requestedCrossoverRangeCount { 1 };
+    std::atomic<size_t> selectedCrossoverRange { 0 };
     mutable juce::CriticalSection abCompareLock;
     std::array<juce::MemoryBlock, 2> abCompareSnapshots;
-    std::array<bool, 2> abCompareSnapshotValid {};
     std::atomic<int> abCompareActiveSlot { 0 };
     std::atomic<bool> abCompareLatencyLocked { false };
     std::atomic<int> abCompareLatencyFloorSamples { 0 };
     int preparedNumChannels = 2;
-    int lastProcessedBlockSize = 0;
+    int preparedBlockSize = 0;
     double currentSampleRate = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AvaAudioProcessor)

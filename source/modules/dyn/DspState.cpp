@@ -8,7 +8,7 @@ namespace dyn::dsp
 namespace
 {
 constexpr double maxLookaheadMs = 24.0;
-} // namespace
+}
 
 void DspCore::resizeLookaheadBuffers()
 {
@@ -117,4 +117,4 @@ void DspCore::updateDerivedParameters()
     bufPos = wrapIndex(bufPos, derived.bufferSize);
     bufPosDry = wrapIndex(bufPosDry, derived.dryBufferSize);
 }
-} // namespace dyn::dsp
+}

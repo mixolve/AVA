@@ -2,9 +2,9 @@
 #include "Constants.h"
 
 #include <array>
-#include <algorithm>
 #include <cmath>
-#include <limits>
+#include <memory>
+#include <vector>
 
 namespace
 {
@@ -20,6 +20,8 @@ inline constexpr auto fftDeltaOrder = std::to_array<ParameterOrderEntry>({
 
 inline constexpr auto fftMainOrder = std::to_array<ParameterOrderEntry>({
     { "dynamic_mode", "MODE" },
+    { "correlation_type", "TYPE" },
+    { "dynamic_direction", "DIRECTION" },
     { "attack", "ATTACK" },
     { "release", "RELEASE" },
     { "knee", "KNEE" },
@@ -80,41 +82,68 @@ juce::String formatImpactValue(const float value)
     return formatCorrelationValue(value);
 }
 
+
+using ParameterList = std::vector<std::unique_ptr<juce::RangedAudioParameter>>;
+
+juce::String makeFftName(const juce::String& blockName, const juce::String& parameterName)
+{
+    return "FFT / " + blockName + " / " + parameterName;
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createParameterLayout()
+void appendDeltaParameters(ParameterList& parameterLayout)
 {
-    std::vector<std::unique_ptr<juce::RangedAudioParameter>> parameterLayout;
-    const auto makeFftName = [] (const juce::String& blockName, const juce::String& parameterName)
-    {
-        return "FFT / " + blockName + " / " + parameterName;
-    };
-
     for (const auto& entry : fftDeltaOrder)
     {
         const auto key = juce::String(entry.key);
         if (key == "delta")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterBool>(
-                juce::ParameterID { paramDeltaId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramDeltaId, 1 },
                 makeFftName("DYNAMIC PROCESSOR", entry.label),
                 false,
                 juce::AudioParameterBoolAttributes()));
         }
     }
 
+
+}
+
+void appendMainParameters(ParameterList& parameterLayout)
+{
     for (const auto& entry : fftMainOrder)
     {
         const auto key = juce::String(entry.key);
         const auto isFftParameter = key == "window_size" || key == "overlap" || key == "slope";
-        const auto name = makeFftName(isFftParameter ? "GENERAL PROCESSOR" : "DYNAMIC PROCESSOR", entry.label);
+        const auto name = makeFftName(isFftParameter ? "MAIN" : "DYNAMIC PROCESSOR", entry.label);
 
         if (key == "dynamic_mode")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterChoice>(
-                juce::ParameterID { paramDynamicModeId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramDynamicModeId, 1 },
                 name,
-                juce::StringArray { "SPECTRAL", "PHASE-CORR" },
+                juce::StringArray { "SPECTRAL", "CORR" },
+                0,
+                juce::AudioParameterChoiceAttributes()));
+            continue;
+        }
+
+        if (key == "correlation_type")
+        {
+            parameterLayout.push_back(std::make_unique<juce::AudioParameterChoice>(
+                juce::ParameterID { FftModuleProcessor::paramCorrelationTypeId, 1 },
+                name,
+                juce::StringArray { "PHASE", "FREQ", "SIGNED" },
+                0,
+                juce::AudioParameterChoiceAttributes()));
+            continue;
+        }
+
+        if (key == "dynamic_direction")
+        {
+            parameterLayout.push_back(std::make_unique<juce::AudioParameterChoice>(
+                juce::ParameterID { FftModuleProcessor::paramDynamicDirectionId, 1 },
+                name,
+                juce::StringArray { "DOWNWARD", "UPWARD" },
                 0,
                 juce::AudioParameterChoiceAttributes()));
             continue;
@@ -123,7 +152,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "attack")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID { paramAttackId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramAttackId, 1 },
                 name,
                 juce::NormalisableRange<float> { 0.0f, 200.0f, 1.0f },
                 0.0f,
@@ -138,7 +167,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "release")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID { paramReleaseId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramReleaseId, 1 },
                 name,
                 juce::NormalisableRange<float> { 0.0f, 2000.0f, 1.0f },
                 0.0f,
@@ -153,7 +182,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "knee")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID { paramKneeId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramKneeId, 1 },
                 name,
                 juce::NormalisableRange<float> { 0.0f, 24.0f, 0.01f },
                 0.0f,
@@ -168,7 +197,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "ratio")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID { paramRatioId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramRatioId, 1 },
                 name,
                 juce::NormalisableRange<float> { 1.0f, 100.0f, 0.01f },
                 100.0f,
@@ -183,10 +212,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "floor")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID { paramFloorId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramFloorId, 1 },
                 name,
                 juce::NormalisableRange<float> { -100.0f, 0.0f, 0.01f },
-                -60.0f,
+                -100.0f,
                 juce::AudioParameterFloatAttributes().withStringFromValueFunction(
                     [] (float value, int)
                     {
@@ -198,7 +227,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "window_size")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterChoice>(
-                juce::ParameterID { paramDspFftSizeId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramDspFftSizeId, 1 },
                 name,
                 juce::StringArray { "1024", "2048", "4096", "8192", "16384" },
                 2,
@@ -209,7 +238,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "overlap")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterChoice>(
-                juce::ParameterID { paramDspOverlapId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramDspOverlapId, 1 },
                 name,
                 juce::StringArray { "2", "4", "8", "16", "32" },
                 4,
@@ -220,7 +249,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "slope")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID { paramDspSlopeId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramDspSlopeId, 1 },
                 name,
                 juce::NormalisableRange<float> { -9.0f, 9.0f, 0.01f },
                 4.5f,
@@ -235,7 +264,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "l_threshold")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID { paramDualMonoLeftThresholdId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramDualMonoLeftThresholdId, 1 },
                 name,
                 juce::NormalisableRange<float> { -99.0f, 12.0f, 0.01f },
                 0.0f,
@@ -250,7 +279,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "l_adaptive")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID { paramDualMonoLeftAdaptiveId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramDualMonoLeftAdaptiveId, 1 },
                 name,
                 juce::NormalisableRange<float> { 0.0f, 100.0f, 1.0f },
                 0.0f,
@@ -261,7 +290,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "r_threshold")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID { paramDualMonoRightThresholdId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramDualMonoRightThresholdId, 1 },
                 name,
                 juce::NormalisableRange<float> { -99.0f, 12.0f, 0.01f },
                 0.0f,
@@ -276,7 +305,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "r_adaptive")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                juce::ParameterID { paramDualMonoRightAdaptiveId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramDualMonoRightAdaptiveId, 1 },
                 name,
                 juce::NormalisableRange<float> { 0.0f, 100.0f, 1.0f },
                 0.0f,
@@ -287,7 +316,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "link_lr")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterBool>(
-                juce::ParameterID { paramDualMonoLinkId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramDualMonoLinkId, 1 },
                 name,
                 true,
                 juce::AudioParameterBoolAttributes()));
@@ -297,7 +326,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
         if (key == "dynamic_bypass")
         {
             parameterLayout.push_back(std::make_unique<juce::AudioParameterBool>(
-                juce::ParameterID { paramDynamicBypassId, 1 },
+                juce::ParameterID { FftModuleProcessor::paramDynamicBypassId, 1 },
                 name,
                 false,
                 juce::AudioParameterBoolAttributes()));
@@ -306,9 +335,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
 
     }
 
+
+}
+
+void appendAuxiliaryParameters(ParameterList& parameterLayout)
+{
     parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { paramSpectralAdaptiveOffsetId, 1 },
-        makeFftName("ADAP SETTINGS", "OFFSET"),
+        juce::ParameterID { FftModuleProcessor::paramSpectralAdaptiveOffsetId, 1 },
+        makeFftName("ADAPTIVE SETTINGS", "OFFSET"),
         juce::NormalisableRange<float> { 0.0f, 48.0f, 0.01f },
         0.0f,
         juce::AudioParameterFloatAttributes().withStringFromValueFunction(
@@ -317,14 +351,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
                 return formatDecibelValue(value);
             })));
 
-    const auto addAdaptiveTimeParameter = [&parameterLayout, &makeFftName] (const char* parameterId,
+    const auto addAdaptiveTimeParameter = [&parameterLayout] (const char* parameterId,
                                                                             const char* parameterName,
                                                                             const float maximum,
                                                                             const float defaultValue)
     {
         parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
             juce::ParameterID { parameterId, 1 },
-            makeFftName("ADAP SETTINGS", parameterName),
+            makeFftName("ADAPTIVE SETTINGS", parameterName),
             juce::NormalisableRange<float> { 0.0f, maximum, 1.0f },
             defaultValue,
             juce::AudioParameterFloatAttributes().withStringFromValueFunction(
@@ -334,11 +368,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
                 })));
     };
 
-    addAdaptiveTimeParameter(paramSpectralAdaptiveAttackId, "ATTACK", 200.0f, 30.0f);
-    addAdaptiveTimeParameter(paramSpectralAdaptiveHoldId, "HOLD", 2000.0f, 0.0f);
-    addAdaptiveTimeParameter(paramSpectralAdaptiveReleaseId, "RELEASE", 2000.0f, 300.0f);
+    addAdaptiveTimeParameter(FftModuleProcessor::paramSpectralAdaptiveAttackId, "ATTACK", 200.0f, 30.0f);
+    addAdaptiveTimeParameter(FftModuleProcessor::paramSpectralAdaptiveHoldId, "HOLD", 2000.0f, 0.0f);
+    addAdaptiveTimeParameter(FftModuleProcessor::paramSpectralAdaptiveReleaseId, "RELEASE", 2000.0f, 300.0f);
 
-    const auto addPhaseParameter = [&parameterLayout, &makeFftName] (const char* parameterId,
+    const auto addCorrelationParameter = [&parameterLayout] (const char* parameterId,
                                                                      const char* parameterName,
                                                                      const float minimum,
                                                                      const float maximum,
@@ -383,15 +417,41 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
                 })));
     };
 
-    addPhaseParameter(paramPhaseThresholdId, "THRESHOLD", 0.0f, 100.0f, 0.0f, true);
-    addPhaseParameter(paramPhaseAdaptiveId, "ADAPTIVE", 0.0f, 100.0f, 0.0f, false, 1.0f);
-    addPhaseParameter(paramPhaseAdaptiveOffsetId, "OFFSET", -1.0f, 1.0f, 0.0f, false, 0.01f, "ADAP SETTINGS");
-    addAdaptiveTimeParameter(paramPhaseAdaptiveAttackId, "ATTACK", 200.0f, 30.0f);
-    addAdaptiveTimeParameter(paramPhaseAdaptiveHoldId, "HOLD", 2000.0f, 0.0f);
-    addAdaptiveTimeParameter(paramPhaseAdaptiveReleaseId, "RELEASE", 2000.0f, 300.0f);
-    addPhaseParameter(paramPhaseSlopeId, "SLOPE", -9.0f, 9.0f, 0.0f);
+    addCorrelationParameter(FftModuleProcessor::paramCorrelationThresholdId, "THRESHOLD", 0.0f, 100.0f, 0.0f, true);
     parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID { paramPhaseImpactId, 1 },
+        juce::ParameterID { FftModuleProcessor::paramCorrelationSmoothingId, 1 },
+        makeFftName("DYNAMIC PROCESSOR", "SMOOTHING"),
+        juce::NormalisableRange<float> { 0.0f, 100.0f, 1.0f },
+        30.0f,
+        juce::AudioParameterFloatAttributes()));
+    addCorrelationParameter(FftModuleProcessor::paramCorrelationAdaptiveId, "ADAPTIVE", 0.0f, 100.0f, 0.0f, false, 1.0f);
+    addCorrelationParameter(FftModuleProcessor::paramCorrelationAdaptiveOffsetId, "OFFSET", -1.0f, 1.0f, 0.0f, false, 0.01f, "ADAPTIVE SETTINGS");
+    addAdaptiveTimeParameter(FftModuleProcessor::paramCorrelationAdaptiveAttackId, "ATTACK", 200.0f, 30.0f);
+    addAdaptiveTimeParameter(FftModuleProcessor::paramCorrelationAdaptiveHoldId, "HOLD", 2000.0f, 0.0f);
+    addAdaptiveTimeParameter(FftModuleProcessor::paramCorrelationAdaptiveReleaseId, "RELEASE", 2000.0f, 300.0f);
+    const auto addDetectorCut = [&parameterLayout] (const char* id,
+                                                               const char* name,
+                                                               const float defaultFrequency)
+    {
+        auto range = juce::NormalisableRange<float> { analyserMinFrequency, analyserMaxFrequency, 0.01f };
+        range.setSkewForCentre(1000.0f);
+        parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
+            juce::ParameterID { id, 1 },
+            makeFftName("RANGE", name),
+            range,
+            defaultFrequency,
+            juce::AudioParameterFloatAttributes().withLabel("Hz")
+                .withStringFromValueFunction([] (float value, int)
+                {
+                    return juce::String::formatted("%.2f", static_cast<double>(value));
+                })));
+    };
+    addDetectorCut(FftModuleProcessor::paramDetectorLowCutId, "LOW-CUT", analyserMinFrequency);
+    addDetectorCut(FftModuleProcessor::paramDetectorHighCutId, "HIGH-CUT", analyserMaxFrequency);
+
+    addCorrelationParameter(FftModuleProcessor::paramCorrelationSlopeId, "SLOPE", -9.0f, 9.0f, 0.0f);
+    parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { FftModuleProcessor::paramCorrelationImpactId, 1 },
         makeFftName("DYNAMIC PROCESSOR", "IMPACT"),
         juce::NormalisableRange<float> { -100.0f, 100.0f, 0.01f },
         0.0f,
@@ -414,5 +474,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createPa
                 return valueText.getFloatValue();
             })));
 
+
+}
+}
+
+juce::AudioProcessorValueTreeState::ParameterLayout FftModuleProcessor::createParameterLayout()
+{
+    ParameterList parameterLayout;
+    appendDeltaParameters(parameterLayout);
+    appendMainParameters(parameterLayout);
+    appendAuxiliaryParameters(parameterLayout);
     return { parameterLayout.begin(), parameterLayout.end() };
 }

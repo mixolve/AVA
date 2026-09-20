@@ -13,7 +13,7 @@ constexpr double minFrequency = 10.0;
 constexpr double minSplitGapHz = 1.0;
 constexpr double nyquistMargin = 0.499;
 constexpr double pi = 3.14159265358979323846;
-} // namespace
+}
 
 double Splitter::clampFrequency(const double frequency, const double sampleRate)
 {
@@ -194,4 +194,4 @@ Splitter::RangeArray Splitter::processSample(const double leftInput, const doubl
 
     return ranges;
 }
-} // namespace ava::crossover
+}

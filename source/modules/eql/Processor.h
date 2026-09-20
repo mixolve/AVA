@@ -1,7 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "../ParameterHost.h"
+#include "../shared/ParameterHost.h"
 
 #include <array>
 #include <atomic>
@@ -25,20 +25,19 @@ public:
 
     inline static constexpr auto activeFilterCountStateKey = "active_filter_count";
     inline static constexpr float fixedSlopeDbPerOct = 12.0f;
-    inline static constexpr auto filterPresetLastSelectedStateKey = "filter_preset_last_selected";
-    inline static constexpr auto filterPresetDefaultSelectedStateKey = "filter_preset_default_selected";
+    inline static constexpr auto filterPresetSelectedStateKey = "filter_preset_selected";
     static constexpr int maxFilterCount = 64;
 
     static juce::String getFilterTypeParamId(int filterIndex);
     static juce::String getFilterPlaceParamId(int filterIndex);
     static juce::String getFilterFrequencyParamId(int filterIndex);
     static juce::String getFilterBandwidthParamId(int filterIndex);
-    static juce::String getFilterSlopeParamId(int filterIndex);
+    static juce::String getFilterOrderParamId(int filterIndex);
     static juce::String getFilterGainParamId(int filterIndex);
     static juce::String getFilterBypassParamId(int filterIndex);
-    static juce::StringArray getBellSlopeChoices() noexcept;
-    static float getBellSlopeValueForChoiceIndex(int choiceIndex) noexcept;
-    static int getBellSlopeChoiceIndexForValue(float slope) noexcept;
+    static juce::StringArray getFilterOrderChoices() noexcept;
+    static float getSlopeDbPerOctForOrderChoice(int choiceIndex) noexcept;
+    static int getOrderChoiceForSlopeDbPerOct(float slope) noexcept;
     static juce::String getFilterHeaderText(FilterType type, int filterIndex);
     juce::String getFilterHeaderText(int filterIndex, int displayIndex) const noexcept;
     static FilterType filterTypeFromChoiceIndex(int choiceIndex) noexcept;
@@ -55,8 +54,7 @@ public:
     int getLatencySamples() const noexcept;
 
     void getStateInformation(juce::MemoryBlock& destData);
-    void setStateInformation(const void* data, int sizeInBytes);
-    bool applyStateInformationForABCompare(const void* data, int sizeInBytes);
+    bool setStateInformation(const void* data, int sizeInBytes);
 
     juce::AudioProcessorValueTreeState& getValueTreeState() noexcept;
     const juce::AudioProcessorValueTreeState& getValueTreeState() const noexcept;
@@ -67,7 +65,7 @@ public:
     bool clearFilters() noexcept;
     bool applyFilterOrder(const std::vector<int>& orderedFilterIndices) noexcept;
     juce::String getDefaultFilterPresetName() const;
-    juce::String getLastFilterPresetName() const;
+    juce::String getSelectedFilterPresetName() const;
     juce::StringArray getFilterPresetNames() const;
     bool saveFilterPreset(const juce::String& presetName);
     bool renameFilterPreset(const juce::String& sourcePresetName, const juce::String& newPresetName);
@@ -78,6 +76,8 @@ public:
     void markEqlFiltersDirty() noexcept;
 
 private:
+    bool restoreState(juce::ValueTree restoredState) noexcept;
+
     static constexpr size_t maxSupportedChannels = 2;
     static constexpr size_t maxBellOrder = 128;
     static constexpr size_t maxShelfOrder = 128;
@@ -164,9 +164,10 @@ private:
     };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
-    void parameterChanged(const juce::String& parameterID, float newValue) override;
+    void parameterChanged(const juce::String&, float) override;
     void setParameterListenersEnabled(bool enabled);
     bool updateSmoothedFilterGains(int samplesPerBlock) noexcept;
+    void processFilterSection(juce::AudioBuffer<float>& targetBuffer, int filterIndex, int processChannels);
     FilterType getFilterTypeForSection(size_t filterIndex) const noexcept;
     bool filterDesignMatches(size_t filterIndex,
                              bool active,
@@ -215,14 +216,14 @@ private:
                                double slope) noexcept;
     void updateFilters();
 
-    ava::ParameterHost parameterHost;
+    ava::ModuleParameterHost moduleParameterHost;
     juce::AudioProcessorValueTreeState parameters;
     mutable juce::CriticalSection filterProcessLock;
     std::array<std::atomic<float>*, maxFilterCount> filterTypeParams {};
     std::array<std::atomic<float>*, maxFilterCount> filterPlaceParams {};
     std::array<std::atomic<float>*, maxFilterCount> filterFrequencyParams {};
     std::array<std::atomic<float>*, maxFilterCount> filterBandwidthParams {};
-    std::array<juce::AudioParameterChoice*, maxFilterCount> filterSlopeChoiceParams {};
+    std::array<juce::AudioParameterChoice*, maxFilterCount> filterOrderParams {};
     std::array<std::atomic<float>*, maxFilterCount> filterGainParams {};
     std::array<std::atomic<float>*, maxFilterCount> filterBypassParams {};
     std::array<juce::SmoothedValue<float>, maxFilterCount> filterGainSmoothers {};
@@ -239,11 +240,9 @@ private:
     juce::AudioBuffer<float> placeWorkBuffer;
     juce::AudioBuffer<float> placeAuxBuffer;
     int preparedNumChannels = 2;
-    int lastProcessedBlockSize = 0;
     double currentSampleRate = 0.0;
     std::atomic<int> activeFilterCount { 0 };
     std::atomic<bool> eqlFiltersDirty { true };
-    std::atomic<bool> suppressEqlFilterDirty { false };
     std::atomic<bool> prepared { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EqlModuleProcessor)

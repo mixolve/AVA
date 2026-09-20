@@ -156,4 +156,4 @@ DspCore::StereoSample DspCore::processSample(const double leftInput,
 
   return {left, right};
 }
-} // namespace tls::dsp
+}

@@ -1,101 +1,163 @@
 #include "Processor.h"
+#include "../shared/StateUtilities.h"
 
 #include "../../crossover/ParameterIds.h"
+#include "../../crossover/UiState.h"
 
-void DynAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
+#include <array>
+#include <cmath>
+#include <optional>
+
+void DynModuleProcessor::getStateInformation(juce::MemoryBlock& destData) const
 {
-    if (auto stateXml = valueTreeState.copyState().createXml())
-        copyXmlToBinary(*stateXml, destData);
+    if (auto stateXml = const_cast<juce::AudioProcessorValueTreeState&>(valueTreeState).copyState().createXml())
+        juce::AudioProcessor::copyXmlToBinary(*stateXml, destData);
 }
 
-void DynAudioProcessor::setStateInformation(const void* data, const int sizeInBytes)
+namespace
 {
-    if (auto xmlState = getXmlFromBinary(data, sizeInBytes))
+bool approximatelyEqual(const float left, const float right) noexcept
+{
+    return std::abs(left - right) <= 1.0e-4f;
+}
+
+bool hasCurrentDynInvariants(const juce::ValueTree& state)
+{
+    using ava::crossover::parameters::makeRangeParameterId;
+    using dyn::parameters::parameterSpecs;
+    using dyn::parameters::ParameterSlot;
+    using dyn::parameters::toIndex;
+
+    const auto read = [&state] (const size_t rangeIndex, const ParameterSlot slot) -> std::optional<float>
     {
-        if (xmlState->hasTagName(valueTreeState.state.getType()))
+        return ava::modules::state::readParameterPlainValue(
+            state,
+            makeRangeParameterId(rangeIndex, parameterSpecs[toIndex(slot)].suffix));
+    };
+
+    constexpr std::array globalSlots {
+        ParameterSlot::morph,
+        ParameterSlot::ratio,
+        ParameterSlot::knee,
+        ParameterSlot::peakHoldMs,
+        ParameterSlot::lookahead,
+        ParameterSlot::tensionFloor,
+        ParameterSlot::tensionHysteresis,
+        ParameterSlot::releaseForm,
+        ParameterSlot::adaptiveOffset,
+        ParameterSlot::adaptiveAttack,
+        ParameterSlot::adaptiveHold,
+        ParameterSlot::adaptiveRelease
+    };
+
+    for (const auto slot : globalSlots)
+    {
+        const auto reference = read(0, slot);
+
+        if (! reference.has_value())
+            return false;
+
+        for (size_t rangeIndex = 1; rangeIndex < dyn::dsp::ProcessorBank::numRanges; ++rangeIndex)
         {
-            valueTreeState.replaceState(juce::ValueTree::fromXml(*xmlState));
+            const auto candidate = read(rangeIndex, slot);
 
-            using ava::crossover::parameters::makeRangeParameterId;
-            using dyn::parameters::parameterSpecs;
-            using dyn::parameters::ParameterSlot;
-            using dyn::parameters::toIndex;
-
-            for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
-            {
-                auto* linkLeftRight = dynamic_cast<juce::RangedAudioParameter*>(valueTreeState.getParameter(
-                    makeRangeParameterId(rangeIndex, parameterSpecs[toIndex(ParameterSlot::linkLeftRight)].suffix)));
-                auto* linkUpDown = dynamic_cast<juce::RangedAudioParameter*>(valueTreeState.getParameter(
-                    makeRangeParameterId(rangeIndex, parameterSpecs[toIndex(ParameterSlot::linkUpDown)].suffix)));
-
-                if (linkLeftRight == nullptr || linkUpDown == nullptr)
-                    continue;
-
-                const auto linkLeftRightOn = linkLeftRight->convertFrom0to1(linkLeftRight->getValue()) >= 0.5f;
-                const auto linkUpDownOn = linkUpDown->convertFrom0to1(linkUpDown->getValue()) >= 0.5f;
-
-                if (linkLeftRightOn && linkUpDownOn)
-                    linkUpDown->setValueNotifyingHost(linkUpDown->convertTo0to1(0.0f));
-
-                const auto effectiveLinkLrOn = linkLeftRight->convertFrom0to1(linkLeftRight->getValue()) >= 0.5f;
-                const auto effectiveLinkUpDnOn = linkUpDown->convertFrom0to1(linkUpDown->getValue()) >= 0.5f;
-
-                if (effectiveLinkLrOn)
-                {
-                    syncAllFieldParameters(rangeIndex, ParameterSlot::leftUpThreshold, ParameterSlot::leftDownThreshold, ParameterSlot::rightUpThreshold, ParameterSlot::rightDownThreshold);
-                    syncAllFieldParameters(rangeIndex, ParameterSlot::leftUpAdaptive, ParameterSlot::leftDownAdaptive, ParameterSlot::rightUpAdaptive, ParameterSlot::rightDownAdaptive);
-                    syncAllFieldParameters(rangeIndex, ParameterSlot::leftUpTension, ParameterSlot::leftDownTension, ParameterSlot::rightUpTension, ParameterSlot::rightDownTension);
-                    syncAllFieldParameters(rangeIndex, ParameterSlot::leftUpRelease, ParameterSlot::leftDownRelease, ParameterSlot::rightUpRelease, ParameterSlot::rightDownRelease);
-                    syncAllFieldParameters(rangeIndex, ParameterSlot::leftUpOutput, ParameterSlot::leftDownOutput, ParameterSlot::rightUpOutput, ParameterSlot::rightDownOutput);
-                }
-                else if (effectiveLinkUpDnOn)
-                {
-                    syncUpDownParameterPairs(rangeIndex, ParameterSlot::leftUpThreshold, ParameterSlot::leftDownThreshold, ParameterSlot::rightUpThreshold, ParameterSlot::rightDownThreshold);
-                    syncUpDownParameterPairs(rangeIndex, ParameterSlot::leftUpAdaptive, ParameterSlot::leftDownAdaptive, ParameterSlot::rightUpAdaptive, ParameterSlot::rightDownAdaptive);
-                    syncUpDownParameterPairs(rangeIndex, ParameterSlot::leftUpTension, ParameterSlot::leftDownTension, ParameterSlot::rightUpTension, ParameterSlot::rightDownTension);
-                    syncUpDownParameterPairs(rangeIndex, ParameterSlot::leftUpRelease, ParameterSlot::leftDownRelease, ParameterSlot::rightUpRelease, ParameterSlot::rightDownRelease);
-                    syncUpDownParameterPairs(rangeIndex, ParameterSlot::leftUpOutput, ParameterSlot::leftDownOutput, ParameterSlot::rightUpOutput, ParameterSlot::rightDownOutput);
-                }
-            }
-
-            const auto syncGlobalFromRange0 = [&] (const ParameterSlot slot)
-            {
-                const auto* source = rawRangeParameters[0][toIndex(slot)];
-
-                if (source == nullptr)
-                    return;
-
-                const auto sourceValue = source->load(std::memory_order_relaxed);
-
-                for (size_t targetRange = 0; targetRange < numRanges; ++targetRange)
-                    setRangeParameterValue(targetRange, slot, sourceValue);
-            };
-
-            syncGlobalFromRange0(ParameterSlot::morph);
-            syncGlobalFromRange0(ParameterSlot::ratio);
-            syncGlobalFromRange0(ParameterSlot::knee);
-            syncGlobalFromRange0(ParameterSlot::peakHoldMs);
-            syncGlobalFromRange0(ParameterSlot::lookahead);
-            syncGlobalFromRange0(ParameterSlot::tensionFloor);
-            syncGlobalFromRange0(ParameterSlot::tensionHysteresis);
-            syncGlobalFromRange0(ParameterSlot::releaseForm);
-            syncGlobalFromRange0(ParameterSlot::adaptiveOffset);
-            syncGlobalFromRange0(ParameterSlot::adaptiveAttack);
-            syncGlobalFromRange0(ParameterSlot::adaptiveHold);
-            syncGlobalFromRange0(ParameterSlot::adaptiveRelease);
-
-            if (readRangeParameterValue(0, ParameterSlot::releaseForm) < 0.5f)
-            {
-                for (size_t targetRange = 0; targetRange < numRanges; ++targetRange)
-                    setRangeParameterValue(targetRange, ParameterSlot::releaseCurve, 0.0f);
-            }
-            else
-            {
-                syncGlobalFromRange0(ParameterSlot::releaseCurve);
-            }
-
-            markParametersDirty();
-            syncParameters(true);
+            if (! candidate.has_value() || ! approximatelyEqual(*candidate, *reference))
+                return false;
         }
     }
+
+    const auto releaseForm = read(0, ParameterSlot::releaseForm);
+    const auto releaseCurve = read(0, ParameterSlot::releaseCurve);
+
+    if (! releaseForm.has_value() || ! releaseCurve.has_value())
+        return false;
+
+    for (size_t rangeIndex = 0; rangeIndex < dyn::dsp::ProcessorBank::numRanges; ++rangeIndex)
+    {
+        const auto candidate = read(rangeIndex, ParameterSlot::releaseCurve);
+
+        if (! candidate.has_value())
+            return false;
+
+        if (*releaseForm < 0.5f)
+        {
+            if (! approximatelyEqual(*candidate, 0.0f))
+                return false;
+        }
+        else if (! approximatelyEqual(*candidate, *releaseCurve))
+        {
+            return false;
+        }
+    }
+
+    constexpr std::array fieldGroups {
+        std::array { ParameterSlot::leftUpThreshold, ParameterSlot::leftDownThreshold, ParameterSlot::rightUpThreshold, ParameterSlot::rightDownThreshold },
+        std::array { ParameterSlot::leftUpAdaptive, ParameterSlot::leftDownAdaptive, ParameterSlot::rightUpAdaptive, ParameterSlot::rightDownAdaptive },
+        std::array { ParameterSlot::leftUpTension, ParameterSlot::leftDownTension, ParameterSlot::rightUpTension, ParameterSlot::rightDownTension },
+        std::array { ParameterSlot::leftUpRelease, ParameterSlot::leftDownRelease, ParameterSlot::rightUpRelease, ParameterSlot::rightDownRelease },
+        std::array { ParameterSlot::leftUpOutput, ParameterSlot::leftDownOutput, ParameterSlot::rightUpOutput, ParameterSlot::rightDownOutput }
+    };
+
+    for (size_t rangeIndex = 0; rangeIndex < dyn::dsp::ProcessorBank::numRanges; ++rangeIndex)
+    {
+        const auto linkLeftRight = read(rangeIndex, ParameterSlot::linkLeftRight);
+        const auto linkUpDown = read(rangeIndex, ParameterSlot::linkUpDown);
+
+        if (! linkLeftRight.has_value() || ! linkUpDown.has_value())
+            return false;
+
+        const auto linkLeftRightOn = *linkLeftRight >= 0.5f;
+        const auto linkUpDownOn = *linkUpDown >= 0.5f;
+
+        if (linkLeftRightOn && linkUpDownOn)
+            return false;
+
+        for (const auto& group : fieldGroups)
+        {
+            const auto leftUp = read(rangeIndex, group[0]);
+            const auto leftDown = read(rangeIndex, group[1]);
+            const auto rightUp = read(rangeIndex, group[2]);
+            const auto rightDown = read(rangeIndex, group[3]);
+
+            if (! leftUp.has_value() || ! leftDown.has_value() || ! rightUp.has_value() || ! rightDown.has_value())
+                return false;
+
+            if (linkLeftRightOn
+                && (! approximatelyEqual(*leftDown, *leftUp)
+                    || ! approximatelyEqual(*rightUp, *leftUp)
+                    || ! approximatelyEqual(*rightDown, *leftUp)))
+                return false;
+
+            if (linkUpDownOn
+                && (! approximatelyEqual(*leftDown, *leftUp)
+                    || ! approximatelyEqual(*rightDown, *rightUp)))
+                return false;
+        }
+    }
+
+    return true;
+}
+}
+
+bool DynModuleProcessor::setStateInformation(const void* data, const int sizeInBytes)
+{
+    auto xmlState = juce::AudioProcessor::getXmlFromBinary(data, sizeInBytes);
+
+    if (xmlState == nullptr)
+        return false;
+
+    auto restoredState = juce::ValueTree::fromXml(*xmlState);
+
+    if (! ava::modules::state::hasExactParameterState(restoredState, valueTreeState)
+        || ! crossover_ui::hasCurrentStateProperties(restoredState, "dyn")
+        || ! hasCurrentDynInvariants(restoredState))
+        return false;
+
+    setParameterListenersEnabled(false);
+    valueTreeState.replaceState(restoredState);
+    cacheParameterPointers();
+    setParameterListenersEnabled(true);
+    markParametersDirty();
+    syncParameters(true);
+    return true;
 }

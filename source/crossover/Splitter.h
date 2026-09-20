@@ -72,4 +72,4 @@ private:
     std::array<CascadeState, numCompensators> compHpLeft {};
     std::array<CascadeState, numCompensators> compHpRight {};
 };
-} // namespace ava::crossover
+}

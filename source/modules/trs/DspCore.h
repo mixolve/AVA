@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../DspUtilities.h"
+#include "../shared/DspUtilities.h"
 
 #include <JuceHeader.h>
 
@@ -19,14 +19,14 @@ public:
 
     struct Parameters
     {
-        bool transEnabled = true;
+        bool transientEnabled = true;
         bool sustainEnabled = true;
-        float transGainDb = 0.0f;
+        float transientGainDb = 0.0f;
         float sustainGainDb = 0.0f;
         float holdMs = 0.0f;
         float releaseMs = 10.0f;
         float releaseCurve = 0.0f;
-        float thresholdDb = -42.0f;
+        float thresholdDb = -48.0f;
         float kneeDb = 0.0f;
         float retriggerMs = 1.0f;
         bool oneShot = false;
@@ -45,8 +45,6 @@ private:
     struct DerivedParameters
     {
         float fastReleaseCoefficient = 0.0f;
-        float bodyAttackCoefficient = 0.0f;
-        float bodyReleaseCoefficient = 0.0f;
         float normalizedReleaseCurve = 0.0f;
         int holdSamples = 0;
         int retriggerSamples = 0;
@@ -59,7 +57,6 @@ private:
     struct DetectorState
     {
         float fastEnvelope = 0.0f;
-        float bodyEnvelope = 0.0f;
         float transientEnvelope = 0.0f;
         float heldTransientAmount = 0.0f;
         float releaseStartAmount = 0.0f;
@@ -86,4 +83,4 @@ private:
     int delayBufferLength = 1;
     int delayWriteIndex = 0;
 };
-} // namespace trs::dsp
+}

@@ -1,7 +1,7 @@
-#include "ProcessorSupport.h"
+#include "Processor.h"
+#include "FilterSupport.h"
 
 #include <cmath>
-#include <functional>
 
 void EqlModuleProcessor::prepareToPlay(const double sampleRate, const int samplesPerBlock)
 {
@@ -9,7 +9,6 @@ void EqlModuleProcessor::prepareToPlay(const double sampleRate, const int sample
     const juce::ScopedLock lock(filterProcessLock);
 
     currentSampleRate = sampleRate;
-    lastProcessedBlockSize = juce::jmax(1, samplesPerBlock);
     preparedNumChannels = static_cast<int>(maxSupportedChannels);
     filterProcessBufferA.setSize(preparedNumChannels, juce::jmax(1, samplesPerBlock));
     filterProcessBufferB.setSize(preparedNumChannels, juce::jmax(1, samplesPerBlock));
@@ -139,23 +138,31 @@ void EqlModuleProcessor::processBlock(juce::AudioBuffer<float>& buffer)
 
     const auto filterCount = getActiveFilterCount();
 
-    auto processPlacedSignal = [this, processChannels] (juce::AudioBuffer<float>& targetBuffer,
-                                                       const int filterIndex,
-                                                       const std::function<void(juce::AudioBuffer<float>&, int)>& processor)
+    for (int filterIndex = 0; filterIndex < filterCount; ++filterIndex)
+        processFilterSection(buffer, filterIndex, processChannels);
+}
+
+void EqlModuleProcessor::processFilterSection(juce::AudioBuffer<float>& targetBuffer,
+                                              const int filterIndex,
+                                              const int processChannels)
+{
+    auto processPlacedSignal = [this, processChannels] (juce::AudioBuffer<float>& placedBuffer,
+                                                        const int placedFilterIndex,
+                                                        auto&& processor)
     {
         if (processChannels < 2)
         {
-            processor(targetBuffer, processChannels);
+            processor(placedBuffer, processChannels);
             return;
         }
 
-        const auto mode = filterPlaceParams[static_cast<size_t>(filterIndex)] != nullptr
-            ? juce::jlimit(0, 7, static_cast<int>(std::lround(filterPlaceParams[static_cast<size_t>(filterIndex)]->load(std::memory_order_relaxed))))
+        const auto mode = filterPlaceParams[static_cast<size_t>(placedFilterIndex)] != nullptr
+            ? juce::jlimit(0, 7, static_cast<int>(std::lround(filterPlaceParams[static_cast<size_t>(placedFilterIndex)]->load(std::memory_order_relaxed))))
             : 0;
 
         if (mode == 0 || mode == 5)
         {
-            processor(targetBuffer, processChannels);
+            processor(placedBuffer, processChannels);
             return;
         }
 
@@ -165,108 +172,96 @@ void EqlModuleProcessor::processBlock(juce::AudioBuffer<float>& buffer)
         switch (mode)
         {
             case 1:
-                workBuffer.copyFrom(0, 0, targetBuffer, 0, 0, targetBuffer.getNumSamples());
+                workBuffer.copyFrom(0, 0, placedBuffer, 0, 0, placedBuffer.getNumSamples());
                 processor(workBuffer, 1);
-                targetBuffer.copyFrom(0, 0, workBuffer, 0, 0, targetBuffer.getNumSamples());
+                placedBuffer.copyFrom(0, 0, workBuffer, 0, 0, placedBuffer.getNumSamples());
                 break;
 
             case 2:
-                workBuffer.copyFrom(0, 0, targetBuffer, 1, 0, targetBuffer.getNumSamples());
+                workBuffer.copyFrom(0, 0, placedBuffer, 1, 0, placedBuffer.getNumSamples());
                 processor(workBuffer, 1);
-                targetBuffer.copyFrom(1, 0, workBuffer, 0, 0, targetBuffer.getNumSamples());
+                placedBuffer.copyFrom(1, 0, workBuffer, 0, 0, placedBuffer.getNumSamples());
                 break;
 
             case 3:
-                auxBuffer.copyFrom(0, 0, targetBuffer, 0, 0, targetBuffer.getNumSamples());
-                auxBuffer.copyFrom(1, 0, targetBuffer, 1, 0, targetBuffer.getNumSamples());
-                for (int sampleIndex = 0; sampleIndex < targetBuffer.getNumSamples(); ++sampleIndex)
+                auxBuffer.copyFrom(0, 0, placedBuffer, 0, 0, placedBuffer.getNumSamples());
+                auxBuffer.copyFrom(1, 0, placedBuffer, 1, 0, placedBuffer.getNumSamples());
+                for (int sampleIndex = 0; sampleIndex < placedBuffer.getNumSamples(); ++sampleIndex)
                 {
                     const auto left = auxBuffer.getReadPointer(0)[sampleIndex];
                     const auto right = auxBuffer.getReadPointer(1)[sampleIndex];
                     workBuffer.setSample(0, sampleIndex, 0.5f * (left + right));
                 }
                 processor(workBuffer, 1);
-                for (int sampleIndex = 0; sampleIndex < targetBuffer.getNumSamples(); ++sampleIndex)
+                for (int sampleIndex = 0; sampleIndex < placedBuffer.getNumSamples(); ++sampleIndex)
                 {
                     const auto processedMid = workBuffer.getReadPointer(0)[sampleIndex];
                     const auto side = 0.5f * (auxBuffer.getReadPointer(0)[sampleIndex] - auxBuffer.getReadPointer(1)[sampleIndex]);
-                    targetBuffer.setSample(0, sampleIndex, processedMid + side);
-                    targetBuffer.setSample(1, sampleIndex, processedMid - side);
+                    placedBuffer.setSample(0, sampleIndex, processedMid + side);
+                    placedBuffer.setSample(1, sampleIndex, processedMid - side);
                 }
                 break;
 
             case 4:
-                auxBuffer.copyFrom(0, 0, targetBuffer, 0, 0, targetBuffer.getNumSamples());
-                auxBuffer.copyFrom(1, 0, targetBuffer, 1, 0, targetBuffer.getNumSamples());
-                for (int sampleIndex = 0; sampleIndex < targetBuffer.getNumSamples(); ++sampleIndex)
+                auxBuffer.copyFrom(0, 0, placedBuffer, 0, 0, placedBuffer.getNumSamples());
+                auxBuffer.copyFrom(1, 0, placedBuffer, 1, 0, placedBuffer.getNumSamples());
+                for (int sampleIndex = 0; sampleIndex < placedBuffer.getNumSamples(); ++sampleIndex)
                 {
                     const auto left = auxBuffer.getReadPointer(0)[sampleIndex];
                     const auto right = auxBuffer.getReadPointer(1)[sampleIndex];
                     workBuffer.setSample(0, sampleIndex, 0.5f * (left - right));
                 }
                 processor(workBuffer, 1);
-                for (int sampleIndex = 0; sampleIndex < targetBuffer.getNumSamples(); ++sampleIndex)
+                for (int sampleIndex = 0; sampleIndex < placedBuffer.getNumSamples(); ++sampleIndex)
                 {
                     const auto side = workBuffer.getReadPointer(0)[sampleIndex];
                     const auto mid = 0.5f * (auxBuffer.getReadPointer(0)[sampleIndex] + auxBuffer.getReadPointer(1)[sampleIndex]);
-                    targetBuffer.setSample(0, sampleIndex, mid + side);
-                    targetBuffer.setSample(1, sampleIndex, mid - side);
+                    placedBuffer.setSample(0, sampleIndex, mid + side);
+                    placedBuffer.setSample(1, sampleIndex, mid - side);
                 }
                 break;
 
             case 6:
-                workBuffer.copyFrom(0, 0, targetBuffer, 0, 0, targetBuffer.getNumSamples());
+                workBuffer.copyFrom(0, 0, placedBuffer, 0, 0, placedBuffer.getNumSamples());
                 processor(workBuffer, 1);
-                targetBuffer.copyFrom(0, 0, workBuffer, 0, 0, targetBuffer.getNumSamples());
+                placedBuffer.copyFrom(0, 0, workBuffer, 0, 0, placedBuffer.getNumSamples());
                 break;
 
             case 7:
-                workBuffer.copyFrom(0, 0, targetBuffer, 1, 0, targetBuffer.getNumSamples());
+                workBuffer.copyFrom(0, 0, placedBuffer, 1, 0, placedBuffer.getNumSamples());
                 processor(workBuffer, 1);
-                targetBuffer.copyFrom(1, 0, workBuffer, 0, 0, targetBuffer.getNumSamples());
+                placedBuffer.copyFrom(1, 0, workBuffer, 0, 0, placedBuffer.getNumSamples());
                 break;
 
             default:
-                processor(targetBuffer, processChannels);
+                processor(placedBuffer, processChannels);
                 break;
         }
     };
 
-    auto processFilterSection = [this, &processPlacedSignal] (juce::AudioBuffer<float>& targetBuffer,
-                                                          const int filterIndex)
+
+    const auto filterArrayIndex = static_cast<size_t>(filterIndex);
+    const auto filterType = getFilterTypeForSection(filterArrayIndex);
+    const auto filterBypassed = filterBypassParams[filterArrayIndex] != nullptr
+        && filterBypassParams[filterArrayIndex]->load(std::memory_order_relaxed) >= 0.5f;
+
+    if (filterBypassed)
+        return;
+
+    auto placeChoice = filterPlaceParams[filterArrayIndex] != nullptr
+        ? juce::jlimit(0, 7, static_cast<int>(std::lround(filterPlaceParams[filterArrayIndex]->load(std::memory_order_relaxed))))
+        : 0;
+
+    if (isVolumeFilterType(filterType) && isPhasePlaceChoice(placeChoice))
+        placeChoice = 0;
+
+    if (isPhasePlaceChoice(placeChoice) && ! isCutFilterType(filterType))
     {
-        const auto filterArrayIndex = static_cast<size_t>(filterIndex);
-        const auto filterType = getFilterTypeForSection(filterArrayIndex);
-        const auto filterBypassed = filterBypassParams[filterArrayIndex] != nullptr
-            && filterBypassParams[filterArrayIndex]->load(std::memory_order_relaxed) >= 0.5f;
-
-        if (filterBypassed)
-            return;
-
-        auto placeChoice = filterPlaceParams[filterArrayIndex] != nullptr
-            ? juce::jlimit(0, 7, static_cast<int>(std::lround(filterPlaceParams[filterArrayIndex]->load(std::memory_order_relaxed))))
-            : 0;
-
-        if (isVolumeFilterType(filterType) && isPhasePlaceChoice(placeChoice))
-            placeChoice = 0;
-
-        if (isPhasePlaceChoice(placeChoice) && ! isCutFilterType(filterType))
+        if (filterType == FilterType::bell)
         {
-            if (filterType == FilterType::bell)
-            {
-                if (filterSlopeChoiceParams[filterArrayIndex] != nullptr
-                    && filterSlopeChoiceParams[filterArrayIndex]->getIndex() == 0)
-                    return;
-
-                if (! phaseFirFilters[filterArrayIndex].active)
-                    return;
-
-                phaseFirFilters[filterArrayIndex].processWithChannelMask(targetBuffer,
-                                                                       juce::jmin(targetBuffer.getNumChannels(), preparedNumChannels),
-                                                                       placeChoice != 7,
-                                                                       placeChoice != 6);
+            if (filterOrderParams[filterArrayIndex] != nullptr
+                && filterOrderParams[filterArrayIndex]->getIndex() == 0)
                 return;
-            }
 
             if (! phaseFirFilters[filterArrayIndex].active)
                 return;
@@ -275,147 +270,153 @@ void EqlModuleProcessor::processBlock(juce::AudioBuffer<float>& buffer)
                                                                    juce::jmin(targetBuffer.getNumChannels(), preparedNumChannels),
                                                                    placeChoice != 7,
                                                                    placeChoice != 6);
-
             return;
         }
 
-        if (isVolumeFilterType(filterType))
-        {
-            const auto gainDb = effectiveFilterGainDb[filterArrayIndex];
-
-            if (std::abs(gainDb) < 1.0e-6f)
-                return;
-
-            const auto gain = juce::Decibels::decibelsToGain(gainDb);
-            processPlacedSignal(targetBuffer, static_cast<int>(filterArrayIndex), [gain] (juce::AudioBuffer<float>& targetBufferToProcess, int targetChannels)
-            {
-                for (int channel = 0; channel < targetChannels; ++channel)
-                    targetBufferToProcess.applyGain(channel, 0, targetBufferToProcess.getNumSamples(), gain);
-            });
+        if (! phaseFirFilters[filterArrayIndex].active)
             return;
-        }
 
-        const auto slopeDbPerOct = filterSlopeChoiceParams[filterArrayIndex] != nullptr
-            ? static_cast<double>(EqlModuleProcessor::getBellSlopeValueForChoiceIndex(filterSlopeChoiceParams[filterArrayIndex]->getIndex()))
-            : static_cast<double>(EqlModuleProcessor::fixedSlopeDbPerOct);
+        phaseFirFilters[filterArrayIndex].processWithChannelMask(targetBuffer,
+                                                               juce::jmin(targetBuffer.getNumChannels(), preparedNumChannels),
+                                                               placeChoice != 7,
+                                                               placeChoice != 6);
 
-        if (filterType == FilterType::bell)
+        return;
+    }
+
+    if (isVolumeFilterType(filterType))
+    {
+        const auto gainDb = effectiveFilterGainDb[filterArrayIndex];
+
+        if (std::abs(gainDb) < 1.0e-6f)
+            return;
+
+        const auto gain = juce::Decibels::decibelsToGain(gainDb);
+        processPlacedSignal(targetBuffer, static_cast<int>(filterArrayIndex), [gain] (juce::AudioBuffer<float>& targetBufferToProcess, int targetChannels)
         {
-            if (filterSlopeChoiceParams[filterArrayIndex] != nullptr
-                && filterSlopeChoiceParams[filterArrayIndex]->getIndex() == 0)
-                return;
+            for (int channel = 0; channel < targetChannels; ++channel)
+                targetBufferToProcess.applyGain(channel, 0, targetBufferToProcess.getNumSamples(), gain);
+        });
+        return;
+    }
 
-            if (bellOrderFilters[filterArrayIndex].front().sectionCount <= 0)
-                return;
+    const auto slopeDbPerOct = filterOrderParams[filterArrayIndex] != nullptr
+        ? static_cast<double>(EqlModuleProcessor::getSlopeDbPerOctForOrderChoice(filterOrderParams[filterArrayIndex]->getIndex()))
+        : static_cast<double>(EqlModuleProcessor::fixedSlopeDbPerOct);
 
-            const auto bellSlopeBlend = mapBellSlopeToBlend(slopeDbPerOct);
-            const auto lowerOrder = bellSlopeBlend.lowerOrder;
-            const auto upperOrder = bellSlopeBlend.upperOrder;
-            const auto blend = bellSlopeBlend.blend;
-            auto& orderFilters = bellOrderFilters[filterArrayIndex];
+    if (filterType == FilterType::bell)
+    {
+        if (filterOrderParams[filterArrayIndex] != nullptr
+            && filterOrderParams[filterArrayIndex]->getIndex() == 0)
+            return;
 
-            processPlacedSignal(targetBuffer, static_cast<int>(filterArrayIndex), [&] (juce::AudioBuffer<float>& targetBufferToProcess, int targetChannels)
+        if (bellOrderFilters[filterArrayIndex].front().sectionCount <= 0)
+            return;
+
+        const auto bellSlopeBlend = mapBellSlopeToBlend(slopeDbPerOct);
+        const auto lowerOrder = bellSlopeBlend.lowerOrder;
+        const auto upperOrder = bellSlopeBlend.upperOrder;
+        const auto blend = bellSlopeBlend.blend;
+        auto& orderFilters = bellOrderFilters[filterArrayIndex];
+
+        processPlacedSignal(targetBuffer, static_cast<int>(filterArrayIndex), [&] (juce::AudioBuffer<float>& targetBufferToProcess, int targetChannels)
+        {
+            if (lowerOrder == upperOrder || blend < 1.0e-6)
             {
-                if (lowerOrder == upperOrder || blend < 1.0e-6)
-                {
-                    if (lowerOrder > 0)
-                        orderFilters[static_cast<size_t>(lowerOrder - 1)].process(targetBufferToProcess, targetChannels);
-                    return;
-                }
-
                 if (lowerOrder > 0)
-                {
-                    filterProcessBufferA.makeCopyOf(targetBufferToProcess, true);
-                    orderFilters[static_cast<size_t>(lowerOrder - 1)].process(filterProcessBufferA, targetChannels);
-                }
-                else
-                {
-                    filterProcessBufferA.makeCopyOf(targetBufferToProcess, true);
-                }
-
-                filterProcessBufferB.makeCopyOf(targetBufferToProcess, true);
-
-                if (upperOrder > 0)
-                    orderFilters[static_cast<size_t>(upperOrder - 1)].process(filterProcessBufferB, targetChannels);
-
-                for (int channel = 0; channel < targetChannels; ++channel)
-                {
-                    auto* output = targetBufferToProcess.getWritePointer(channel);
-                    const auto* lower = filterProcessBufferA.getReadPointer(channel);
-                    const auto* upper = filterProcessBufferB.getReadPointer(channel);
-
-                    for (int sampleIndex = 0; sampleIndex < targetBufferToProcess.getNumSamples(); ++sampleIndex)
-                        output[sampleIndex] = static_cast<float>(lower[sampleIndex]
-                                                                 + ((upper[sampleIndex] - lower[sampleIndex]) * blend));
-                }
-            });
-            return;
-        }
-
-        if (isTiltFilterType(filterType))
-        {
-            if (tiltFilters[filterArrayIndex].stageCount <= 0)
-                return;
-
-            processPlacedSignal(targetBuffer, static_cast<int>(filterArrayIndex), [&] (juce::AudioBuffer<float>& targetBufferToProcess, int targetChannels)
-            {
-                tiltFilters[filterArrayIndex].process(targetBufferToProcess, targetChannels);
-            });
-            return;
-        }
-
-        if (isShelfFilterType(filterType))
-        {
-            if (shelfOrderFilters[filterArrayIndex].front().stageCount <= 0)
-                return;
-
-            processPlacedSignal(targetBuffer, static_cast<int>(filterArrayIndex), [&] (juce::AudioBuffer<float>& targetBufferToProcess, int targetChannels)
-            {
-                auto& orderFilters = shelfOrderFilters[filterArrayIndex];
-                const auto slopeBlend = mapShelfSlopeToBlend(slopeDbPerOct);
-                const auto lowerOrder = slopeBlend.lowerOrder;
-                const auto upperOrder = slopeBlend.upperOrder;
-                const auto blend = slopeBlend.blend;
-
-                if (lowerOrder == upperOrder || blend < 1.0e-6)
-                {
                     orderFilters[static_cast<size_t>(lowerOrder - 1)].process(targetBufferToProcess, targetChannels);
-                    return;
-                }
+                return;
+            }
 
+            if (lowerOrder > 0)
+            {
                 filterProcessBufferA.makeCopyOf(targetBufferToProcess, true);
-                filterProcessBufferB.makeCopyOf(targetBufferToProcess, true);
                 orderFilters[static_cast<size_t>(lowerOrder - 1)].process(filterProcessBufferA, targetChannels);
+            }
+            else
+            {
+                filterProcessBufferA.makeCopyOf(targetBufferToProcess, true);
+            }
+
+            filterProcessBufferB.makeCopyOf(targetBufferToProcess, true);
+
+            if (upperOrder > 0)
                 orderFilters[static_cast<size_t>(upperOrder - 1)].process(filterProcessBufferB, targetChannels);
 
-                for (int channel = 0; channel < targetChannels; ++channel)
-                {
-                    auto* output = targetBufferToProcess.getWritePointer(channel);
-                    const auto* lower = filterProcessBufferA.getReadPointer(channel);
-                    const auto* upper = filterProcessBufferB.getReadPointer(channel);
-
-                    for (int sampleIndex = 0; sampleIndex < targetBufferToProcess.getNumSamples(); ++sampleIndex)
-                        output[sampleIndex] = static_cast<float>(lower[sampleIndex]
-                                                                 + ((upper[sampleIndex] - lower[sampleIndex]) * blend));
-                }
-            });
-            return;
-        }
-
-        if (isCutFilterType(filterType))
-        {
-            if (cutBlendFilters[filterArrayIndex].stageCount <= 0)
-                return;
-
-            processPlacedSignal(targetBuffer, static_cast<int>(filterArrayIndex), [&] (juce::AudioBuffer<float>& targetBufferToProcess, int targetChannels)
+            for (int channel = 0; channel < targetChannels; ++channel)
             {
-                cutBlendFilters[filterArrayIndex].process(targetBufferToProcess, targetChannels);
-            });
-        }
-    };
+                auto* output = targetBufferToProcess.getWritePointer(channel);
+                const auto* lower = filterProcessBufferA.getReadPointer(channel);
+                const auto* upper = filterProcessBufferB.getReadPointer(channel);
 
-    for (int filterIndex = 0; filterIndex < filterCount; ++filterIndex)
-        processFilterSection(buffer, filterIndex);
+                for (int sampleIndex = 0; sampleIndex < targetBufferToProcess.getNumSamples(); ++sampleIndex)
+                    output[sampleIndex] = static_cast<float>(lower[sampleIndex]
+                                                             + ((upper[sampleIndex] - lower[sampleIndex]) * blend));
+            }
+        });
+        return;
+    }
+
+    if (isTiltFilterType(filterType))
+    {
+        if (tiltFilters[filterArrayIndex].stageCount <= 0)
+            return;
+
+        processPlacedSignal(targetBuffer, static_cast<int>(filterArrayIndex), [&] (juce::AudioBuffer<float>& targetBufferToProcess, int targetChannels)
+        {
+            tiltFilters[filterArrayIndex].process(targetBufferToProcess, targetChannels);
+        });
+        return;
+    }
+
+    if (isShelfFilterType(filterType))
+    {
+        if (shelfOrderFilters[filterArrayIndex].front().stageCount <= 0)
+            return;
+
+        processPlacedSignal(targetBuffer, static_cast<int>(filterArrayIndex), [&] (juce::AudioBuffer<float>& targetBufferToProcess, int targetChannels)
+        {
+            auto& orderFilters = shelfOrderFilters[filterArrayIndex];
+            const auto slopeBlend = mapShelfSlopeToBlend(slopeDbPerOct);
+            const auto lowerOrder = slopeBlend.lowerOrder;
+            const auto upperOrder = slopeBlend.upperOrder;
+            const auto blend = slopeBlend.blend;
+
+            if (lowerOrder == upperOrder || blend < 1.0e-6)
+            {
+                orderFilters[static_cast<size_t>(lowerOrder - 1)].process(targetBufferToProcess, targetChannels);
+                return;
+            }
+
+            filterProcessBufferA.makeCopyOf(targetBufferToProcess, true);
+            filterProcessBufferB.makeCopyOf(targetBufferToProcess, true);
+            orderFilters[static_cast<size_t>(lowerOrder - 1)].process(filterProcessBufferA, targetChannels);
+            orderFilters[static_cast<size_t>(upperOrder - 1)].process(filterProcessBufferB, targetChannels);
+
+            for (int channel = 0; channel < targetChannels; ++channel)
+            {
+                auto* output = targetBufferToProcess.getWritePointer(channel);
+                const auto* lower = filterProcessBufferA.getReadPointer(channel);
+                const auto* upper = filterProcessBufferB.getReadPointer(channel);
+
+                for (int sampleIndex = 0; sampleIndex < targetBufferToProcess.getNumSamples(); ++sampleIndex)
+                    output[sampleIndex] = static_cast<float>(lower[sampleIndex]
+                                                             + ((upper[sampleIndex] - lower[sampleIndex]) * blend));
+            }
+        });
+        return;
+    }
+
+    if (isCutFilterType(filterType))
+    {
+        if (cutBlendFilters[filterArrayIndex].stageCount <= 0)
+            return;
+
+        processPlacedSignal(targetBuffer, static_cast<int>(filterArrayIndex), [&] (juce::AudioBuffer<float>& targetBufferToProcess, int targetChannels)
+        {
+            cutBlendFilters[filterArrayIndex].process(targetBufferToProcess, targetChannels);
+        });
+    }
 }
 
 int EqlModuleProcessor::getLatencySamples() const noexcept
@@ -488,4 +489,36 @@ void EqlModuleProcessor::storeFilterDesignState(const size_t filterIndex,
     cachedState.slope = slope;
     cachedState.gainDb = gainDb;
     cachedState.sampleRate = currentSampleRate;
+}
+
+EqlModuleProcessor::EqlModuleProcessor()
+    : parameters(moduleParameterHost, nullptr, "eql_state", createParameterLayout())
+{
+    for (int filterIndex = 0; filterIndex < maxFilterCount; ++filterIndex)
+    {
+        filterTypeParams[static_cast<size_t>(filterIndex)] = parameters.getRawParameterValue(getFilterTypeParamId(filterIndex));
+        filterPlaceParams[static_cast<size_t>(filterIndex)] = parameters.getRawParameterValue(getFilterPlaceParamId(filterIndex));
+        filterFrequencyParams[static_cast<size_t>(filterIndex)] = parameters.getRawParameterValue(getFilterFrequencyParamId(filterIndex));
+        filterBandwidthParams[static_cast<size_t>(filterIndex)] = parameters.getRawParameterValue(getFilterBandwidthParamId(filterIndex));
+        filterOrderParams[static_cast<size_t>(filterIndex)] = dynamic_cast<juce::AudioParameterChoice*>(parameters.getParameter(getFilterOrderParamId(filterIndex)));
+        filterGainParams[static_cast<size_t>(filterIndex)] = parameters.getRawParameterValue(getFilterGainParamId(filterIndex));
+        filterBypassParams[static_cast<size_t>(filterIndex)] = parameters.getRawParameterValue(getFilterBypassParamId(filterIndex));
+    }
+
+    setParameterListenersEnabled(true);
+}
+
+EqlModuleProcessor::~EqlModuleProcessor()
+{
+    setParameterListenersEnabled(false);
+}
+
+juce::AudioProcessorValueTreeState& EqlModuleProcessor::getValueTreeState() noexcept
+{
+    return parameters;
+}
+
+const juce::AudioProcessorValueTreeState& EqlModuleProcessor::getValueTreeState() const noexcept
+{
+    return parameters;
 }

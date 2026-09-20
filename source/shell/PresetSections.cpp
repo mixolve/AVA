@@ -1,4 +1,5 @@
-#include "EditorPresetSections.h"
+#include "Editor.h"
+#include "PresetSections.h"
 
 namespace
 {
@@ -29,7 +30,7 @@ AvaAudioProcessorEditor::PresetsSection::PresetsSection()
 {
     configurePresetCombo(presetCombo);
 
-    adButton = makeSectionButton("AD", uiAccent);
+    addButton = makeSectionButton("ADD", uiAccent);
     saveButton = makeSectionButton("SV", uiGrey500);
     renameButton = makeSectionButton("RN", uiGrey500);
     defaultButton = makeSectionButton("DF", uiAccent);
@@ -78,10 +79,6 @@ juce::String AvaAudioProcessorEditor::PresetsSection::getSelectedPresetName() co
     return selectedPresetName;
 }
 
-juce::String AvaAudioProcessorEditor::PresetsSection::getEnteredPresetName() const
-{
-    return selectedPresetName;
-}
 
 void AvaAudioProcessorEditor::PresetsSection::setPresetNames(const juce::StringArray& names,
                                                              const juce::String& preferredSelection)
@@ -100,19 +97,22 @@ void AvaAudioProcessorEditor::PresetsSection::setPresetNames(const juce::StringA
         return;
     }
 
-    const auto selectedName = preferredSelection.isNotEmpty() ? preferredSelection
-                                                              : names[0];
     auto selectedIndex = -1;
 
-    for (int index = 0; index < names.size(); ++index)
+    if (preferredSelection.isNotEmpty())
     {
-        if (names[index].equalsIgnoreCase(selectedName))
+        for (int index = 0; index < names.size(); ++index)
         {
-            selectedIndex = index;
-            break;
+            if (names[index].equalsIgnoreCase(preferredSelection))
+            {
+                selectedIndex = index;
+                break;
+            }
         }
     }
 
-    presetCombo.setSelectedItemIndex(selectedIndex >= 0 ? selectedIndex : 0, juce::dontSendNotification);
-    selectedPresetName = names[selectedIndex >= 0 ? selectedIndex : 0];
+    presetCombo.setSelectedItemIndex(selectedIndex, juce::dontSendNotification);
+    selectedPresetName = juce::isPositiveAndBelow(selectedIndex, names.size())
+        ? names[selectedIndex]
+        : juce::String {};
 }

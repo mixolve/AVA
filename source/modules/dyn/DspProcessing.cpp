@@ -11,7 +11,7 @@ double levelToDb(const double level)
 {
     return 20.0 * std::log10(std::max(level, epsilon));
 }
-} // namespace
+}
 
 double DspCore::releaseTowards(ReleaseState& state,
                                const double current,
@@ -273,4 +273,4 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
 
     return output;
 }
-} // namespace dyn::dsp
+}

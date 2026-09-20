@@ -1,7 +1,6 @@
 #include "LocalParameterControl.h"
 #include "ParameterControlSupport.h"
 
-#include <utility>
 
 LocalParameterControl::LocalParameterControl(const juce::String& titleText,
                                              const int editorDecimalsIn,
@@ -29,15 +28,7 @@ LocalParameterControl::LocalParameterControl(const juce::String& titleText,
         if (parameter_control_support::isTitleButtonFocused(titleButton.get(), &slider))
             return;
 
-        if (valueClickAction != nullptr)
-        {
-            shell_parameter_focus::clearFocus(*this);
-            valueClickAction();
-            clearKeyboardFocus(*this);
-            return;
-        }
-
-        if (interactionEnabled && valueClickAction == nullptr)
+        if (interactionEnabled)
             parameter_control_support::focusTitleButton(titleButton.get(), &slider);
         else
             shell_parameter_focus::clearFocus(*this);
@@ -76,11 +67,7 @@ LocalParameterControl::LocalParameterControl(const juce::String& titleText,
     };
     slider.valueFromTextFunction = [this] (const juce::String& text)
     {
-        if (brickwSupported && text.trim().containsIgnoreCase("brick"))
-            return 96.1;
-
-        return supportsNoteText ? parseFrequencyInput(text)
-                                : parseNumericInput(text);
+        return parseText(text);
     };
     slider.onValueChange = [this]
     {
@@ -107,18 +94,14 @@ LocalParameterControl::LocalParameterControl(const juce::String& titleText,
     };
     valueBox->onBeforeShowEditor = [this]
     {
-        if (interactionEnabled && valueClickAction == nullptr)
+        if (interactionEnabled)
             parameter_control_support::focusTitleButton(titleButton.get(), &slider);
         else
             parameter_control_support::clearFocusedTitleButton(titleButton.get(), &slider);
     };
     valueBox->textToValueParser = [this] (const juce::String& text)
     {
-        if (brickwSupported && text.trim().containsIgnoreCase("brick"))
-            return 96.1;
-
-        return supportsNoteText ? parseFrequencyInput(text)
-                                : parseNumericInput(text);
+        return parseText(text);
     };
     valueBox->setOutlineColour(uiGrey500);
     valueBox->setHighlightColour(uiBlack);
@@ -239,7 +222,7 @@ void LocalParameterControl::setInteractionEnabled(const bool shouldEnable)
 {
     interactionEnabled = shouldEnable;
 
-    if (! interactionEnabled || valueClickAction != nullptr)
+    if (! interactionEnabled)
         parameter_control_support::clearFocusedTitleButton(titleButton.get(), &slider);
 
     if (titleButton != nullptr)
@@ -252,26 +235,9 @@ void LocalParameterControl::setInteractionEnabled(const bool shouldEnable)
         valueBox->setInteractionEnabled(shouldEnable);
 }
 
-void LocalParameterControl::setValueClickAction(std::function<void()> action)
-{
-    valueClickAction = std::move(action);
-
-    if (valueBox != nullptr)
-        valueBox->setCustomPromptAction(valueClickAction);
-
-    if (valueClickAction != nullptr)
-        parameter_control_support::clearFocusedTitleButton(titleButton.get(), &slider);
-}
-
 juce::Rectangle<int> LocalParameterControl::getValueBounds() const noexcept
 {
     return valueBox != nullptr ? valueBox->getBounds() : juce::Rectangle<int>();
-}
-
-void LocalParameterControl::setTitleMouseEnabled(const bool shouldEnable)
-{
-    if (titleButton != nullptr)
-        titleButton->setInterceptsMouseClicks(shouldEnable, shouldEnable);
 }
 
 void LocalParameterControl::resized()
@@ -284,6 +250,15 @@ void LocalParameterControl::resized()
 
     if (valueBox != nullptr)
         valueBox->setBounds(row);
+}
+
+double LocalParameterControl::parseText(const juce::String& text) const
+{
+    if (brickwSupported && text.trim().containsIgnoreCase("brick"))
+        return 96.1;
+
+    return supportsNoteText ? parseFrequencyInput(text)
+                            : parseNumericInput(text);
 }
 
 juce::String LocalParameterControl::formatDisplayValue(const double value) const

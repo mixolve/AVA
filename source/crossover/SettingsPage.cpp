@@ -1,5 +1,5 @@
-#include "ModuleComponent.h"
-#include "Pages.h"
+#include "Component.h"
+#include "Page.h"
 #include "UiSupport.h"
 
 #include "../shell/ChoiceControl.h"
@@ -48,7 +48,7 @@ public:
         autoSoloButton->setLongPressPromptActions({}, [this]
         {
             if (owner.config.makeCrossoverParameterId != nullptr)
-                owner.assignButtonToHostSlot(owner.config.makeCrossoverParameterId("autoSolo"),
+                owner.assignButtonToHostSlot(owner.config.makeCrossoverParameterId("auto_solo"),
                                              "AUTO-SOLO",
                                              autoSoloButton.get());
         });
@@ -91,19 +91,19 @@ public:
         };
         addAndMakeVisible(*removeCrossoverButton);
 
-        for (size_t index = 0; index < crossoverControls.size(); ++index)
+        for (size_t index = 0; index < splitControls.size(); ++index)
         {
             auto control = std::make_unique<ParameterControl>(
                 owner.valueTreeState,
-                owner.config.makeCrossoverParameterId(crossoverSuffixes[index]),
-                crossoverLabels[index],
+                owner.config.makeCrossoverParameterId(splitParameterSuffixes[index]),
+                splitLabels[index],
                 owner.config.crossoverDecimals);
             control->onValueChanged = [this, index]
             {
-                owner.constrainCrossoverFrequency(index);
+                owner.constrainSplitFrequency(index);
             };
             addAndMakeVisible(*control);
-            crossoverControls[index] = std::move(control);
+            splitControls[index] = std::move(control);
         }
 
         globalListenHeading = makeTextButton("LISTEN", uiAccent);
@@ -171,7 +171,7 @@ public:
 
         height += rowHeight;
 
-        for (const auto& control : crossoverControls)
+        for (const auto& control : splitControls)
         {
             if (control != nullptr)
                 height += verticalGap + control->getPreferredHeight();
@@ -194,7 +194,7 @@ public:
             return;
 
         const auto activeSplitCount = owner.getActiveSplitCount();
-        const auto canAdd = activeSplitCount < crossoverControls.size();
+        const auto canAdd = activeSplitCount < splitControls.size();
         const auto canRemove = activeSplitCount > 0;
 
         if (addCrossoverButton != nullptr)
@@ -212,9 +212,9 @@ public:
         refreshAutoSoloButtonState();
         refreshSoloModeButtonState();
 
-        for (size_t index = 0; index < crossoverControls.size(); ++index)
+        for (size_t index = 0; index < splitControls.size(); ++index)
         {
-            if (auto* control = crossoverControls[index].get())
+            if (auto* control = splitControls[index].get())
             {
                 const auto enabled = index < activeSplitCount;
                 control->setEnabled(true);
@@ -262,7 +262,7 @@ public:
         placeButton(settingsHeading.get());
         placeButton(addCrossoverButton.get());
 
-        for (auto& control : crossoverControls)
+        for (auto& control : splitControls)
             placeControl(control.get());
 
         placeButton(removeCrossoverButton.get());
@@ -348,7 +348,7 @@ private:
     std::unique_ptr<LocalChoiceControl> soloModeControl;
     std::unique_ptr<BoxTextButton> addCrossoverButton;
     std::unique_ptr<BoxTextButton> removeCrossoverButton;
-    std::array<std::unique_ptr<ParameterControl>, crossoverSlotCount> crossoverControls;
+    std::array<std::unique_ptr<ParameterControl>, splitControlCount> splitControls;
     std::unique_ptr<BoxTextButton> globalListenHeading;
     std::array<std::unique_ptr<BoxTextButton>, globalListenSuffixes.size()> globalListenButtons;
     std::array<std::unique_ptr<ButtonAttachment>, globalListenSuffixes.size()> globalListenAttachments;

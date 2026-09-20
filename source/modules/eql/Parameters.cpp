@@ -1,4 +1,4 @@
-#include "ProcessorSupport.h"
+#include "FilterSupport.h"
 #include "FilterParameters.h"
 
 #include <array>
@@ -22,7 +22,7 @@ inline constexpr auto eqlFilterOrder = std::to_array<ParameterOrderEntry>({
     { "gain", "GAIN" },
     { "bypass", "B" },
 });
-} // namespace
+}
 
 void EqlModuleProcessor::appendEqlParameters(std::vector<std::unique_ptr<juce::RangedAudioParameter>>& parameterLayout)
 {
@@ -58,10 +58,10 @@ void EqlModuleProcessor::appendEqlParameters(std::vector<std::unique_ptr<juce::R
             if (key == "order")
             {
                 parameterLayout.push_back(std::make_unique<juce::AudioParameterChoice>(
-                    juce::ParameterID { getFilterSlopeParamId(filterIndex), 1 },
+                    juce::ParameterID { getFilterOrderParamId(filterIndex), 1 },
                     name,
-                    EqlModuleProcessor::getBellSlopeChoices(),
-                    EqlModuleProcessor::getBellSlopeChoiceIndexForValue(EqlModuleProcessor::fixedSlopeDbPerOct),
+                    EqlModuleProcessor::getFilterOrderChoices(),
+                    EqlModuleProcessor::getOrderChoiceForSlopeDbPerOct(EqlModuleProcessor::fixedSlopeDbPerOct),
                     juce::AudioParameterChoiceAttributes()));
                 continue;
             }
@@ -133,14 +133,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout EqlModuleProcessor::createPa
     return { parameterLayout.begin(), parameterLayout.end() };
 }
 
-void EqlModuleProcessor::parameterChanged(const juce::String& parameterID, float)
+void EqlModuleProcessor::parameterChanged(const juce::String&, float)
 {
-    if (parameterID == activeFilterCountStateKey)
-        return;
-
-    if (suppressEqlFilterDirty.load(std::memory_order_acquire))
-        return;
-
     markEqlFiltersDirty();
 }
 

@@ -13,4 +13,4 @@ struct Settings
     std::array<bool, Splitter::numRanges> soloMask {};
     size_t activeSplitCount = 0;
 };
-} // namespace ava::crossover
+}

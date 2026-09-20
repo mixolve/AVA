@@ -1,4 +1,5 @@
 #include "Editor.h"
+#include "Style.h"
 #include "PromptComponents.h"
 
 #include <utility>

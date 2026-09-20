@@ -5,64 +5,83 @@
 #include <cmath>
 #include <limits>
 
-float FftModuleProcessor::phaseThresholdToCorrelation(const float threshold) noexcept
+float FftModuleProcessor::thresholdToCorrelation(const float threshold,
+                                                       const bool upward,
+                                                       const CorrelationType type) noexcept
 {
-    return juce::jmap(juce::jlimit(0.0f, 100.0f, threshold),
-                      0.0f,
-                      100.0f,
-                      -1.0f,
-                      1.0f);
+    const auto depth = juce::jlimit(0.0f, 100.0f, threshold) * 0.01f;
+
+    if (type == CorrelationType::frequency)
+        return upward ? 1.0f - depth : depth;
+
+    return upward ? 1.0f - (2.0f * depth)
+                  : -1.0f + (2.0f * depth);
 }
 
-FftModuleProcessor::CompressorSettings FftModuleProcessor::getCompressorSettings() const noexcept
+FftModuleProcessor::ProcessingSettings FftModuleProcessor::getProcessingSettings() const noexcept
 {
-    CompressorSettings settings;
+    ProcessingSettings settings;
     settings.fftSize = getSelectedDspFftSize();
     settings.overlapFactor = getSelectedDspOverlapFactor();
     settings.reductionDisplayTimeMs = getSelectedAveragingTimeMs();
-    settings.phaseMode = dynamicModeParam != nullptr
+    settings.correlationMode = dynamicModeParam != nullptr
         && dynamicModeParam->load(std::memory_order_relaxed) >= 0.5f;
+    const auto correlationTypeIndex = correlationTypeParam != nullptr
+        ? juce::roundToInt(correlationTypeParam->load(std::memory_order_relaxed))
+        : 0;
+    settings.correlationType = static_cast<CorrelationType>(juce::jlimit(0, 2, correlationTypeIndex));
+    settings.upward = dynamicDirectionParam != nullptr
+        && dynamicDirectionParam->load(std::memory_order_relaxed) >= 0.5f;
+    settings.detectorLowCutHz = juce::jlimit(analyserMinFrequency, analyserMaxFrequency,
+        detectorLowCutParam != nullptr ? detectorLowCutParam->load(std::memory_order_relaxed) : analyserMinFrequency);
+    settings.detectorHighCutHz = juce::jlimit(analyserMinFrequency, analyserMaxFrequency,
+        detectorHighCutParam != nullptr ? detectorHighCutParam->load(std::memory_order_relaxed) : analyserMaxFrequency);
     const auto floorValue = juce::jlimit(-100.0f,
                                          0.0f,
-                                         floorParam != nullptr ? floorParam->load(std::memory_order_relaxed) : -60.0f);
+                                         floorParam != nullptr ? floorParam->load(std::memory_order_relaxed) : -100.0f);
     settings.floorDb = floorValue <= -100.0f
         ? -std::numeric_limits<float>::infinity()
         : floorValue;
     settings.leftThresholdDb = juce::jlimit(-99.0f, 12.0f, dualMonoLeftThresholdParam != nullptr ? dualMonoLeftThresholdParam->load(std::memory_order_relaxed) : 0.0f);
     settings.rightThresholdDb = juce::jlimit(-99.0f, 12.0f, dualMonoRightThresholdParam != nullptr ? dualMonoRightThresholdParam->load(std::memory_order_relaxed) : 0.0f);
-    const auto phaseThreshold = juce::jlimit(0.0f,
+    const auto correlationThreshold = juce::jlimit(0.0f,
                                              100.0f,
-                                             phaseThresholdParam != nullptr
-                                                 ? phaseThresholdParam->load(std::memory_order_relaxed)
+                                             correlationThresholdParam != nullptr
+                                                 ? correlationThresholdParam->load(std::memory_order_relaxed)
                                                  : 0.0f);
-    const auto phaseAdaptive = juce::jlimit(0.0f,
+    const auto correlationAdaptive = juce::jlimit(0.0f,
                                             100.0f,
-                                            phaseAdaptiveParam != nullptr
-                                                ? phaseAdaptiveParam->load(std::memory_order_relaxed)
+                                            correlationAdaptiveParam != nullptr
+                                                ? correlationAdaptiveParam->load(std::memory_order_relaxed)
                                                 : 0.0f);
-    const auto phaseSlopePerOctave = (juce::jlimit(-9.0f,
+    const auto correlationSlopePerOctave = (juce::jlimit(-9.0f,
                                                     9.0f,
-                                                    phaseSlopeParam != nullptr
-                                                        ? phaseSlopeParam->load(std::memory_order_relaxed)
+                                                    correlationSlopeParam != nullptr
+                                                        ? correlationSlopeParam->load(std::memory_order_relaxed)
                                                         : 0.0f)
                                       / 9.0f)
         / std::log2(analyserMaxFrequency / analyserMinFrequency);
-    settings.phaseThreshold = phaseThreshold;
-    settings.phaseAdaptiveAmount = phaseAdaptive;
-    settings.phaseSlopePerOctave = phaseSlopePerOctave;
-    settings.phaseImpact = juce::jlimit(-100.0f,
+    settings.correlationThreshold = correlationThreshold;
+    settings.correlationSmoothing = juce::jlimit(0.0f,
+                                                 100.0f,
+                                                 correlationSmoothingParam != nullptr
+                                                     ? correlationSmoothingParam->load(std::memory_order_relaxed)
+                                                     : 30.0f);
+    settings.correlationAdaptiveAmount = correlationAdaptive;
+    settings.correlationSlopePerOctave = correlationSlopePerOctave;
+    settings.correlationImpact = juce::jlimit(-100.0f,
                                         100.0f,
-                                        phaseImpactParam != nullptr
-                                            ? phaseImpactParam->load(std::memory_order_relaxed)
+                                        correlationImpactParam != nullptr
+                                            ? correlationImpactParam->load(std::memory_order_relaxed)
                                             : 0.0f);
     settings.leftAdaptiveAmount = juce::jlimit(0.0f, 100.0f, dualMonoLeftAdaptiveParam != nullptr ? dualMonoLeftAdaptiveParam->load(std::memory_order_relaxed) : 0.0f);
     settings.rightAdaptiveAmount = juce::jlimit(0.0f, 100.0f, dualMonoRightAdaptiveParam != nullptr ? dualMonoRightAdaptiveParam->load(std::memory_order_relaxed) : 0.0f);
-    const auto* adaptiveOffsetParam = settings.phaseMode ? phaseAdaptiveOffsetParam : spectralAdaptiveOffsetParam;
-    const auto* adaptiveAttackParam = settings.phaseMode ? phaseAdaptiveAttackParam : spectralAdaptiveAttackParam;
-    const auto* adaptiveHoldParam = settings.phaseMode ? phaseAdaptiveHoldParam : spectralAdaptiveHoldParam;
-    const auto* adaptiveReleaseParam = settings.phaseMode ? phaseAdaptiveReleaseParam : spectralAdaptiveReleaseParam;
-    settings.adaptiveOffset = juce::jlimit(settings.phaseMode ? -1.0f : 0.0f,
-                                           settings.phaseMode ? 1.0f : 48.0f,
+    const auto* adaptiveOffsetParam = settings.correlationMode ? correlationAdaptiveOffsetParam : spectralAdaptiveOffsetParam;
+    const auto* adaptiveAttackParam = settings.correlationMode ? correlationAdaptiveAttackParam : spectralAdaptiveAttackParam;
+    const auto* adaptiveHoldParam = settings.correlationMode ? correlationAdaptiveHoldParam : spectralAdaptiveHoldParam;
+    const auto* adaptiveReleaseParam = settings.correlationMode ? correlationAdaptiveReleaseParam : spectralAdaptiveReleaseParam;
+    settings.adaptiveOffset = juce::jlimit(settings.correlationMode ? -1.0f : 0.0f,
+                                           settings.correlationMode ? 1.0f : 48.0f,
                                            adaptiveOffsetParam != nullptr
                                                ? adaptiveOffsetParam->load(std::memory_order_relaxed)
                                                : 0.0f);
@@ -103,7 +122,7 @@ int FftModuleProcessor::getSelectedDspFftSize() const noexcept
     const auto choiceIndex = dspFftSizeParam != nullptr
                            ? juce::jlimit(0, static_cast<int>(fftSizes.size()) - 1,
                                           juce::roundToInt(dspFftSizeParam->load(std::memory_order_relaxed)))
-                           : 3;
+                           : 2;
     return fftSizes[static_cast<size_t>(choiceIndex)];
 }
 

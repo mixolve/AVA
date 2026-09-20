@@ -1,8 +1,9 @@
 #pragma once
 
 #include "Splitter.h"
-#include "../shell/EditorControls.h"
-#include "../shell/UiStyle.h"
+#include "UiState.h"
+#include "../shell/Controls.h"
+#include "../shell/Style.h"
 
 #include <array>
 #include <atomic>
@@ -11,25 +12,25 @@
 
 namespace crossover_ui
 {
-inline constexpr size_t crossoverSlotCount = ava::crossover::Splitter::numSplits;
+inline constexpr size_t splitControlCount = ava::crossover::Splitter::numSplits;
 
-inline constexpr std::array<const char*, crossoverSlotCount> crossoverSuffixes {
-    "xover1", "xover2", "xover3", "xover4", "xover5"
+inline constexpr std::array<const char*, splitControlCount> splitParameterSuffixes {
+    "split_1_frequency", "split_2_frequency", "split_3_frequency", "split_4_frequency", "split_5_frequency"
 };
 
-inline constexpr std::array<const char*, crossoverSlotCount> crossoverLabels {
-    "XOVER-1", "XOVER-2", "XOVER-3", "XOVER-4", "XOVER-5"
+inline constexpr std::array<const char*, splitControlCount> splitLabels {
+    "SPLIT-1", "SPLIT-2", "SPLIT-3", "SPLIT-4", "SPLIT-5"
 };
 
 inline constexpr std::array<const char*, 7> globalListenSuffixes {
-    "listenLc", "listenRc", "listenMc", "listenSc", "listenLl", "listenRr", "listenSs"
+    "listen_lc", "listen_rc", "listen_mc", "listen_sc", "listen_ll", "listen_rr", "listen_ss"
 };
 
 inline constexpr std::array<const char*, 7> globalListenLabels {
     "LC", "RC", "MC", "SC", "LL", "RR", "SS"
 };
 
-inline constexpr float minCrossoverFrequencyGapHz = 1.0f;
+inline constexpr float minSplitFrequencyGapHz = 1.0f;
 
 inline std::unique_ptr<BoxTextButton> makeTextButton(const juce::String& text,
                                                      const juce::Colour accent = uiAccent)
@@ -44,16 +45,6 @@ inline std::unique_ptr<BoxTextButton> makeTextButton(const juce::String& text,
 inline std::unique_ptr<BoxTextButton> makeTimeModeButton()
 {
     return makeTextButton("M", uiGrey500);
-}
-
-inline juce::String makeStatePropertyName(const juce::String& moduleKey, const juce::String& property)
-{
-    return "ava.crossover." + moduleKey + "." + property;
-}
-
-inline juce::Identifier makeStatePropertyId(const juce::String& moduleKey, const juce::String& property)
-{
-    return juce::Identifier { makeStatePropertyName(moduleKey, property) };
 }
 
 inline bool getBool(const juce::ValueTree& state,
@@ -140,4 +131,4 @@ inline juce::String getOrthogonalPositionDescription(const float degreeValue, co
     return flipRight ? flipLabels[static_cast<size_t>(nearestKey)]
                      : rotationLabels[static_cast<size_t>(nearestKey)];
 }
-} // namespace crossover_ui
+}

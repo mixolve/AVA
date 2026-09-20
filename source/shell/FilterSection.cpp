@@ -1,5 +1,7 @@
-#include "EditorFilterSection.h"
-#include "../modules/eql/ProcessorSupport.h"
+#include "Editor.h"
+#include "FilterSection.h"
+#include "../modules/eql/FilterSupport.h"
+#include "../modules/eql/Processor.h"
 
 AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueTreeState& state, const int filterIndexIn)
     : header(std::make_unique<BoxTextButton>(uiAccent)),
@@ -11,8 +13,8 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
                                                   EqlModuleProcessor::getFilterPlaceParamId(filterIndexIn),
                                                   "PLACE",
                                                   std::vector<int> { 0, 1, 2, 3, 4, 5, 6, 7 })),
-      slopeControl(std::make_unique<ChoiceControl>(state,
-                                                   EqlModuleProcessor::getFilterSlopeParamId(filterIndexIn),
+      orderControl(std::make_unique<ChoiceControl>(state,
+                                                   EqlModuleProcessor::getFilterOrderParamId(filterIndexIn),
                                                    "ORDER",
                                                    std::vector<int> { 0, 1, 2, 3, 4, 5 })),
       frequencyControl(std::make_unique<ParameterControl>(state,
@@ -36,8 +38,8 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
     if (auto* parameter = state.getParameter(EqlModuleProcessor::getFilterPlaceParamId(filterIndexIn)))
         placeParameter = dynamic_cast<juce::AudioParameterChoice*>(parameter);
 
-    if (auto* parameter = state.getParameter(EqlModuleProcessor::getFilterSlopeParamId(filterIndexIn)))
-        slopeParameter = dynamic_cast<juce::AudioParameterChoice*>(parameter);
+    if (auto* parameter = state.getParameter(EqlModuleProcessor::getFilterOrderParamId(filterIndexIn)))
+        orderParameter = dynamic_cast<juce::AudioParameterChoice*>(parameter);
 
     if (auto* parameter = state.getParameter(EqlModuleProcessor::getFilterFrequencyParamId(filterIndexIn)))
         frequencyParameter = dynamic_cast<juce::AudioParameterFloat*>(parameter);
@@ -63,24 +65,7 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
         state,
         EqlModuleProcessor::getFilterBypassParamId(filterIndexIn),
         *bypassButton);
-    bypassButton->setLongPressPromptActions({}, [this]
-    {
-        auto* editor = bypassButton != nullptr
-            ? bypassButton->findParentComponentOfClass<AvaAudioProcessorEditor>()
-            : nullptr;
-
-        if (editor == nullptr)
-            return;
-
-        const auto parameterId = EqlModuleProcessor::getFilterBypassParamId(filterIndex);
-
-        if (auto* parameter = editor->findHostAssignableParameter(parameterId))
-            editor->handleHostSlotAssignRequest(parameterId, "B", parameter->getValue());
-    });
-    lastFilterType = getFilterType();
-    slopeControl->setChoices(getBellSlopeDisplayChoicesForType(lastFilterType));
-    slopeControl->setChoiceEnabled(0, lastFilterType != FilterType::bell);
-    updatePlaceChoicesForType(true);
+    refreshTypeDependentControls();
 }
 
 void AvaAudioProcessorEditor::FilterSection::detach() noexcept
@@ -91,8 +76,8 @@ void AvaAudioProcessorEditor::FilterSection::detach() noexcept
     if (placeControl != nullptr)
         placeControl->detach();
 
-    if (slopeControl != nullptr)
-        slopeControl->detach();
+    if (orderControl != nullptr)
+        orderControl->detach();
 
     if (frequencyControl != nullptr)
         frequencyControl->detach();
@@ -106,7 +91,7 @@ void AvaAudioProcessorEditor::FilterSection::detach() noexcept
     bypassAttachment.reset();
     typeParameter = nullptr;
     placeParameter = nullptr;
-    slopeParameter = nullptr;
+    orderParameter = nullptr;
     frequencyParameter = nullptr;
     bandwidthParameter = nullptr;
     gainParameter = nullptr;
@@ -116,14 +101,14 @@ void AvaAudioProcessorEditor::FilterSection::rebind(juce::AudioProcessorValueTre
 {
     typeControl->rebind(state);
     placeControl->rebind(state);
-    slopeControl->rebind(state);
+    orderControl->rebind(state);
     frequencyControl->rebind(state);
     bandwidthControl->rebind(state);
     gainControl->rebind(state);
 
     typeParameter = dynamic_cast<juce::AudioParameterChoice*>(state.getParameter(EqlModuleProcessor::getFilterTypeParamId(filterIndex)));
     placeParameter = dynamic_cast<juce::AudioParameterChoice*>(state.getParameter(EqlModuleProcessor::getFilterPlaceParamId(filterIndex)));
-    slopeParameter = dynamic_cast<juce::AudioParameterChoice*>(state.getParameter(EqlModuleProcessor::getFilterSlopeParamId(filterIndex)));
+    orderParameter = dynamic_cast<juce::AudioParameterChoice*>(state.getParameter(EqlModuleProcessor::getFilterOrderParamId(filterIndex)));
     frequencyParameter = dynamic_cast<juce::AudioParameterFloat*>(state.getParameter(EqlModuleProcessor::getFilterFrequencyParamId(filterIndex)));
     bandwidthParameter = dynamic_cast<juce::AudioParameterFloat*>(state.getParameter(EqlModuleProcessor::getFilterBandwidthParamId(filterIndex)));
     gainParameter = dynamic_cast<juce::AudioParameterFloat*>(state.getParameter(EqlModuleProcessor::getFilterGainParamId(filterIndex)));
@@ -133,10 +118,7 @@ void AvaAudioProcessorEditor::FilterSection::rebind(juce::AudioProcessorValueTre
         EqlModuleProcessor::getFilterBypassParamId(filterIndex),
         *bypassButton);
 
-    lastFilterType = getFilterType();
-    slopeControl->setChoices(getBellSlopeDisplayChoicesForType(lastFilterType));
-    slopeControl->setChoiceEnabled(0, lastFilterType != FilterType::bell);
-    updatePlaceChoicesForType(true);
+    refreshTypeDependentControls();
 }
 
 AvaAudioProcessorEditor::FilterSection::FilterType AvaAudioProcessorEditor::FilterSection::getFilterType() const noexcept
@@ -159,17 +141,17 @@ double AvaAudioProcessorEditor::FilterSection::getFrequency() const noexcept
                                          : 0.0;
 }
 
-bool AvaAudioProcessorEditor::FilterSection::isBandwidthInactiveAtCurrentSlope() const noexcept
+bool AvaAudioProcessorEditor::FilterSection::isBandwidthInactiveAtCurrentOrder() const noexcept
 {
     const auto filterType = getFilterType();
     if (filterType == FilterType::volume)
         return true;
 
     if (filterType == FilterType::bell)
-        return slopeParameter != nullptr && slopeParameter->getIndex() == 0;
+        return orderParameter != nullptr && orderParameter->getIndex() == 0;
 
-    const auto slope = slopeParameter != nullptr
-        ? EqlModuleProcessor::getBellSlopeValueForChoiceIndex(slopeParameter->getIndex())
+    const auto slope = orderParameter != nullptr
+        ? EqlModuleProcessor::getSlopeDbPerOctForOrderChoice(orderParameter->getIndex())
         : EqlModuleProcessor::fixedSlopeDbPerOct;
 
     if (filterType == FilterType::tilt)
@@ -179,7 +161,7 @@ bool AvaAudioProcessorEditor::FilterSection::isBandwidthInactiveAtCurrentSlope()
         && (slope <= 6.05f || slope > 96.0f);
 }
 
-bool AvaAudioProcessorEditor::FilterSection::isSlopeInactive() const noexcept
+bool AvaAudioProcessorEditor::FilterSection::isOrderInactive() const noexcept
 {
     const auto filterType = getFilterType();
     return filterType == FilterType::tilt
@@ -270,57 +252,10 @@ void AvaAudioProcessorEditor::FilterSection::updatePlaceChoicesForType(const boo
         placeControl->setSelectedChoiceIndex(0, true);
 }
 
-void AvaAudioProcessorEditor::FilterSection::setStoredValues(const FilterType type,
-                                                           const double frequency,
-                                                           const double bandwidth,
-                                                           const double slope,
-                                                           const int place,
-                                                           const bool isCustom) noexcept
+void AvaAudioProcessorEditor::FilterSection::refreshTypeDependentControls(const bool normalizePlaceSelection)
 {
-    const auto index = static_cast<size_t>(EqlModuleProcessor::choiceIndexFromFilterType(type));
-    storedFrequencies[index] = frequency;
-    storedBandwidths[index] = bandwidth;
-    storedSlopes[index] = slope;
-    const auto phasePlaceAllowed = ! isCutFilterType(type) && ! isVolumeFilterType(type);
-    storedPlace[index] = ! phasePlaceAllowed && isPhasePlaceChoice(place) ? 0 : place;
-    storedValuesCustom[index] = isCustom;
-}
-
-int AvaAudioProcessorEditor::FilterSection::getStoredPlace(const FilterType type) const noexcept
-{
-    return storedPlace[static_cast<size_t>(EqlModuleProcessor::choiceIndexFromFilterType(type))];
-}
-
-void AvaAudioProcessorEditor::FilterSection::captureCurrentValuesForType(const FilterType type,
-                                                                        const bool markCustom) noexcept
-{
-    if (suppressStoredValueCapture)
-        return;
-
-    if (frequencyParameter == nullptr || bandwidthParameter == nullptr || slopeParameter == nullptr)
-        return;
-
-    setStoredValues(type,
-                    frequencyParameter->get(),
-                    bandwidthParameter->get(),
-                    EqlModuleProcessor::getBellSlopeValueForChoiceIndex(slopeParameter->getIndex()),
-                    placeParameter != nullptr ? placeParameter->getIndex() : getStoredPlace(type),
-                    markCustom);
-}
-
-void AvaAudioProcessorEditor::FilterSection::captureCurrentValuesForCurrentType(const bool markCustom) noexcept
-{
-    captureCurrentValuesForType(getFilterType(), markCustom);
-    lastFilterType = getFilterType();
-}
-
-void AvaAudioProcessorEditor::FilterSection::copyStoredValuesFrom(const FilterSection& other) noexcept
-{
-    storedFrequencies = other.storedFrequencies;
-    storedBandwidths = other.storedBandwidths;
-    storedSlopes = other.storedSlopes;
-    storedPlace = other.storedPlace;
-    storedValuesCustom = other.storedValuesCustom;
-    lastFilterType = other.lastFilterType;
-    expanded = other.expanded;
+    const auto filterType = getFilterType();
+    orderControl->setChoices(getOrderDisplayChoicesForType(filterType));
+    orderControl->setChoiceEnabled(0, filterType != FilterType::bell);
+    updatePlaceChoicesForType(normalizePlaceSelection);
 }

@@ -4,7 +4,6 @@
 #include "DspCore.h"
 
 #include <array>
-#include <algorithm>
 #include <cmath>
 #include <memory>
 
@@ -18,55 +17,57 @@ namespace
 {
 struct ParameterOrderEntry
 {
-    const char* key;
+    ParameterSlot slot;
     const char* label;
 };
 
-inline constexpr auto dynCrossoverOrder = std::to_array<ParameterOrderEntry>({
-    { "morph", "MORPH" },
-    { "ratio", "RATIO" },
-    { "knee", "KNEE" },
-    { "peak_hold", "PEAK-HOLD" },
-    { "lookahead", "LOOKAHEAD" },
-    { "tension_floor", "TEN-FLOOR" },
-    { "tension_hysteresis", "TEN-HYST" },
-    { "release_form", "REL-FORM" },
-    { "release_curve", "REL-CURVE" },
-    { "adaptive_offset", "ADAP SETTINGS / OFFSET" },
-    { "adaptive_attack", "ADAP SETTINGS / ATTACK" },
-    { "adaptive_hold", "ADAP SETTINGS / HOLD" },
-    { "adaptive_release", "ADAP SETTINGS / RELEASE" },
-    { "linkUpDown", "LINKING / UPDN (DUAL-MONO)" },
-    { "linkLeftRight", "LINKING / LR (STEREO)" },
-    { "linkOpposite", "LINKING / OPP" },
-    { "leftUpThreshold", "L.UP.THR" },
-    { "leftUpAdaptive", "L.UP.ADAP" },
-    { "leftUpTension", "L.UP.TENS" },
-    { "leftUpRelease", "L.UP.REL" },
-    { "leftUpOutput", "L.UP.OUT" },
-    { "leftDownThreshold", "L.DN.THR" },
-    { "leftDownAdaptive", "L.DN.ADAP" },
-    { "leftDownTension", "L.DN.TENS" },
-    { "leftDownRelease", "L.DN.REL" },
-    { "leftDownOutput", "L.DN.OUT" },
-    { "rightUpThreshold", "R.UP.THR" },
-    { "rightUpAdaptive", "R.UP.ADAP" },
-    { "rightUpTension", "R.UP.TENS" },
-    { "rightUpRelease", "R.UP.REL" },
-    { "rightUpOutput", "R.UP.OUT" },
-    { "rightDownThreshold", "R.DN.THR" },
-    { "rightDownAdaptive", "R.DN.ADAP" },
-    { "rightDownTension", "R.DN.TENS" },
-    { "rightDownRelease", "R.DN.REL" },
-    { "rightDownOutput", "R.DN.OUT" },
-    { "delta", "DELTA" },
+inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
+    { ParameterSlot::morph, "MORPH" },
+    { ParameterSlot::ratio, "RATIO" },
+    { ParameterSlot::knee, "KNEE" },
+    { ParameterSlot::peakHoldMs, "PEAK-HOLD" },
+    { ParameterSlot::lookahead, "LOOKAHEAD" },
+    { ParameterSlot::tensionFloor, "TEN-FLOOR" },
+    { ParameterSlot::tensionHysteresis, "TEN-HYST" },
+    { ParameterSlot::releaseForm, "REL-FORM" },
+    { ParameterSlot::releaseCurve, "REL-CURVE" },
+    { ParameterSlot::adaptiveOffset, "ADAPTIVE SETTINGS / OFFSET" },
+    { ParameterSlot::adaptiveAttack, "ADAPTIVE SETTINGS / ATTACK" },
+    { ParameterSlot::adaptiveHold, "ADAPTIVE SETTINGS / HOLD" },
+    { ParameterSlot::adaptiveRelease, "ADAPTIVE SETTINGS / RELEASE" },
+    { ParameterSlot::linkUpDown, "LINKING / UPDN (DUAL-MONO)" },
+    { ParameterSlot::linkLeftRight, "LINKING / LR (STEREO)" },
+    { ParameterSlot::linkOpposite, "LINKING / OPP" },
+    { ParameterSlot::leftUpThreshold, "L.UP.THR" },
+    { ParameterSlot::leftUpAdaptive, "L.UP.ADAPTIVE" },
+    { ParameterSlot::leftUpTension, "L.UP.TENS" },
+    { ParameterSlot::leftUpRelease, "L.UP.REL" },
+    { ParameterSlot::leftUpOutput, "L.UP.OUT" },
+    { ParameterSlot::leftDownThreshold, "L.DN.THR" },
+    { ParameterSlot::leftDownAdaptive, "L.DN.ADAPTIVE" },
+    { ParameterSlot::leftDownTension, "L.DN.TENS" },
+    { ParameterSlot::leftDownRelease, "L.DN.REL" },
+    { ParameterSlot::leftDownOutput, "L.DN.OUT" },
+    { ParameterSlot::rightUpThreshold, "R.UP.THR" },
+    { ParameterSlot::rightUpAdaptive, "R.UP.ADAPTIVE" },
+    { ParameterSlot::rightUpTension, "R.UP.TENS" },
+    { ParameterSlot::rightUpRelease, "R.UP.REL" },
+    { ParameterSlot::rightUpOutput, "R.UP.OUT" },
+    { ParameterSlot::rightDownThreshold, "R.DN.THR" },
+    { ParameterSlot::rightDownAdaptive, "R.DN.ADAPTIVE" },
+    { ParameterSlot::rightDownTension, "R.DN.TENS" },
+    { ParameterSlot::rightDownRelease, "R.DN.REL" },
+    { ParameterSlot::rightDownOutput, "R.DN.OUT" },
+    { ParameterSlot::delta, "DELTA" },
 });
+
+static_assert(parameterOrder.size() == numParameterSlots);
 
 constexpr size_t numRanges = dyn::dsp::ProcessorBank::numRanges;
 
-juce::String makeCrossoverHostName(const size_t rangeIndex, const juce::String& moduleName, const juce::String& parameterName)
+juce::String makeRangeHostName(const size_t rangeIndex, const juce::String& parameterName)
 {
-    return moduleName + " / CROSSOVER " + juce::String(static_cast<int>(rangeIndex + 1))
+    return "DYN / RANGE " + juce::String(static_cast<int>(rangeIndex + 1))
         + " / DYNAMIC PROCESSOR / " + parameterName;
 }
 
@@ -85,7 +86,7 @@ juce::String formatParameterValue(const float value)
     return juce::String::formatted("%.2f", roundToDisplayStep(value));
 }
 
-} // namespace
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 {
@@ -156,36 +157,29 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                                                                           makeRangeGroupName(rangeIndex),
                                                                           " | ");
 
-        for (const auto& entry : dynCrossoverOrder)
+        for (const auto& entry : parameterOrder)
         {
-            const auto it = std::find_if(parameterSpecs.begin(), parameterSpecs.end(), [&entry] (const auto& spec)
-            {
-                return juce::String(spec.suffix) == entry.key;
-            });
+            const auto& spec = parameterSpecs[toIndex(entry.slot)];
+            const auto parameterId = makeRangeParameterId(rangeIndex, spec.suffix);
+            const auto parameterName = makeRangeHostName(rangeIndex, entry.label);
 
-            if (it == parameterSpecs.end())
-                continue;
-
-            const auto parameterId = makeRangeParameterId(rangeIndex, it->suffix);
-            const auto parameterName = makeCrossoverHostName(rangeIndex, "DYN", entry.label);
-
-            if (it->type == ParameterType::boolean)
-                group->addChild(boolParam(parameterId, parameterName, it->defaultValue >= 0.5f, false));
-            else if (it->type == ParameterType::choice)
+            if (spec.type == ParameterType::boolean)
+                group->addChild(boolParam(parameterId, parameterName, spec.defaultValue >= 0.5f, false));
+            else if (spec.type == ParameterType::choice)
                 group->addChild(choiceParam(parameterId,
                                             parameterName,
-                                            juce::roundToInt(it->defaultValue),
+                                            juce::roundToInt(spec.defaultValue),
                                             false));
             else
                 group->addChild(floatParam(parameterId,
                                            parameterName,
-                                           it->min,
-                                           it->max,
-                                           it->step,
-                                           it->defaultValue,
-                                           it->label,
+                                           spec.min,
+                                           spec.max,
+                                           spec.step,
+                                           spec.defaultValue,
+                                           spec.label,
                                            false,
-                                           juce::String(it->suffix) == "ratio"));
+                                           entry.slot == ParameterSlot::ratio));
         }
 
         layout.add(std::move(group));
@@ -193,4 +187,4 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 
     return layout;
 }
-} // namespace dyn::parameters
+}

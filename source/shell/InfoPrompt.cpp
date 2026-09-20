@@ -1,4 +1,6 @@
 #include "PromptComponents.h"
+#include "Controls.h"
+#include "Editor.h"
 #include "MarkdownContent.h"
 
 #include <utility>
@@ -23,7 +25,7 @@ public:
 
         markdownViewport.setViewedComponent(&markdownContent, false);
         markdownViewport.setScrollBarsShown(false, false);
-        markdownViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::all);
+        markdownViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
         markdownViewport.setWantsKeyboardFocus(false);
         markdownViewport.setMouseClickGrabsKeyboardFocus(false);
         addAndMakeVisible(markdownViewport);
@@ -172,7 +174,7 @@ private:
     CloseCallback onClose;
     bool closePending = false;
 };
-} // namespace
+}
 
 std::unique_ptr<PromptComponent> makeInfoPrompt(juce::String markdownText,
                                                 std::function<void()> onClose)

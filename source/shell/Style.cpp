@@ -1,4 +1,4 @@
-#include "UiStyle.h"
+#include "Style.h"
 #include "Editor.h"
 
 #include <cmath>
@@ -6,32 +6,37 @@
 
 int getEditorInsetX(const int width)
 {
-#if JUCE_IOS
-    return juce::roundToInt(static_cast<float>(juce::jmax(0, width)) * editorInsetSideRatio);
-#else
     juce::ignoreUnused(width);
     return uiGap;
-#endif
 }
 
 int getEditorInsetTop(const int height)
 {
-#if JUCE_IOS
-    return juce::roundToInt(static_cast<float>(juce::jmax(0, height)) * editorInsetTopRatio);
-#else
     juce::ignoreUnused(height);
     return uiGap;
-#endif
 }
 
 int getEditorInsetBottom(const int height)
 {
-#if JUCE_IOS
-    return juce::roundToInt(static_cast<float>(juce::jmax(0, height)) * editorInsetBottomRatio);
-#else
     juce::ignoreUnused(height);
     return uiGap;
-#endif
+}
+
+bool isMouseHovering(const juce::Component& component) noexcept
+{
+    const auto& desktop = juce::Desktop::getInstance();
+
+    if (desktop.getNumDraggingMouseSources() > 0)
+        return false;
+
+    for (const auto& source : desktop.getMouseSources())
+    {
+        const auto* target = source.getComponentUnderMouse();
+        if (source.isMouse() && (target == &component || (target != nullptr && component.isParentOf(target))))
+            return true;
+    }
+
+    return false;
 }
 
 juce::Typeface::Ptr getUiRegularTypeface()
@@ -133,7 +138,7 @@ bool tryParseNoteFrequency(const juce::String& text, double& frequency)
     if (trimmed.isEmpty())
         return false;
 
-    const auto firstChar = static_cast<juce_wchar>(juce::CharacterFunctions::toLowerCase(trimmed[0]));
+    const auto firstChar = static_cast<juce::juce_wchar>(juce::CharacterFunctions::toLowerCase(trimmed[0]));
 
     int semitone = 0;
 

@@ -1,6 +1,8 @@
-#include "EditorControls.h"
-#include "EditorFilterSection.h"
-#include "EditorPresetSections.h"
+#include "Editor.h"
+#include "Controls.h"
+#include "FilterSection.h"
+#include "PresetSections.h"
+#include "FilterOrderState.h"
 #include "../modules/dyn/Processor.h"
 #include "../modules/eql/Processor.h"
 #include "../modules/fft/Processor.h"
@@ -32,19 +34,16 @@ void AvaAudioProcessorEditor::showModulePicker()
                      juce::Justification::centred,
                        [safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)] (const int selectedIndex)
                        {
-                           if (safeEditor == nullptr)
-                               return;
+                           static constexpr std::array moduleOrder {
+                               AvaAudioProcessor::ActiveModule::tls,
+                               AvaAudioProcessor::ActiveModule::eql,
+                               AvaAudioProcessor::ActiveModule::fft,
+                               AvaAudioProcessor::ActiveModule::dyn,
+                               AvaAudioProcessor::ActiveModule::trs
+                           };
 
-                           if (selectedIndex == 0)
-                               safeEditor->loadTlsModule();
-                           else if (selectedIndex == 1)
-                               safeEditor->loadEqlModule();
-                           else if (selectedIndex == 2)
-                               safeEditor->loadFftModule();
-                           else if (selectedIndex == 3)
-                               safeEditor->loadDynModule();
-                           else if (selectedIndex == 4)
-                               safeEditor->loadTrsModule();
+                           if (safeEditor != nullptr && juce::isPositiveAndBelow(selectedIndex, static_cast<int>(moduleOrder.size())))
+                               safeEditor->loadModule(moduleOrder[static_cast<size_t>(selectedIndex)]);
                        },
                      {},
                      {});
@@ -125,7 +124,7 @@ void AvaAudioProcessorEditor::closeActiveModule()
     if (presetsSection != nullptr)
     {
         hideComponent(&presetsSection->presetCombo);
-        hideComponent(presetsSection->adButton.get());
+        hideComponent(presetsSection->addButton.get());
         hideComponent(presetsSection->saveButton.get());
         hideComponent(presetsSection->renameButton.get());
         hideComponent(presetsSection->defaultButton.get());
@@ -141,7 +140,7 @@ void AvaAudioProcessorEditor::closeActiveModule()
         hideComponent(section->header.get());
         hideComponent(section->typeControl.get());
         hideComponent(section->placeControl.get());
-        hideComponent(section->slopeControl.get());
+        hideComponent(section->orderControl.get());
         hideComponent(section->frequencyControl.get());
         hideComponent(section->bandwidthControl.get());
         hideComponent(section->gainControl.get());
@@ -157,71 +156,22 @@ void AvaAudioProcessorEditor::closeActiveModule()
     scheduleHistorySnapshot();
 }
 
-void AvaAudioProcessorEditor::loadEqlModule()
+void AvaAudioProcessorEditor::loadModule(const AvaAudioProcessor::ActiveModule module)
 {
-    if (! audioProcessor.loadModule(AvaAudioProcessor::ActiveModule::eql))
+    if (module == AvaAudioProcessor::ActiveModule::none || ! audioProcessor.loadModule(module))
         return;
 
-    setLoadedModuleFlags(AvaAudioProcessor::ActiveModule::eql);
-
+    setLoadedModuleFlags(module);
     hostParametersExpanded = false;
-
     rebindActiveModuleEditors();
-    enforceSingleExpandedFilterSection();
-    syncEditorWidthToBounds();
-    ensureModuleTitle();
-    storeEditorStateToValueTree();
-    updateSectionStates();
-    resized();
-    scheduleHistorySnapshot();
-}
 
-void AvaAudioProcessorEditor::loadTlsModule()
-{
-    if (! audioProcessor.loadModule(AvaAudioProcessor::ActiveModule::tls))
-        return;
+    if (module == AvaAudioProcessor::ActiveModule::eql)
+    {
+        filterDisplayOrder = shell_filter_order_state::makeIdentity(EqlModuleProcessor::maxFilterCount);
+        enforceSingleExpandedFilterSection();
+        storeFilterDisplayOrderToValueTree();
+    }
 
-    setLoadedModuleFlags(AvaAudioProcessor::ActiveModule::tls);
-
-    hostParametersExpanded = false;
-
-    rebindActiveModuleEditors();
-    syncEditorWidthToBounds();
-    ensureModuleTitle();
-    storeEditorStateToValueTree();
-    updateSectionStates();
-    resized();
-    scheduleHistorySnapshot();
-}
-
-void AvaAudioProcessorEditor::loadDynModule()
-{
-    if (! audioProcessor.loadModule(AvaAudioProcessor::ActiveModule::dyn))
-        return;
-
-    setLoadedModuleFlags(AvaAudioProcessor::ActiveModule::dyn);
-
-    hostParametersExpanded = false;
-
-    rebindActiveModuleEditors();
-    syncEditorWidthToBounds();
-    ensureModuleTitle();
-    storeEditorStateToValueTree();
-    updateSectionStates();
-    resized();
-    scheduleHistorySnapshot();
-}
-
-void AvaAudioProcessorEditor::loadTrsModule()
-{
-    if (! audioProcessor.loadModule(AvaAudioProcessor::ActiveModule::trs))
-        return;
-
-    setLoadedModuleFlags(AvaAudioProcessor::ActiveModule::trs);
-
-    hostParametersExpanded = false;
-
-    rebindActiveModuleEditors();
     syncEditorWidthToBounds();
     ensureModuleTitle();
     storeEditorStateToValueTree();

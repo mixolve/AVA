@@ -254,15 +254,6 @@ void ChoiceControl::setChoiceEnabled(const int choiceIndex, const bool shouldEna
     comboBox.setItemEnabled(displayIndex + 1, shouldEnable);
 }
 
-void ChoiceControl::setTitleMouseEnabled(const bool shouldEnable)
-{
-    if (titleButton != nullptr)
-    {
-        titleButton->setInterceptsMouseClicks(shouldEnable, shouldEnable);
-        titleButton->setPressFillEnabled(shouldEnable);
-    }
-}
-
 void ChoiceControl::setInteractionEnabled(const bool shouldEnable)
 {
     interactionEnabled = shouldEnable;

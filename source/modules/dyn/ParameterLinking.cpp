@@ -6,7 +6,7 @@
 #include <cmath>
 #include <optional>
 
-void DynAudioProcessor::setRangeParameterValue(const size_t rangeIndex,
+void DynModuleProcessor::setRangeParameterValue(const size_t rangeIndex,
                                                 const dyn::parameters::ParameterSlot targetSlot,
                                                 const float targetValue)
 {
@@ -29,14 +29,14 @@ void DynAudioProcessor::setRangeParameterValue(const size_t rangeIndex,
     target->setValueNotifyingHost(normalizedValue);
 }
 
-float DynAudioProcessor::readRangeParameterValue(const size_t rangeIndex,
+float DynModuleProcessor::readRangeParameterValue(const size_t rangeIndex,
                                                   const dyn::parameters::ParameterSlot slot) const noexcept
 {
     const auto* value = rawRangeParameters[rangeIndex][dyn::parameters::toIndex(slot)];
     return value != nullptr ? value->load(std::memory_order_relaxed) : 0.0f;
 }
 
-void DynAudioProcessor::syncAllFieldParameters(const size_t rangeIndex,
+void DynModuleProcessor::syncAllFieldParameters(const size_t rangeIndex,
                                                 const dyn::parameters::ParameterSlot leftUp,
                                                 const dyn::parameters::ParameterSlot leftDown,
                                                 const dyn::parameters::ParameterSlot rightUp,
@@ -49,7 +49,7 @@ void DynAudioProcessor::syncAllFieldParameters(const size_t rangeIndex,
     setRangeParameterValue(rangeIndex, rightDown, value);
 }
 
-void DynAudioProcessor::syncUpDownParameterPairs(const size_t rangeIndex,
+void DynModuleProcessor::syncUpDownParameterPairs(const size_t rangeIndex,
                                                   const dyn::parameters::ParameterSlot leftUp,
                                                   const dyn::parameters::ParameterSlot leftDown,
                                                   const dyn::parameters::ParameterSlot rightUp,
@@ -63,7 +63,7 @@ void DynAudioProcessor::syncUpDownParameterPairs(const size_t rangeIndex,
     setRangeParameterValue(rangeIndex, rightDown, rightValue);
 }
 
-void DynAudioProcessor::setParameterListenersEnabled(const bool enabled)
+void DynModuleProcessor::setParameterListenersEnabled(const bool enabled)
 {
     ava::crossover::parameters::setRangeParameterListenersEnabled(valueTreeState,
                                                                   *this,
@@ -72,7 +72,7 @@ void DynAudioProcessor::setParameterListenersEnabled(const bool enabled)
                                                                   enabled);
 }
 
-void DynAudioProcessor::parameterChanged(const juce::String& parameterID, float)
+void DynModuleProcessor::parameterChanged(const juce::String& parameterID, float)
 {
     using ava::crossover::parameters::makeRangeParameterId;
     using dyn::parameters::parameterSpecs;

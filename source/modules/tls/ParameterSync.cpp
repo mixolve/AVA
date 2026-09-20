@@ -10,9 +10,9 @@ using tls::parameters::numParameterSlots;
 using tls::parameters::parameterSpecs;
 using tls::parameters::toIndex;
 using tls::parameters::ParameterSlot;
-} // namespace
+}
 
-void TlsAudioProcessor::cacheParameterPointers()
+void TlsModuleProcessor::cacheParameterPointers()
 {
     static_assert(numParameterSlots == parameterSpecs.size());
     ava::crossover::parameters::cacheRangeParameterPointers(valueTreeState,
@@ -20,7 +20,7 @@ void TlsAudioProcessor::cacheParameterPointers()
                                                             parameterSpecs);
 }
 
-tls::dsp::DspCore::Parameters TlsAudioProcessor::readCrossoverRangeParameters(const size_t rangeIndex) const
+tls::dsp::DspCore::Parameters TlsModuleProcessor::readCrossoverRangeParameters(const size_t rangeIndex) const
 {
     const auto loadFloat = [this, rangeIndex] (const ParameterSlot slot)
     {
@@ -28,7 +28,7 @@ tls::dsp::DspCore::Parameters TlsAudioProcessor::readCrossoverRangeParameters(co
             return value->load();
 
         jassertfalse;
-        return 0.0f;
+        return parameterSpecs[toIndex(slot)].defaultValue;
     };
     const auto loadBool = [&loadFloat] (const ParameterSlot slot)
     {
@@ -73,26 +73,19 @@ tls::dsp::DspCore::Parameters TlsAudioProcessor::readCrossoverRangeParameters(co
     parameters.stereoDelayMs = loadFloat(ParameterSlot::stereoDelay);
     parameters.leftDelayMs = loadFloat(ParameterSlot::leftDelay);
     parameters.rightDelayMs = loadFloat(ParameterSlot::rightDelay);
+    parameters.stereoPhase = loadFloat(ParameterSlot::stereoPhase);
     parameters.leftPhase = loadFloat(ParameterSlot::leftPhase);
     parameters.rightPhase = loadFloat(ParameterSlot::rightPhase);
 
     return parameters;
 }
 
-bool TlsAudioProcessor::syncParameters(const bool force)
+bool TlsModuleProcessor::syncParameters(const bool force)
 {
-    if (! force && ! parametersDirty.exchange(false, std::memory_order_acq_rel))
-        return false;
-
-    if (force)
-        parametersDirty.store(false, std::memory_order_release);
-
-    for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
-        currentRangeParameters[rangeIndex] = readCrossoverRangeParameters(rangeIndex);
-
-    processorBank.setRangeParameters(currentRangeParameters);
-    const auto rangeLatencies = processorBank.getRangeLatencies();
-    moduleLatencySamples.store(*std::max_element(rangeLatencies.begin(), rangeLatencies.end()),
-                               std::memory_order_release);
-    return true;
+    return ava::crossover::parameters::syncRangeParameters(
+        parametersDirty,
+        force,
+        currentRangeParameters,
+        [this] (const size_t rangeIndex) { return readCrossoverRangeParameters(rangeIndex); },
+        processorBank);
 }

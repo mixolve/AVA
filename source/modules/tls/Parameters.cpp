@@ -4,7 +4,6 @@
 #include "DspCore.h"
 
 #include <array>
-#include <algorithm>
 #include <memory>
 
 namespace tls::parameters
@@ -17,58 +16,61 @@ namespace
 {
 struct ParameterOrderEntry
 {
-    const char* key;
+    ParameterSlot slot;
     const char* block;
     const char* label;
 };
 
-inline constexpr auto tlsCrossoverOrder = std::to_array<ParameterOrderEntry>({
-    { "gainMid", "GAIN", "MID" },
-    { "gainMidMute", "GAIN / MID", "MUTE" },
-    { "gainSide", "GAIN", "SIDE" },
-    { "gainSideMute", "GAIN / SIDE", "MUTE" },
-    { "gainL", "GAIN", "LEFT" },
-    { "gainLMute", "GAIN / LEFT", "MUTE" },
-    { "gainR", "GAIN", "RIGHT" },
-    { "gainRMute", "GAIN / RIGHT", "MUTE" },
-    { "gainLr", "GAIN", "STEREO" },
-    { "gainLrMute", "GAIN / STEREO", "MUTE" },
-    { "gainLOrder", "GAIN ORDER", "LEFT" },
-    { "gainROrder", "GAIN ORDER", "RIGHT" },
-    { "gainMidOrder", "GAIN ORDER", "MID" },
-    { "gainSideOrder", "GAIN ORDER", "SIDE" },
-    { "halfPositive", "RECTIFICATION", "HPOS" },
-    { "halfNegative", "RECTIFICATION", "HNEG" },
-    { "fullPositive", "RECTIFICATION", "FPOS" },
-    { "fullNegative", "RECTIFICATION", "FNEG" },
-    { "left", "PANORAMA", "LEFT" },
-    { "right", "PANORAMA", "RIGHT" },
-    { "law", "PANORAMA", "LAW" },
-    { "impact", "SHEAR", "IMPACT" },
-    { "impactDirection", "SHEAR", "DIRECTION" },
-    { "mid", "MS BALANCE", "MID" },
-    { "side", "MS BALANCE", "SIDE" },
-    { "degree", "ORTHOGONAL", "DEGREE" },
-    { "flipRight", "ORTHOGONAL", "FLIP RIGHT" },
-    { "listenLc", "LISTEN", "LC" },
-    { "listenRc", "LISTEN", "RC" },
-    { "listenMc", "LISTEN", "MC" },
-    { "listenSc", "LISTEN", "SC" },
-    { "listenLl", "LISTEN", "LL" },
-    { "listenRr", "LISTEN", "RR" },
-    { "listenSs", "LISTEN", "SS" },
-    { "stereoDelay", "DELAY", "STEREO" },
-    { "leftDelay", "DELAY", "LEFT" },
-    { "rightDelay", "DELAY", "RIGHT" },
-    { "leftPhase", "PHASE", "LEFT" },
-    { "rightPhase", "PHASE", "RIGHT" },
+inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
+    { ParameterSlot::gainMid, "GAIN", "MID" },
+    { ParameterSlot::gainMidMute, "GAIN / MID", "MUTE" },
+    { ParameterSlot::gainSide, "GAIN", "SIDE" },
+    { ParameterSlot::gainSideMute, "GAIN / SIDE", "MUTE" },
+    { ParameterSlot::gainL, "GAIN", "LEFT" },
+    { ParameterSlot::gainLMute, "GAIN / LEFT", "MUTE" },
+    { ParameterSlot::gainR, "GAIN", "RIGHT" },
+    { ParameterSlot::gainRMute, "GAIN / RIGHT", "MUTE" },
+    { ParameterSlot::gainLr, "GAIN", "STEREO" },
+    { ParameterSlot::gainLrMute, "GAIN / STEREO", "MUTE" },
+    { ParameterSlot::gainLOrder, "GAIN ORDER", "LEFT" },
+    { ParameterSlot::gainROrder, "GAIN ORDER", "RIGHT" },
+    { ParameterSlot::gainMidOrder, "GAIN ORDER", "MID" },
+    { ParameterSlot::gainSideOrder, "GAIN ORDER", "SIDE" },
+    { ParameterSlot::halfPositive, "RECTIFICATION", "HPOS" },
+    { ParameterSlot::halfNegative, "RECTIFICATION", "HNEG" },
+    { ParameterSlot::fullPositive, "RECTIFICATION", "FPOS" },
+    { ParameterSlot::fullNegative, "RECTIFICATION", "FNEG" },
+    { ParameterSlot::left, "PANORAMA", "LEFT" },
+    { ParameterSlot::right, "PANORAMA", "RIGHT" },
+    { ParameterSlot::law, "PANORAMA", "LAW" },
+    { ParameterSlot::impact, "SHEAR", "IMPACT" },
+    { ParameterSlot::impactDirection, "SHEAR", "DIRECTION" },
+    { ParameterSlot::mid, "MS BALANCE", "MID" },
+    { ParameterSlot::side, "MS BALANCE", "SIDE" },
+    { ParameterSlot::degree, "ORTHOGONAL", "DEGREE" },
+    { ParameterSlot::flipRight, "ORTHOGONAL", "FLIP RIGHT" },
+    { ParameterSlot::listenLc, "LISTEN", "LC" },
+    { ParameterSlot::listenRc, "LISTEN", "RC" },
+    { ParameterSlot::listenMc, "LISTEN", "MC" },
+    { ParameterSlot::listenSc, "LISTEN", "SC" },
+    { ParameterSlot::listenLl, "LISTEN", "LL" },
+    { ParameterSlot::listenRr, "LISTEN", "RR" },
+    { ParameterSlot::listenSs, "LISTEN", "SS" },
+    { ParameterSlot::stereoDelay, "DELAY", "STEREO" },
+    { ParameterSlot::leftDelay, "DELAY", "LEFT" },
+    { ParameterSlot::rightDelay, "DELAY", "RIGHT" },
+    { ParameterSlot::stereoPhase, "PHASE", "STEREO" },
+    { ParameterSlot::leftPhase, "PHASE", "LEFT" },
+    { ParameterSlot::rightPhase, "PHASE", "RIGHT" },
 });
+
+static_assert(parameterOrder.size() == numParameterSlots);
 
 constexpr size_t numRanges = tls::dsp::ProcessorBank::numRanges;
 
-juce::String makeCrossoverHostName(const size_t rangeIndex, const juce::String& blockName, const juce::String& parameterName)
+juce::String makeRangeHostName(const size_t rangeIndex, const juce::String& blockName, const juce::String& parameterName)
 {
-    return "TLS / CROSSOVER " + juce::String(static_cast<int>(rangeIndex + 1))
+    return "TLS / RANGE " + juce::String(static_cast<int>(rangeIndex + 1))
         + " / " + blockName + " / " + parameterName;
 }
 
@@ -80,7 +82,7 @@ juce::String formatParameterValue(const float value, const int decimalPlaces, co
     return juce::String(value, juce::jmax(0, decimalPlaces));
 }
 
-} // namespace
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 {
@@ -152,40 +154,33 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                                                                           makeRangeGroupName(rangeIndex),
                                                                           " | ");
 
-        for (const auto& entry : tlsCrossoverOrder)
+        for (const auto& entry : parameterOrder)
         {
-            const auto it = std::find_if(parameterSpecs.begin(), parameterSpecs.end(), [&entry] (const auto& spec)
-            {
-                return juce::String(spec.suffix) == entry.key;
-            });
+            const auto& spec = parameterSpecs[toIndex(entry.slot)];
+            const auto parameterId = makeRangeParameterId(rangeIndex, spec.suffix);
+            const auto parameterName = makeRangeHostName(rangeIndex, entry.block, entry.label);
 
-            if (it == parameterSpecs.end())
-                continue;
-
-            const auto parameterId = makeRangeParameterId(rangeIndex, it->suffix);
-            const auto parameterName = makeCrossoverHostName(rangeIndex, entry.block, entry.label);
-
-            if (it->type == ParameterType::boolean)
+            if (spec.type == ParameterType::boolean)
                 group->addChild(boolParam(parameterId,
                                           parameterName,
-                                          it->defaultValue >= 0.5f,
+                                          spec.defaultValue >= 0.5f,
                                           false));
-            else if (it->type == ParameterType::choice)
+            else if (spec.type == ParameterType::choice)
                 group->addChild(choiceParam(parameterId,
                                             parameterName,
                                             juce::StringArray { "LEFT", "RIGHT" },
-                                            juce::roundToInt(it->defaultValue),
+                                            juce::roundToInt(spec.defaultValue),
                                             false));
             else
                 group->addChild(floatParam(parameterId,
                                            parameterName,
-                                           it->min,
-                                           it->max,
-                                           it->step,
-                                           it->defaultValue,
-                                           it->label,
-                                           it->displayDecimals,
-                                           it->muteAtMinimum,
+                                           spec.min,
+                                           spec.max,
+                                           spec.step,
+                                           spec.defaultValue,
+                                           spec.label,
+                                           spec.displayDecimals,
+                                           spec.muteAtMinimum,
                                            false));
         }
 
@@ -194,4 +189,4 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 
     return layout;
 }
-} // namespace tls::parameters
+}

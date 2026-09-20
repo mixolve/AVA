@@ -1,10 +1,4 @@
-#import <TargetConditionals.h>
-
-#if TARGET_OS_IPHONE
-#import <UIKit/UIKit.h>
-#else
 #import <AppKit/AppKit.h>
-#endif
 
 #include "SystemSymbols.h"
 
@@ -45,7 +39,7 @@ juce::Image normaliseSymbolAlpha(juce::Image image) {
 
   return normalised;
 }
-} // namespace
+}
 
 juce::Image loadSystemSymbolImage(const char *symbolName,
                                   const float pointSize) {
@@ -55,27 +49,6 @@ juce::Image loadSystemSymbolImage(const char *symbolName,
   @autoreleasepool {
     auto *name = [NSString stringWithUTF8String:symbolName];
 
-#if JUCE_IOS
-    auto *configuration =
-        [UIImageSymbolConfiguration configurationWithPointSize:pointSize];
-    auto *symbol = [[UIImage systemImageNamed:name
-                            withConfiguration:configuration]
-        imageWithTintColor:UIColor.whiteColor
-             renderingMode:UIImageRenderingModeAlwaysOriginal];
-
-    if (symbol == nil)
-      return {};
-
-    UIGraphicsBeginImageContextWithOptions(CGSizeMake(pointSize, pointSize), NO,
-                                           1.0);
-    const auto origin = CGPointMake((pointSize - symbol.size.width) * 0.5,
-                                    (pointSize - symbol.size.height) * 0.5);
-    [symbol drawAtPoint:origin];
-    auto *rendered = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return normaliseSymbolAlpha(
-        decodePngData(UIImagePNGRepresentation(rendered)));
-#elif JUCE_MAC
     auto *configuration = [NSImageSymbolConfiguration
         configurationWithPointSize:pointSize
                             weight:NSFontWeightRegular];
@@ -118,8 +91,6 @@ juce::Image loadSystemSymbolImage(const char *symbolName,
     auto *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG
                                      properties:@{}];
     return normaliseSymbolAlpha(decodePngData(png));
-#else
-    return {};
-#endif
+
   }
 }

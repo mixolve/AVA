@@ -2,7 +2,7 @@
  #include <Accelerate/Accelerate.h>
 #endif
 
-#include "ProcessorSupport.h"
+#include "FilterSupport.h"
 
 #include <algorithm>
 
@@ -265,7 +265,7 @@ void EqlModuleProcessor::PhaseFirFilter::processWithChannelMask(juce::AudioBuffe
                 const auto* history = channelState.data() + writeIndex;
                 auto output = 0.0f;
 
-               #if JUCE_MAC || JUCE_IOS
+               #if JUCE_MAC
                 vDSP_dotpr(taps.data(),
                             1,
                             history,

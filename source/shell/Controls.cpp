@@ -1,4 +1,5 @@
-#include "EditorControls.h"
+#include "Controls.h"
+#include "Editor.h"
 #include "ChoiceControl.h"
 #include "LocalParameterControl.h"
 #include "ParameterControl.h"
@@ -371,5 +372,5 @@ void NoTickComboBox::setChoiceEnabled(const int choiceIndex, const bool shouldEn
 
 bool NoTickComboBox::isPressedHighlightEnabled() const noexcept
 {
-    return isEnabled() && (pressHighlight || isMouseOver(true));
+    return isEnabled() && ((pressHighlight && ! dragDetected) || isMouseHovering(*this));
 }

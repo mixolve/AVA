@@ -12,7 +12,7 @@ namespace
 {
 constexpr auto gainMinDb = -48.0f;
 constexpr auto gainMaxDb = 48.0f;
-} // namespace
+}
 
 void DspCore::prepare(const double sampleRate, int, int)
 {
@@ -95,15 +95,13 @@ float DspCore::makeReleaseCoefficient(const float timeMs, const double sampleRat
 
 void DspCore::updateDerivedParameters()
 {
-    const auto transGainDb = juce::jlimit(gainMinDb, gainMaxDb, parameters.transGainDb);
+    const auto transientGainDb = juce::jlimit(gainMinDb, gainMaxDb, parameters.transientGainDb);
     const auto sustainGainDb = juce::jlimit(gainMinDb, gainMaxDb, parameters.sustainGainDb);
     const auto holdMs = juce::jlimit(0.0f, 200.0f, parameters.holdMs);
     const auto releaseMs = juce::jlimit(1.0f, 500.0f, parameters.releaseMs);
     const auto lookaheadMs = juce::jlimit(0.0f, 20.0f, parameters.lookaheadMs);
 
     derived.fastReleaseCoefficient = makeReleaseCoefficient(5.0f, currentSampleRate);
-    derived.bodyAttackCoefficient = makeReleaseCoefficient(25.0f, currentSampleRate);
-    derived.bodyReleaseCoefficient = makeReleaseCoefficient(juce::jmax(50.0f, holdMs + releaseMs), currentSampleRate);
     derived.normalizedReleaseCurve = juce::jlimit(-1.0f, 1.0f, parameters.releaseCurve * 0.01f);
     derived.holdSamples = juce::jmax(0, static_cast<int>(std::round(holdMs * 0.001 * currentSampleRate)));
     const auto retriggerMs = juce::jlimit(1.0f, 5000.0f, parameters.retriggerMs);
@@ -112,7 +110,7 @@ void DspCore::updateDerivedParameters()
     derived.latencySamples = juce::jlimit(0,
                                           getMaximumLatencySamples(currentSampleRate),
                                           static_cast<int>(std::round(lookaheadMs * 0.001 * currentSampleRate)));
-    derived.transientGain = parameters.transEnabled ? juce::Decibels::decibelsToGain(transGainDb) : 0.0f;
+    derived.transientGain = parameters.transientEnabled ? juce::Decibels::decibelsToGain(transientGainDb) : 0.0f;
     derived.sustainGain = parameters.sustainEnabled ? juce::Decibels::decibelsToGain(sustainGainDb) : 0.0f;
 }
 
@@ -135,23 +133,16 @@ float DspCore::processDetectorSample(const float level) noexcept
         ? level
         : level + ((detector.fastEnvelope - level) * derived.fastReleaseCoefficient);
 
-    const auto bodyCoefficient = level >= detector.bodyEnvelope ? derived.bodyAttackCoefficient
-                                                                : derived.bodyReleaseCoefficient;
-    detector.bodyEnvelope = level + ((detector.bodyEnvelope - level) * bodyCoefficient);
-
     const auto levelDb = juce::Decibels::gainToDecibels(detector.fastEnvelope, -120.0f);
-    const auto bodyDb = juce::Decibels::gainToDecibels(detector.bodyEnvelope, -120.0f);
-    const auto onsetDb = levelDb - bodyDb;
     const auto thresholdDb = juce::jlimit(-48.0f, 0.0f, parameters.thresholdDb);
     const auto kneeDb = juce::jlimit(0.0f, 24.0f, parameters.kneeDb);
     const auto thresholdAmount = calculateThresholdAmount(levelDb, thresholdDb, kneeDb);
     const auto aboveThreshold = thresholdAmount > 1.0e-4f;
     const auto thresholdRisingEdge = aboveThreshold && ! detector.wasAboveThreshold;
     const auto retriggerElapsed = detector.samplesSinceTrigger >= derived.holdSamples + derived.retriggerSamples;
-    const auto triggerCondition = parameters.oneShot
-        ? thresholdRisingEdge
-        : (thresholdRisingEdge || onsetDb >= 6.0f || derived.retriggerSamples > 0);
-    const auto shouldTrigger = aboveThreshold && retriggerElapsed && triggerCondition;
+    const auto shouldTrigger = aboveThreshold
+        && retriggerElapsed
+        && (! parameters.oneShot || thresholdRisingEdge);
 
     if (shouldTrigger)
     {
@@ -221,4 +212,4 @@ bool DspCore::isNeutral() const noexcept
 {
     return false;
 }
-} // namespace trs::dsp
+}

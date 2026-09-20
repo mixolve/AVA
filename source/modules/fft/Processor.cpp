@@ -1,51 +1,34 @@
 #include "Processor.h"
-#include "Constants.h"
-
-#include <cmath>
-
-namespace
-{
-juce::ValueTree buildCombinedFftState(juce::AudioProcessorValueTreeState& parameters,
-                                      const juce::ValueTree& analyserState)
-{
-    auto state = parameters.copyState();
-    state.appendChild(analyserState.createCopy(), nullptr);
-    return state;
-}
-
-constexpr std::array<const char*, 4> dualMonoLinkedParameterIds {
-    FftModuleProcessor::paramDualMonoLeftThresholdId,
-    FftModuleProcessor::paramDualMonoRightThresholdId,
-    FftModuleProcessor::paramDualMonoLeftAdaptiveId,
-    FftModuleProcessor::paramDualMonoRightAdaptiveId
-};
-
-}
 
 FftModuleProcessor::FftModuleProcessor(juce::AudioProcessor& owner)
     : ownerProcessor(owner),
-    parameters(parameterHost, nullptr, "fft_state", createParameterLayout())
+    parameters(moduleParameterHost, nullptr, "fft_state", createParameterLayout())
 {
     resetAnalyserState();
     dualMonoLeftThresholdParam = parameters.getRawParameterValue(paramDualMonoLeftThresholdId);
     dualMonoRightThresholdParam = parameters.getRawParameterValue(paramDualMonoRightThresholdId);
-    phaseThresholdParam = parameters.getRawParameterValue(paramPhaseThresholdId);
-    phaseAdaptiveParam = parameters.getRawParameterValue(paramPhaseAdaptiveId);
-    phaseSlopeParam = parameters.getRawParameterValue(paramPhaseSlopeId);
-    phaseImpactParam = parameters.getRawParameterValue(paramPhaseImpactId);
+    correlationThresholdParam = parameters.getRawParameterValue(paramCorrelationThresholdId);
+    correlationSmoothingParam = parameters.getRawParameterValue(paramCorrelationSmoothingId);
+    correlationAdaptiveParam = parameters.getRawParameterValue(paramCorrelationAdaptiveId);
+    correlationSlopeParam = parameters.getRawParameterValue(paramCorrelationSlopeId);
+    correlationImpactParam = parameters.getRawParameterValue(paramCorrelationImpactId);
     dualMonoLeftAdaptiveParam = parameters.getRawParameterValue(paramDualMonoLeftAdaptiveId);
     dualMonoRightAdaptiveParam = parameters.getRawParameterValue(paramDualMonoRightAdaptiveId);
     spectralAdaptiveOffsetParam = parameters.getRawParameterValue(paramSpectralAdaptiveOffsetId);
     spectralAdaptiveAttackParam = parameters.getRawParameterValue(paramSpectralAdaptiveAttackId);
     spectralAdaptiveHoldParam = parameters.getRawParameterValue(paramSpectralAdaptiveHoldId);
     spectralAdaptiveReleaseParam = parameters.getRawParameterValue(paramSpectralAdaptiveReleaseId);
-    phaseAdaptiveOffsetParam = parameters.getRawParameterValue(paramPhaseAdaptiveOffsetId);
-    phaseAdaptiveAttackParam = parameters.getRawParameterValue(paramPhaseAdaptiveAttackId);
-    phaseAdaptiveHoldParam = parameters.getRawParameterValue(paramPhaseAdaptiveHoldId);
-    phaseAdaptiveReleaseParam = parameters.getRawParameterValue(paramPhaseAdaptiveReleaseId);
+    correlationAdaptiveOffsetParam = parameters.getRawParameterValue(paramCorrelationAdaptiveOffsetId);
+    correlationAdaptiveAttackParam = parameters.getRawParameterValue(paramCorrelationAdaptiveAttackId);
+    correlationAdaptiveHoldParam = parameters.getRawParameterValue(paramCorrelationAdaptiveHoldId);
+    correlationAdaptiveReleaseParam = parameters.getRawParameterValue(paramCorrelationAdaptiveReleaseId);
     dualMonoLinkParam = parameters.getRawParameterValue(paramDualMonoLinkId);
     dynamicBypassParam = parameters.getRawParameterValue(paramDynamicBypassId);
     dynamicModeParam = parameters.getRawParameterValue(paramDynamicModeId);
+    correlationTypeParam = parameters.getRawParameterValue(paramCorrelationTypeId);
+    dynamicDirectionParam = parameters.getRawParameterValue(paramDynamicDirectionId);
+    detectorLowCutParam = parameters.getRawParameterValue(paramDetectorLowCutId);
+    detectorHighCutParam = parameters.getRawParameterValue(paramDetectorHighCutId);
     floorParam = parameters.getRawParameterValue(paramFloorId);
     attackParam = parameters.getRawParameterValue(paramAttackId);
     releaseParam = parameters.getRawParameterValue(paramReleaseId);
@@ -55,33 +38,54 @@ FftModuleProcessor::FftModuleProcessor(juce::AudioProcessor& owner)
     dspFftSizeParam = parameters.getRawParameterValue(paramDspFftSizeId);
     dspOverlapParam = parameters.getRawParameterValue(paramDspOverlapId);
     dspSlopeParam = parameters.getRawParameterValue(paramDspSlopeId);
-    for (const auto* parameterId : dualMonoLinkedParameterIds)
-        parameters.addParameterListener(parameterId, this);
+    setDualMonoLinkListenersEnabled(true);
 }
 
 FftModuleProcessor::~FftModuleProcessor()
 {
-    for (const auto* parameterId : dualMonoLinkedParameterIds)
-        parameters.removeParameterListener(parameterId, this);
+    setDualMonoLinkListenersEnabled(false);
 }
 
-void FftModuleProcessor::prepareToPlay(double sampleRate, int)
+void FftModuleProcessor::prepareToPlay(const double sampleRate, const int samplesPerBlock)
 {
-    preparedBlockSize = juce::jmax(1, ownerProcessor.getBlockSize());
-    dynamicProcessor.prepare(sampleRate, ownerProcessor.getTotalNumInputChannels());
+    preparedBlockSize = juce::jmax(1, samplesPerBlock);
+    activeDynamicProcessorIndex = 0;
+    activeFftSize = getSelectedDspFftSize();
+    activeOverlapFactor = getSelectedDspOverlapFactor();
+    pendingFftSize = 0;
+    pendingOverlapFactor = 0;
+    windowTransitionStage = WindowTransitionStage::none;
+    windowTransitionSamples = juce::jmax(1, juce::roundToInt(sampleRate * 0.005));
+    windowTransitionSamplesRemaining = 0;
+
+    for (auto& processor : dynamicProcessors)
+        processor.prepare(sampleRate, ownerProcessor.getTotalNumInputChannels());
+
     refreshLatencyState();
     resetDeltaDelay();
     deltaDryBuffer.setSize(ownerProcessor.getTotalNumInputChannels(), preparedBlockSize);
+    windowTransitionBuffer.setSize(ownerProcessor.getTotalNumInputChannels(), preparedBlockSize);
 }
 
 void FftModuleProcessor::releaseResources()
 {
+    for (auto& processor : dynamicProcessors)
+        processor.reset();
+
+    windowTransitionStage = WindowTransitionStage::none;
+    windowTransitionSamplesRemaining = 0;
     resetDeltaDelay();
 }
 
 void FftModuleProcessor::resetProcessingState() noexcept
 {
-    dynamicProcessor.reset();
+    for (auto& processor : dynamicProcessors)
+        processor.reset();
+
+    windowTransitionStage = WindowTransitionStage::none;
+    windowTransitionSamplesRemaining = 0;
+    pendingFftSize = 0;
+    pendingOverlapFactor = 0;
     resetDeltaDelay();
 }
 
@@ -89,28 +93,74 @@ void FftModuleProcessor::processBlock(juce::AudioBuffer<float>& buffer)
 {
     juce::ScopedNoDenormals noDenormals;
 
-    auto compressorSettings = getCompressorSettings();
+    auto requestedSettings = getProcessingSettings();
     const auto deltaEnabled = isDeltaEnabled();
     const auto channelsToUse = juce::jmin(ownerProcessor.getTotalNumInputChannels(), buffer.getNumChannels());
-    const auto desiredLatencySamples = juce::jmax(0, compressorSettings.fftSize - 1);
+    const auto windowConfigurationChanged = requestedSettings.fftSize != activeFftSize
+                                         || requestedSettings.overlapFactor != activeOverlapFactor;
 
-    if (desiredLatencySamples != activeLatencySamples)
+    if (windowTransitionStage == WindowTransitionStage::none && windowConfigurationChanged)
+        beginWindowTransition(requestedSettings.fftSize, requestedSettings.overlapFactor);
+    else if ((windowTransitionStage == WindowTransitionStage::priming
+              || windowTransitionStage == WindowTransitionStage::fadeOut)
+             && (requestedSettings.fftSize != pendingFftSize
+                 || requestedSettings.overlapFactor != pendingOverlapFactor))
     {
-        activeLatencySamples = desiredLatencySamples;
-        resetDeltaDelay();
-        ensureDeltaDryBufferSize(channelsToUse, buffer.getNumSamples());
+        beginWindowTransition(requestedSettings.fftSize, requestedSettings.overlapFactor);
     }
 
+    ensureDeltaDryBufferSize(channelsToUse, buffer.getNumSamples());
     jassert(deltaDryBuffer.getNumChannels() >= channelsToUse && deltaDryBuffer.getNumSamples() >= buffer.getNumSamples());
     populateAlignedDryBuffer(buffer, deltaDryBuffer, channelsToUse, activeLatencySamples);
+
+    const auto processesPendingWindow = windowTransitionStage == WindowTransitionStage::priming
+                                     || windowTransitionStage == WindowTransitionStage::fadeOut;
+
+    if (processesPendingWindow)
+    {
+        if (windowTransitionBuffer.getNumChannels() < channelsToUse
+            || windowTransitionBuffer.getNumSamples() < buffer.getNumSamples())
+        {
+            windowTransitionBuffer.setSize(channelsToUse, buffer.getNumSamples(), false, false, true);
+        }
+
+        for (auto channel = 0; channel < channelsToUse; ++channel)
+            windowTransitionBuffer.copyFrom(channel, 0, buffer, channel, 0, buffer.getNumSamples());
+    }
 
     for (auto channel = ownerProcessor.getTotalNumInputChannels(); channel < ownerProcessor.getTotalNumOutputChannels(); ++channel)
         buffer.clear(channel, 0, buffer.getNumSamples());
 
     if (deltaEnabled)
-        compressorSettings.makeupDb = 0.0f;
+        requestedSettings.makeupDb = 0.0f;
 
-    dynamicProcessor.processBuffer(buffer, channelsToUse, compressorSettings);
+    auto activeSettings = requestedSettings;
+    activeSettings.fftSize = activeFftSize;
+    activeSettings.overlapFactor = activeOverlapFactor;
+    dynamicProcessors[static_cast<size_t>(activeDynamicProcessorIndex)].processBuffer(
+        buffer, channelsToUse, activeSettings);
+
+    if (processesPendingWindow)
+    {
+        auto pendingSettings = requestedSettings;
+        pendingSettings.fftSize = pendingFftSize;
+        pendingSettings.overlapFactor = pendingOverlapFactor;
+        const auto pendingProcessorIndex = 1 - activeDynamicProcessorIndex;
+        auto& pendingProcessor = dynamicProcessors[static_cast<size_t>(pendingProcessorIndex)];
+        pendingProcessor.processBuffer(windowTransitionBuffer, channelsToUse, pendingSettings);
+
+        if (windowTransitionStage == WindowTransitionStage::fadeOut)
+            applyWindowTransition(buffer, &windowTransitionBuffer, channelsToUse);
+        else if (pendingProcessor.hasProducedOutput())
+        {
+            windowTransitionStage = WindowTransitionStage::fadeOut;
+            windowTransitionSamplesRemaining = windowTransitionSamples;
+        }
+    }
+    else if (windowTransitionStage == WindowTransitionStage::fadeIn)
+    {
+        applyWindowTransition(buffer, nullptr, channelsToUse);
+    }
 
     if (deltaEnabled)
     {
@@ -123,105 +173,68 @@ void FftModuleProcessor::processBlock(juce::AudioBuffer<float>& buffer)
 
 }
 
-void FftModuleProcessor::parameterChanged(const juce::String& parameterID, float)
+void FftModuleProcessor::beginWindowTransition(const int fftSize, const int overlapFactor) noexcept
 {
-    if (linkedDualMonoPropagationInProgress.exchange(true, std::memory_order_acq_rel))
-        return;
-
-    const auto linkActive = dualMonoLinkParam != nullptr
-        && dualMonoLinkParam->load(std::memory_order_relaxed) >= 0.5f;
-
-    const auto mirrorParameter = [this] (const char* sourceParameterId, const char* targetParameterId)
-    {
-        const auto* source = parameters.getRawParameterValue(sourceParameterId);
-
-        if (source == nullptr)
-            return;
-
-        auto* target = parameters.getParameter(targetParameterId);
-
-        if (target == nullptr)
-            return;
-
-        const auto targetValue = source->load(std::memory_order_relaxed);
-        const auto normalizedValue = target->convertTo0to1(targetValue);
-
-        if (std::abs(target->getValue() - normalizedValue) <= 1.0e-6f)
-            return;
-
-        target->setValueNotifyingHost(normalizedValue);
-    };
-
-    if (linkActive)
-    {
-        if (parameterID == paramDualMonoLeftThresholdId)
-            mirrorParameter(paramDualMonoLeftThresholdId, paramDualMonoRightThresholdId);
-        else if (parameterID == paramDualMonoRightThresholdId)
-            mirrorParameter(paramDualMonoRightThresholdId, paramDualMonoLeftThresholdId);
-        else if (parameterID == paramDualMonoLeftAdaptiveId)
-            mirrorParameter(paramDualMonoLeftAdaptiveId, paramDualMonoRightAdaptiveId);
-        else if (parameterID == paramDualMonoRightAdaptiveId)
-            mirrorParameter(paramDualMonoRightAdaptiveId, paramDualMonoLeftAdaptiveId);
-    }
-
-    linkedDualMonoPropagationInProgress.store(false, std::memory_order_release);
+    pendingFftSize = juce::jlimit(1024, DynamicProcessor::maxFftSize, fftSize);
+    pendingOverlapFactor = juce::jmax(1, overlapFactor);
+    windowTransitionStage = WindowTransitionStage::priming;
+    windowTransitionSamplesRemaining = 0;
+    dynamicProcessors[static_cast<size_t>(1 - activeDynamicProcessorIndex)].reset();
 }
 
-void FftModuleProcessor::getStateInformation(juce::MemoryBlock& destData)
+void FftModuleProcessor::applyWindowTransition(juce::AudioBuffer<float>& activeOutput,
+                                               const juce::AudioBuffer<float>* pendingOutput,
+                                               const int channelsToUse) noexcept
 {
-    auto state = buildCombinedFftState(parameters, createAnalyserStateSnapshot());
-
-    if (auto stateXml = state.createXml())
-        juce::AudioProcessor::copyXmlToBinary(*stateXml, destData);
-}
-
-void FftModuleProcessor::setStateInformation(const void* data, int sizeInBytes)
-{
-    if (auto stateXml = juce::AudioProcessor::getXmlFromBinary(data, sizeInBytes))
-        if (stateXml->hasTagName(parameters.state.getType()))
+    for (auto sampleIndex = 0; sampleIndex < activeOutput.getNumSamples(); ++sampleIndex)
+    {
+        if (windowTransitionStage == WindowTransitionStage::fadeOut)
         {
-            auto state = juce::ValueTree::fromXml(*stateXml);
-            auto restoredAnalyserState = state.getChildWithName(analyserState.getType());
+            const auto gain = static_cast<float>(windowTransitionSamplesRemaining)
+                            / static_cast<float>(windowTransitionSamples);
 
-            if (restoredAnalyserState.isValid())
-                state.removeChild(state.indexOf(restoredAnalyserState), nullptr);
+            for (auto channel = 0; channel < channelsToUse; ++channel)
+                activeOutput.setSample(channel, sampleIndex,
+                                       activeOutput.getSample(channel, sampleIndex) * gain);
 
-            parameters.replaceState(state);
-            applyAnalyserState(restoredAnalyserState);
-            refreshLatencyState();
+            if (--windowTransitionSamplesRemaining <= 0)
+                completeWindowTransition();
+
+            continue;
         }
+
+        if (windowTransitionStage != WindowTransitionStage::fadeIn)
+            continue;
+
+        const auto gain = 1.0f - (static_cast<float>(windowTransitionSamplesRemaining)
+                                / static_cast<float>(windowTransitionSamples));
+
+        for (auto channel = 0; channel < channelsToUse; ++channel)
+        {
+            const auto sample = pendingOutput != nullptr
+                ? pendingOutput->getSample(channel, sampleIndex)
+                : activeOutput.getSample(channel, sampleIndex);
+            activeOutput.setSample(channel, sampleIndex, sample * gain);
+        }
+
+        if (--windowTransitionSamplesRemaining <= 0)
+        {
+            windowTransitionStage = WindowTransitionStage::none;
+            windowTransitionSamplesRemaining = 0;
+        }
+    }
 }
 
-juce::String FftModuleProcessor::getStateXmlString() const
+void FftModuleProcessor::completeWindowTransition() noexcept
 {
-    auto state = buildCombinedFftState(const_cast<juce::AudioProcessorValueTreeState&>(parameters),
-                                       createAnalyserStateSnapshot());
-
-    if (auto stateXml = state.createXml())
-        return stateXml->toString();
-
-    return {};
-}
-
-void FftModuleProcessor::setStateFromXmlString(const juce::String& stateXmlString)
-{
-    if (stateXmlString.trim().isEmpty())
-        return;
-
-    auto stateXml = juce::parseXML(stateXmlString);
-
-    if (stateXml == nullptr || ! stateXml->hasTagName(parameters.state.getType()))
-        return;
-
-    auto state = juce::ValueTree::fromXml(*stateXml);
-    auto restoredAnalyserState = state.getChildWithName(analyserState.getType());
-
-    if (restoredAnalyserState.isValid())
-        state.removeChild(state.indexOf(restoredAnalyserState), nullptr);
-
-    parameters.replaceState(state);
-    applyAnalyserState(restoredAnalyserState);
-    refreshLatencyState();
+    activeDynamicProcessorIndex = 1 - activeDynamicProcessorIndex;
+    activeFftSize = pendingFftSize;
+    activeOverlapFactor = pendingOverlapFactor;
+    activeLatencySamples = juce::jmax(0, activeFftSize - 1);
+    pendingFftSize = 0;
+    pendingOverlapFactor = 0;
+    windowTransitionStage = WindowTransitionStage::fadeIn;
+    windowTransitionSamplesRemaining = windowTransitionSamples;
 }
 
 int FftModuleProcessor::getLatencySamples() const noexcept
@@ -231,29 +244,10 @@ int FftModuleProcessor::getLatencySamples() const noexcept
 
 bool FftModuleProcessor::refreshLatencyState() noexcept
 {
-    const auto newLatencySamples = juce::jmax(0, getSelectedDspFftSize() - 1);
+    const auto newLatencySamples = juce::jmax(0, activeFftSize - 1);
     const auto changed = activeLatencySamples != newLatencySamples;
     activeLatencySamples = newLatencySamples;
     return changed;
-}
-
-void FftModuleProcessor::copyGainReductionData(std::array<float, analyserScopeSize>& leftDestination,
-                                               std::array<float, analyserScopeSize>& rightDestination) const
-{
-    dynamicProcessor.copyReductionScope(leftDestination, rightDestination);
-}
-
-bool FftModuleProcessor::isPhaseCorrMode() const noexcept
-{
-    return dynamicModeParam != nullptr
-        && dynamicModeParam->load(std::memory_order_relaxed) >= 0.5f;
-}
-
-float FftModuleProcessor::getReductionDisplayFloor() const noexcept
-{
-    return isPhaseCorrMode()
-        ? -2.0f * phaseReductionRangeValue.load(std::memory_order_relaxed) * 0.01f
-        : spectralReductionRangeValue.load(std::memory_order_relaxed);
 }
 
 void FftModuleProcessor::resetDeltaDelay() noexcept
@@ -313,77 +307,4 @@ void FftModuleProcessor::populateAlignedDryBuffer(const juce::AudioBuffer<float>
 
         deltaDelayWriteIndex = (deltaDelayWriteIndex + 1) % deltaDelayBufferSize;
     }
-}
-
-juce::AudioProcessorValueTreeState& FftModuleProcessor::getValueTreeState() noexcept
-{
-    return parameters;
-}
-
-const juce::AudioProcessorValueTreeState& FftModuleProcessor::getValueTreeState() const noexcept
-{
-    return parameters;
-}
-
-juce::ValueTree FftModuleProcessor::createAnalyserStateSnapshot() const
-{
-    auto state = juce::ValueTree(analyserState.getType());
-    state.setProperty(paramTimeId, analyserTimeValue.load(std::memory_order_relaxed), nullptr);
-    state.setProperty(paramSpectralReductionRangeId, spectralReductionRangeValue.load(std::memory_order_relaxed), nullptr);
-    state.setProperty(paramPhaseReductionRangeId, phaseReductionRangeValue.load(std::memory_order_relaxed), nullptr);
-    return state;
-}
-
-float FftModuleProcessor::getAnalyserParameterValue(const juce::String& parameterId) const noexcept
-{
-    if (parameterId == paramTimeId)
-        return analyserTimeValue.load(std::memory_order_relaxed);
-
-    if (parameterId == paramSpectralReductionRangeId)
-        return spectralReductionRangeValue.load(std::memory_order_relaxed);
-
-    if (parameterId == paramPhaseReductionRangeId)
-        return phaseReductionRangeValue.load(std::memory_order_relaxed);
-
-    return 0.0f;
-}
-
-void FftModuleProcessor::setAnalyserParameterValue(const juce::String& parameterId, float value)
-{
-    if (parameterId == paramTimeId)
-    {
-        const auto clamped = juce::jlimit(0.0f, 1000.0f, value);
-        analyserTimeValue.store(clamped, std::memory_order_relaxed);
-    }
-
-    if (parameterId == paramSpectralReductionRangeId)
-    {
-        spectralReductionRangeValue.store(juce::jlimit(-99.0f, 0.0f, value), std::memory_order_relaxed);
-        return;
-    }
-
-    if (parameterId == paramPhaseReductionRangeId)
-        phaseReductionRangeValue.store(juce::jlimit(0.0f, 100.0f, value), std::memory_order_relaxed);
-}
-
-void FftModuleProcessor::resetAnalyserState()
-{
-    setAnalyserParameterValue(paramTimeId, 50.0f);
-    setAnalyserParameterValue(paramSpectralReductionRangeId, -36.0f);
-    setAnalyserParameterValue(paramPhaseReductionRangeId, 50.0f);
-}
-
-void FftModuleProcessor::applyAnalyserState(juce::ValueTree state)
-{
-    if (! state.isValid())
-    {
-        resetAnalyserState();
-        return;
-    }
-
-    setAnalyserParameterValue(paramTimeId, static_cast<float>(state.getProperty(paramTimeId, 50.0f)));
-    setAnalyserParameterValue(paramSpectralReductionRangeId,
-                              static_cast<float>(state.getProperty(paramSpectralReductionRangeId, -36.0f)));
-    setAnalyserParameterValue(paramPhaseReductionRangeId,
-                              static_cast<float>(state.getProperty(paramPhaseReductionRangeId, 50.0f)));
 }

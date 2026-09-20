@@ -1,5 +1,5 @@
 #pragma once
-#include "EditorControls.h"
+#include "Style.h"
 
 #include <cmath>
 #include <functional>
@@ -444,4 +444,4 @@ private:
     std::vector<std::unique_ptr<MarkdownRowComponent>> rows;
     int contentPadding = promptPanelPadding;
 };
-} // namespace
+}

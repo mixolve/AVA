@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../DspUtilities.h"
-#include "../SampleRangeBank.h"
+#include "../shared/DspUtilities.h"
+#include "../shared/SampleRangeBank.h"
 
 #include <JuceHeader.h>
 
@@ -62,6 +62,7 @@ public:
         float stereoDelayMs = 0.0f;
         float leftDelayMs = 0.0f;
         float rightDelayMs = 0.0f;
+        float stereoPhase = 0.0f;
         float leftPhase = 0.0f;
         float rightPhase = 0.0f;
     };
@@ -156,4 +157,4 @@ private:
 };
 
 using ProcessorBank = ava::modules::SampleRangeBank<DspCore>;
-} // namespace tls::dsp
+}

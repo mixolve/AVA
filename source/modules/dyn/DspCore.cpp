@@ -32,7 +32,7 @@ double tensionTargetDb(const double env,
                                       : std::pow(ratio, shape);
     return dbToAmp(floorDb + spanDb * shapedRatio);
 }
-} // namespace
+}
 
 double DspCore::safeAbs(const double value)
 {
@@ -124,4 +124,4 @@ bool DspCore::isNeutral() const noexcept
 {
     return false;
 }
-} // namespace dyn::dsp
+}

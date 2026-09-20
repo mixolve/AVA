@@ -1,9 +1,11 @@
-#include "EditorFilterSection.h"
+#include "Editor.h"
+#include "FilterSection.h"
 #include "SetupSupport.h"
 #include "../modules/tls/Processor.h"
 #include "../modules/dyn/Processor.h"
 #include "../modules/fft/Processor.h"
 #include "../modules/trs/Processor.h"
+#include "../modules/eql/Processor.h"
 
 juce::RangedAudioParameter* AvaAudioProcessorEditor::findHostAssignableParameter(const juce::String& parameterId) const noexcept
 {
@@ -350,10 +352,13 @@ void AvaAudioProcessorEditor::detachModuleEditorBindings()
     if (fftRatioControl != nullptr) fftRatioControl->detach();
     if (fftFloorControl != nullptr) fftFloorControl->detach();
     if (fftDynamicModeControl != nullptr) fftDynamicModeControl->detach();
+    if (fftCorrelationTypeControl != nullptr) fftCorrelationTypeControl->detach();
+    if (fftDynamicDirectionControl != nullptr) fftDynamicDirectionControl->detach();
+    if (fftCorrelationSmoothingControl != nullptr) fftCorrelationSmoothingControl->detach();
     if (fftDspFftSizeControl != nullptr) fftDspFftSizeControl->detach();
     if (fftDspOverlapControl != nullptr) fftDspOverlapControl->detach();
     if (fftDspSlopeControl != nullptr) fftDspSlopeControl->detach();
-    if (fftPhaseImpactControl != nullptr) fftPhaseImpactControl->detach();
+    if (fftCorrelationImpactControl != nullptr) fftCorrelationImpactControl->detach();
     if (fftDualMonoLeftThresholdControl != nullptr) fftDualMonoLeftThresholdControl->detach();
     if (fftDualMonoLeftAdaptiveControl != nullptr) fftDualMonoLeftAdaptiveControl->detach();
     if (fftDualMonoRightThresholdControl != nullptr) fftDualMonoRightThresholdControl->detach();
@@ -362,6 +367,8 @@ void AvaAudioProcessorEditor::detachModuleEditorBindings()
     if (fftAdaptiveAttackControl != nullptr) fftAdaptiveAttackControl->detach();
     if (fftAdaptiveHoldControl != nullptr) fftAdaptiveHoldControl->detach();
     if (fftAdaptiveReleaseControl != nullptr) fftAdaptiveReleaseControl->detach();
+    if (fftDetectorLowCutControl != nullptr) fftDetectorLowCutControl->detach();
+    if (fftDetectorHighCutControl != nullptr) fftDetectorHighCutControl->detach();
     shell_setup_support::removeOwnedChild(*this, fftAnalyserComponent);
     shell_setup_support::removeOwnedChild(*this, tlsModuleEditor);
     shell_setup_support::removeOwnedChild(*this, dynModuleEditor);

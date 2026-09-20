@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Processor.h"
-#include "../ProcessorRangeBank.h"
+#include "../shared/ProcessorRangeBank.h"
 
 #include <cstddef>
 
@@ -21,6 +21,8 @@ public:
     bool refreshLatencyState() noexcept;
     size_t ensureRangeCount(size_t rangeCount);
     size_t getCreatedRangeCount() const noexcept;
+    juce::String getStateXmlString() const;
+    bool setStateFromXmlString(const juce::String& stateXmlString);
 
     void setSelectedRange(size_t rangeIndex) noexcept;
     FftModuleProcessor* getSelectedProcessor() noexcept;

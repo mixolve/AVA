@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../DspUtilities.h"
-#include "../SampleRangeBank.h"
+#include "../shared/DspUtilities.h"
+#include "../shared/SampleRangeBank.h"
 
 #include <JuceHeader.h>
 
@@ -29,22 +29,22 @@ public:
         float leftUpThreshold = 0.0f;
         float leftUpAdaptive = 0.0f;
         float leftUpTension = 0.0f;
-        float leftUpRelease = 0.0f;
+        float leftUpRelease = 10.0f;
         float leftUpOutput = 0.0f;
         float leftDownThreshold = 0.0f;
         float leftDownAdaptive = 0.0f;
         float leftDownTension = 0.0f;
-        float leftDownRelease = 0.0f;
+        float leftDownRelease = 10.0f;
         float leftDownOutput = 0.0f;
         float rightUpThreshold = 0.0f;
         float rightUpAdaptive = 0.0f;
         float rightUpTension = 0.0f;
-        float rightUpRelease = 0.0f;
+        float rightUpRelease = 10.0f;
         float rightUpOutput = 0.0f;
         float rightDownThreshold = 0.0f;
         float rightDownAdaptive = 0.0f;
         float rightDownTension = 0.0f;
-        float rightDownRelease = 0.0f;
+        float rightDownRelease = 10.0f;
         float rightDownOutput = 0.0f;
         float morph = 0.0f;
         float ratio = 100.0f;
@@ -95,7 +95,6 @@ private:
         int adaptiveHoldSamples = 0;
         bool delta = false;
         int lookaheadSamples = 0;
-        int totalLookaheadSamples = 0;
         int bufferSize = 1;
         int dryBufferSize = 1;
         int latencySamples = 0;
@@ -163,4 +162,4 @@ private:
 };
 
 using ProcessorBank = ava::modules::SampleRangeBank<DspCore>;
-} // namespace dyn::dsp
+}

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Processor.h"
-#include "../ProcessorRangeBank.h"
+#include "../shared/ProcessorRangeBank.h"
 
 #include <cstddef>
 
@@ -10,7 +10,7 @@ class EqlProcessorBank final
 public:
     static constexpr size_t numRanges = ava::modules::ProcessorRangeBank<EqlModuleProcessor>::numRanges;
 
-    explicit EqlProcessorBank(juce::AudioProcessor& owner);
+    EqlProcessorBank();
 
     void prepareToPlay(double sampleRate, int samplesPerBlock);
     void releaseResources();
@@ -21,6 +21,9 @@ public:
     void loadInitialFilterPreset();
     size_t ensureRangeCount(size_t rangeCount);
     size_t getCreatedRangeCount() const noexcept;
+    int getRangeActiveFilterCount(size_t rangeIndex) const noexcept;
+    void getStateInformation(juce::MemoryBlock& destData);
+    bool setStateInformation(const void* data, int sizeInBytes);
 
     void setSelectedRange(size_t rangeIndex) noexcept;
     EqlModuleProcessor* getSelectedProcessor() noexcept;

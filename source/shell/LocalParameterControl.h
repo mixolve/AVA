@@ -1,6 +1,6 @@
 #pragma once
 
-#include "UiControls.h"
+#include "Controls.h"
 
 #include <functional>
 #include <memory>
@@ -28,9 +28,7 @@ public:
     void setOverrideText(const juce::String& text);
     void clearOverrideText();
     void setInteractionEnabled(bool shouldEnable);
-    void setValueClickAction(std::function<void()> action);
     juce::Rectangle<int> getValueBounds() const noexcept;
-    void setTitleMouseEnabled(bool shouldEnable);
     void resized() override;
 
     std::function<void()> onValueChanged;
@@ -38,6 +36,7 @@ public:
 private:
     juce::String formatDisplayValue(double value) const;
     juce::String formatEditorValue() const;
+    double parseText(const juce::String& text) const;
 
     double defaultValue = 0.0;
     const int editorDecimals = 2;
@@ -47,7 +46,6 @@ private:
     juce::Slider slider;
     std::unique_ptr<ValueBoxComponent> valueBox;
     juce::String overrideText;
-    std::function<void()> valueClickAction;
     bool interactionEnabled = true;
     bool valueRangeReversed = false;
 };

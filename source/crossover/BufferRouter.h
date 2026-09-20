@@ -72,7 +72,10 @@ public:
         }
 
         soloMask = settings.soloMask;
-        anySoloActive = std::any_of(soloMask.begin(), soloMask.end(), [] (const bool soloed) { return soloed; });
+        const auto activeRangeCount = activeSplitCount + 1;
+        anySoloActive = std::any_of(soloMask.begin(),
+                                    soloMask.begin() + static_cast<std::ptrdiff_t>(activeRangeCount),
+                                    [] (const bool soloed) { return soloed; });
 
         if (splitCountChanged || frequenciesChanged)
         {
@@ -225,4 +228,4 @@ private:
     int targetLatencySamples = 0;
     bool anySoloActive = false;
 };
-} // namespace ava::crossover
+}

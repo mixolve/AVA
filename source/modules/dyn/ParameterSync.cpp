@@ -10,9 +10,9 @@ using dyn::parameters::numParameterSlots;
 using dyn::parameters::parameterSpecs;
 using dyn::parameters::toIndex;
 using dyn::parameters::ParameterSlot;
-} // namespace
+}
 
-void DynAudioProcessor::cacheParameterPointers()
+void DynModuleProcessor::cacheParameterPointers()
 {
     static_assert(numParameterSlots == parameterSpecs.size());
     ava::crossover::parameters::cacheRangeParameterPointers(valueTreeState,
@@ -20,7 +20,7 @@ void DynAudioProcessor::cacheParameterPointers()
                                                             parameterSpecs);
 }
 
-dyn::dsp::DspCore::Parameters DynAudioProcessor::readCrossoverRangeParameters(const size_t rangeIndex) const
+dyn::dsp::DspCore::Parameters DynModuleProcessor::readCrossoverRangeParameters(const size_t rangeIndex) const
 {
     const auto loadFloat = [this, rangeIndex] (const ParameterSlot slot)
     {
@@ -28,7 +28,7 @@ dyn::dsp::DspCore::Parameters DynAudioProcessor::readCrossoverRangeParameters(co
             return value->load();
 
         jassertfalse;
-        return 0.0f;
+        return parameterSpecs[toIndex(slot)].defaultValue;
     };
 
     const auto loadBool = [&loadFloat] (const ParameterSlot slot)
@@ -75,19 +75,12 @@ dyn::dsp::DspCore::Parameters DynAudioProcessor::readCrossoverRangeParameters(co
     return parameters;
 }
 
-bool DynAudioProcessor::syncParameters(const bool force)
+bool DynModuleProcessor::syncParameters(const bool force)
 {
-    if (! force && ! parametersDirty.exchange(false, std::memory_order_acq_rel))
-        return false;
-
-    if (force)
-        parametersDirty.store(false, std::memory_order_release);
-
-    for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
-        currentRangeParameters[rangeIndex] = readCrossoverRangeParameters(rangeIndex);
-
-    processorBank.setRangeParameters(currentRangeParameters);
-    const auto rangeLatencies = processorBank.getRangeLatencies();
-    moduleLatencySamples = *std::max_element(rangeLatencies.begin(), rangeLatencies.end());
-    return true;
+    return ava::crossover::parameters::syncRangeParameters(
+        parametersDirty,
+        force,
+        currentRangeParameters,
+        [this] (const size_t rangeIndex) { return readCrossoverRangeParameters(rangeIndex); },
+        processorBank);
 }

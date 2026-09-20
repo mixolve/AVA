@@ -1,4 +1,5 @@
 #include "PromptComponents.h"
+#include "Controls.h"
 
 #include <utility>
 
@@ -39,7 +40,7 @@ public:
         setInterceptsMouseClicks(true, true);
         choiceViewport.setViewedComponent(&choiceContent, false);
         choiceViewport.setScrollBarsShown(false, false);
-        choiceViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::all);
+        choiceViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
         choiceViewport.setWantsKeyboardFocus(false);
         choiceViewport.setMouseClickGrabsKeyboardFocus(false);
         addAndMakeVisible(choiceViewport);
@@ -234,7 +235,7 @@ private:
     bool initialScrollApplied = false;
     bool closePending = false;
 };
-} // namespace
+}
 
 std::unique_ptr<PromptComponent> makeChoicePrompt(juce::Rectangle<int> anchorBounds,
                                                   juce::StringArray choices,

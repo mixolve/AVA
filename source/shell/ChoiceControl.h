@@ -1,6 +1,6 @@
 #pragma once
 
-#include "EditorControls.h"
+#include "Controls.h"
 
 #include <functional>
 #include <memory>
@@ -24,7 +24,6 @@ public:
     void setSelectedChoiceIndex(int choiceIndex, bool sendNotification);
     void setChoices(const juce::StringArray& choicesIn);
     void setChoiceEnabled(int choiceIndex, bool shouldEnable);
-    void setTitleMouseEnabled(bool shouldEnable);
     void setInteractionEnabled(bool shouldEnable);
     void setOverrideText(const juce::String&);
     void clearOverrideText();

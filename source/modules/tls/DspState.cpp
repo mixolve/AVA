@@ -13,7 +13,7 @@ bool isNear(const double value, const double target) noexcept
 {
     return std::abs(value - target) <= neutralEpsilon;
 }
-} // namespace
+}
 
 int DspCore::msToSamples(const double ms, const double sampleRate) noexcept
 {
@@ -148,8 +148,11 @@ void DspCore::updateDerivedParameters()
         derived.rightDelaySamples = 0;
     }
 
-    const auto phaseL = juce::jlimit(-180.0f, 180.0f, parameters.leftPhase) * (juce::MathConstants<double>::pi / 180.0);
-    const auto phaseR = juce::jlimit(-180.0f, 180.0f, parameters.rightPhase) * (juce::MathConstants<double>::pi / 180.0);
+    const auto stereoPhase = juce::jlimit(-180.0f, 180.0f, parameters.stereoPhase);
+    const auto phaseL = std::remainder(stereoPhase + juce::jlimit(-180.0f, 180.0f, parameters.leftPhase), 360.0f)
+        * (juce::MathConstants<double>::pi / 180.0);
+    const auto phaseR = std::remainder(stereoPhase + juce::jlimit(-180.0f, 180.0f, parameters.rightPhase), 360.0f)
+        * (juce::MathConstants<double>::pi / 180.0);
     derived.phaseEnabled = std::abs(phaseL) > neutralEpsilon || std::abs(phaseR) > neutralEpsilon;
     derived.latencySamples = lookaheadSamples + (derived.phaseEnabled ? phaseFilterLatency : 0);
     derived.leftPhaseCosine = std::cos(phaseL);
@@ -185,4 +188,4 @@ bool DspCore::isNeutral() const noexcept
         && ! derived.delayEnabled
         && ! derived.phaseEnabled;
 }
-} // namespace tls::dsp
+}

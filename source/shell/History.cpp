@@ -1,6 +1,6 @@
-#include "EditorFilterSection.h"
-#include "EditorState.h"
-#include "../modules/eql/ProcessorSupport.h"
+#include "Editor.h"
+#include "FilterSection.h"
+#include "WindowState.h"
 
 void AvaAudioProcessorEditor::scheduleHistorySnapshot()
 {
@@ -17,7 +17,7 @@ void AvaAudioProcessorEditor::commitPendingHistorySnapshot(const bool force)
     if (! pendingHistorySnapshot.load(std::memory_order_relaxed) || suppressHistorySnapshots)
         return;
 
-    constexpr uint32 snapshotDebounceMs = 300;
+    constexpr juce::uint32 snapshotDebounceMs = 300;
     const auto now = juce::Time::getMillisecondCounter();
     const auto lastChange = lastHistoryChangeTimeMs.load(std::memory_order_relaxed);
 
@@ -48,15 +48,15 @@ void AvaAudioProcessorEditor::commitPendingHistorySnapshot(const bool force)
     updateUndoRedoButtons();
 }
 
-void AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snapshot)
+bool AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snapshot)
 {
     if (snapshot.isEmpty())
-        return;
+        return false;
 
     auto mergedStateXml = AvaAudioProcessor::getXmlFromBinary(snapshot.getData(), static_cast<int>(snapshot.getSize()));
 
     if (mergedStateXml == nullptr || ! mergedStateXml->hasTagName(valueTreeState.state.getType().toString()))
-        return;
+        return false;
 
     preserveEditorWindowState(*mergedStateXml, valueTreeState.state);
 
@@ -81,10 +81,14 @@ void AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snap
     const juce::ScopedValueSetter<bool> suppressHostSlotSync(suppressHostSlotAutomationSync, true);
     pendingHistorySnapshot.store(false, std::memory_order_relaxed);
     detachModuleEditorBindings();
-    if (! audioProcessor.setStateInformationPreservingLoadedModule(mergedSnapshot.getData(),
-                                                                    static_cast<int>(mergedSnapshot.getSize())))
+    if (! audioProcessor.applyHistoryStateInformation(mergedSnapshot.getData(),
+                                                      static_cast<int>(mergedSnapshot.getSize())))
     {
-        audioProcessor.setStateInformation(mergedSnapshot.getData(), static_cast<int>(mergedSnapshot.getSize()));
+        restoreEditorStateFromValueTree();
+        ensureModuleTitle();
+        updateSectionStates();
+        resized();
+        return false;
     }
     if (bypassParameter != nullptr)
         bypassParameter->setValueNotifyingHost(preservedBypassValue);
@@ -92,10 +96,10 @@ void AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snap
     restoreEditorStateFromValueTree();
     ensureModuleTitle();
     if (auto* eqlProcessor = getActiveEqlProcessor())
-        refreshFilterPresetList(eqlProcessor->getLastFilterPresetName());
+        refreshFilterPresetList(eqlProcessor->getSelectedFilterPresetName());
     else
         refreshFilterPresetList({});
-    reloadFilterPresetFromProcessor();
+    refreshEqlFilterSectionsFromProcessor();
 
     hostParametersExpanded = preservedUiState.hostParameters;
 
@@ -107,8 +111,9 @@ void AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snap
     const auto filterMaxOffset = juce::jmax(0, getActiveFilterContentHeight() - filterViewport.getHeight());
     filterViewport.setViewPosition(0, juce::jlimit(0, filterMaxOffset, preservedUiState.filterScrollY));
 
-    audioProcessor.getStateInformation(committedHistorySnapshot);
+    audioProcessor.getStateInformationForABCompareSnapshot(committedHistorySnapshot);
     updateUndoRedoButtons();
+    return true;
 }
 
 void AvaAudioProcessorEditor::refreshEqlFilterSectionsFromProcessor()
@@ -120,12 +125,7 @@ void AvaAudioProcessorEditor::refreshEqlFilterSectionsFromProcessor()
         if (section == nullptr)
             continue;
 
-        const auto loadedType = section->getFilterType();
-        section->lastFilterType = loadedType;
-        section->slopeControl->setChoices(getBellSlopeDisplayChoicesForType(loadedType));
-        section->slopeControl->setChoiceEnabled(0, loadedType != EqlModuleProcessor::FilterType::bell);
-        section->updatePlaceChoicesForType(true);
-        section->captureCurrentValuesForCurrentType(true);
+        section->refreshTypeDependentControls();
     }
 }
 
@@ -148,57 +148,46 @@ void AvaAudioProcessorEditor::updateUndoRedoButtons()
     refreshABCompareButton();
 }
 
-void AvaAudioProcessorEditor::resetFilterSectionStoredValues(const int filterIndex)
+void AvaAudioProcessorEditor::resetFilterSectionUiState(const int filterIndex)
 {
     if (! juce::isPositiveAndBelow(filterIndex, static_cast<int>(filterSections.size())))
         return;
 
-    auto* section = filterSections[static_cast<size_t>(filterIndex)].get();
-
-    if (section == nullptr)
-        return;
-
-    for (const auto filterType : AvaAudioProcessor::filterTypePresetOrder)
-    {
-        section->setStoredValues(filterType,
-                                 defaultFilterFrequency(),
-                                 defaultFilterBandwidth(),
-                                 defaultFilterSlope(),
-                                 0,
-                                 false);
-    }
-
-    section->lastFilterType = section->getFilterType();
-    section->expanded = false;
-    section->captureCurrentValuesForCurrentType(true);
+    if (auto* section = filterSections[static_cast<size_t>(filterIndex)].get())
+        section->expanded = false;
 }
 
-void AvaAudioProcessorEditor::removeFilterSectionStoredValues(const int removedIndex, const int previousCount)
+void AvaAudioProcessorEditor::removeFilterSectionUiState(const int removedIndex, const int previousCount)
 {
     if (previousCount <= 0)
         return;
 
     if (previousCount == 1)
     {
-        resetFilterSectionStoredValues(0);
+        resetFilterSectionUiState(0);
         return;
     }
 
     for (int sourceIndex = removedIndex + 1; sourceIndex < previousCount; ++sourceIndex)
-        filterSections[static_cast<size_t>(sourceIndex - 1)]->copyStoredValuesFrom(*filterSections[static_cast<size_t>(sourceIndex)]);
+    {
+        auto* target = filterSections[static_cast<size_t>(sourceIndex - 1)].get();
+        const auto* source = filterSections[static_cast<size_t>(sourceIndex)].get();
+
+        if (target != nullptr && source != nullptr)
+            target->expanded = source->expanded;
+    }
 
     std::vector<int> reorderedOrder;
     reorderedOrder.reserve(static_cast<size_t>(previousCount - 1));
 
     for (int orderIndex = 0; orderIndex < previousCount; ++orderIndex)
     {
-        const auto orderFilterIndex = filterDisplayOrder[static_cast<size_t>(orderIndex)];
+        const auto filterIndex = filterDisplayOrder[static_cast<size_t>(orderIndex)];
 
-        if (orderFilterIndex == removedIndex)
+        if (filterIndex == removedIndex)
             continue;
 
-        reorderedOrder.push_back(orderFilterIndex > removedIndex ? orderFilterIndex - 1
-                                                               : orderFilterIndex);
+        reorderedOrder.push_back(filterIndex > removedIndex ? filterIndex - 1 : filterIndex);
     }
 
     for (size_t orderIndex = 0; orderIndex < reorderedOrder.size(); ++orderIndex)
@@ -206,13 +195,10 @@ void AvaAudioProcessorEditor::removeFilterSectionStoredValues(const int removedI
 
     for (int orderIndex = static_cast<int>(reorderedOrder.size()); orderIndex < previousCount; ++orderIndex)
     {
-        const auto orderFilterIndex = filterDisplayOrder[static_cast<size_t>(orderIndex)];
-
-        filterDisplayOrder[static_cast<size_t>(orderIndex)] = orderFilterIndex > removedIndex
-            ? orderFilterIndex - 1
-            : orderFilterIndex;
+        const auto filterIndex = filterDisplayOrder[static_cast<size_t>(orderIndex)];
+        filterDisplayOrder[static_cast<size_t>(orderIndex)] = filterIndex > removedIndex ? filterIndex - 1 : filterIndex;
     }
 
-    resetFilterSectionStoredValues(previousCount - 1);
+    resetFilterSectionUiState(previousCount - 1);
     storeEditorStateToValueTree();
 }

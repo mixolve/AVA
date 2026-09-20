@@ -1,4 +1,4 @@
-#include "ProcessorSupport.h"
+#include "FilterSupport.h"
 
 #include <cmath>
 
@@ -61,8 +61,8 @@ void EqlModuleProcessor::updateFilters()
                            filterFrequencyParams[filterArrayIndex]->load(std::memory_order_relaxed))
             : defaultFilterFrequencyHz;
         const auto designFrequency = computeDesignFrequency(static_cast<double>(frequency), currentSampleRate);
-        const auto slope = filterSlopeChoiceParams[filterArrayIndex] != nullptr
-            ? static_cast<float>(EqlModuleProcessor::getBellSlopeValueForChoiceIndex(filterSlopeChoiceParams[filterArrayIndex]->getIndex()))
+        const auto slope = filterOrderParams[filterArrayIndex] != nullptr
+            ? static_cast<float>(EqlModuleProcessor::getSlopeDbPerOctForOrderChoice(filterOrderParams[filterArrayIndex]->getIndex()))
             : EqlModuleProcessor::fixedSlopeDbPerOct;
         const auto bandwidth = filterBandwidthParams[filterArrayIndex] != nullptr
             ? juce::jlimit(minimumBellBandwidth,

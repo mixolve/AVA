@@ -1,6 +1,8 @@
 #include "Processor.h"
+#include "../shared/StateUtilities.h"
 #include "../../crossover/ParameterIds.h"
-#include "../DspUtilities.h"
+#include "../../crossover/UiState.h"
+#include "../shared/DspUtilities.h"
 
 #include <array>
 #include <cmath>
@@ -20,21 +22,21 @@ struct ParameterOrderEntry
 };
 
 inline constexpr auto trsCrossoverOrder = std::to_array<ParameterOrderEntry>({
-    { TrsModuleProcessor::paramTransOnId, "TRANSIENT / MUTE" },
-    { TrsModuleProcessor::paramSusOnId, "SUSTAIN / MUTE" },
-    { TrsModuleProcessor::paramTransGainId, "TRANSIENT / GAIN" },
-    { TrsModuleProcessor::paramSusGainId, "SUSTAIN / GAIN" },
-    { TrsModuleProcessor::paramTimeHoldId, "HOLD" },
-    { TrsModuleProcessor::paramTimeHoldModeId, "HOLD-TYPE" },
-    { TrsModuleProcessor::paramTimeHoldSyncId, "HOLD" },
-    { TrsModuleProcessor::paramTimeReleaseId, "RELEASE" },
-    { TrsModuleProcessor::paramTimeReleaseModeId, "REL-TYPE" },
-    { TrsModuleProcessor::paramTimeReleaseSyncId, "RELEASE" },
-    { TrsModuleProcessor::paramTimeReleaseCurveId, "REL-CURVE" },
-    { TrsModuleProcessor::paramSensThresholdId, "THRESH" },
-    { TrsModuleProcessor::paramSensKneeId, "KNEE" },
-    { TrsModuleProcessor::paramSensRetriggerId, "RETRIGGER" },
-    { TrsModuleProcessor::paramSensOneShotId, "ONE-SHOT" },
+    { TrsModuleProcessor::paramTransientEnabledId, "TRANSIENT / MUTE" },
+    { TrsModuleProcessor::paramSustainEnabledId, "SUSTAIN / MUTE" },
+    { TrsModuleProcessor::paramTransientGainId, "TRANSIENT / GAIN" },
+    { TrsModuleProcessor::paramSustainGainId, "SUSTAIN / GAIN" },
+    { TrsModuleProcessor::paramHoldId, "HOLD" },
+    { TrsModuleProcessor::paramHoldModeId, "HOLD-TYPE" },
+    { TrsModuleProcessor::paramHoldSyncId, "HOLD" },
+    { TrsModuleProcessor::paramReleaseId, "RELEASE" },
+    { TrsModuleProcessor::paramReleaseModeId, "REL-TYPE" },
+    { TrsModuleProcessor::paramReleaseSyncId, "RELEASE" },
+    { TrsModuleProcessor::paramReleaseCurveId, "REL-CURVE" },
+    { TrsModuleProcessor::paramThresholdId, "THRESH" },
+    { TrsModuleProcessor::paramKneeId, "KNEE" },
+    { TrsModuleProcessor::paramRetriggerId, "RETRIGGER" },
+    { TrsModuleProcessor::paramOneShotId, "ONE-SHOT" },
     { TrsModuleProcessor::paramLookaheadId, "LOOKAHEAD" },
 });
 
@@ -57,11 +59,6 @@ juce::String formatTimeValue(const float value)
     return juce::String::formatted("%.2f ms", static_cast<double>(value));
 }
 
-juce::String formatLookaheadValue(const float value)
-{
-    return juce::String::formatted("%.2f ms", static_cast<double>(value));
-}
-
 juce::String formatCurveValue(const float value)
 {
     return juce::String::formatted("%.2f", static_cast<double>(value));
@@ -72,9 +69,9 @@ float getParameterValue(const std::atomic<float>* parameter, const float fallbac
     return parameter != nullptr ? parameter->load(std::memory_order_relaxed) : fallback;
 }
 
-bool isEnabled(const std::atomic<float>* parameter) noexcept
+bool isEnabled(const std::atomic<float>* parameter, const bool fallback) noexcept
 {
-    return getParameterValue(parameter, 0.0f) >= 0.5f;
+    return getParameterValue(parameter, fallback ? 1.0f : 0.0f) >= 0.5f;
 }
 
 float getHostSyncMilliseconds(const int choiceIndex, const double bpm, const int typeIndex) noexcept
@@ -92,11 +89,11 @@ float getHostSyncMilliseconds(const int choiceIndex, const double bpm, const int
 
     return baseMilliseconds;
 }
-} // namespace
+}
 
 TrsModuleProcessor::TrsModuleProcessor(juce::AudioProcessor& owner)
     : ownerProcessor(owner),
-      parameters(parameterHost, nullptr, "trs_state", createParameterLayout())
+      parameters(moduleParameterHost, nullptr, "trs_state", createParameterLayout())
 {
     cacheParameterPointers();
 }
@@ -145,19 +142,26 @@ juce::String TrsModuleProcessor::getStateXmlString() const
     return {};
 }
 
-void TrsModuleProcessor::setStateFromXmlString(const juce::String& stateXmlString)
+bool TrsModuleProcessor::setStateFromXmlString(const juce::String& stateXmlString)
 {
     if (stateXmlString.trim().isEmpty())
-        return;
+        return false;
 
     auto stateXml = juce::parseXML(stateXmlString);
 
-    if (stateXml == nullptr || ! stateXml->hasTagName(parameters.state.getType()))
-        return;
+    if (stateXml == nullptr)
+        return false;
 
-    parameters.replaceState(juce::ValueTree::fromXml(*stateXml));
+    auto restoredState = juce::ValueTree::fromXml(*stateXml);
+
+    if (! ava::modules::state::hasExactParameterState(restoredState, parameters)
+        || ! crossover_ui::hasCurrentStateProperties(restoredState, "trs"))
+        return false;
+
+    parameters.replaceState(restoredState);
     cacheParameterPointers();
     syncParameters();
+    return true;
 }
 
 int TrsModuleProcessor::getLatencySamples() const noexcept
@@ -278,16 +282,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
         {
             const auto key = juce::String(entry.key);
             const auto id = makeRangeParameterId(rangeIndex, entry.key);
-            const auto name = "TRS / CROSSOVER " + juce::String(static_cast<int>(rangeIndex + 1))
+            const auto name = "TRS / RANGE " + juce::String(static_cast<int>(rangeIndex + 1))
                 + " / TRANSIENT PROCESSOR / " + juce::String(entry.label);
 
-            if (key == paramTransOnId || key == paramSusOnId)
+            if (key == paramTransientEnabledId || key == paramSustainEnabledId)
             {
                 crossoverGroup->addChild(boolParam(id, name, true));
                 continue;
             }
 
-            if (key == paramTransGainId || key == paramSusGainId)
+            if (key == paramTransientGainId || key == paramSustainGainId)
             {
                 crossoverGroup->addChild(floatParam(id,
                                                name,
@@ -297,7 +301,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
                 continue;
             }
 
-            if (key == paramTimeHoldId)
+            if (key == paramHoldId)
             {
                 crossoverGroup->addChild(floatParam(id,
                                                name,
@@ -307,19 +311,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
                 continue;
             }
 
-            if (key == paramTimeHoldModeId || key == paramTimeReleaseModeId)
+            if (key == paramHoldModeId || key == paramReleaseModeId)
             {
                 crossoverGroup->addChild(choiceParam(id, name, timeModeChoices, 0));
                 continue;
             }
 
-            if (key == paramTimeHoldSyncId || key == paramTimeReleaseSyncId)
+            if (key == paramHoldSyncId || key == paramReleaseSyncId)
             {
                 crossoverGroup->addChild(choiceParam(id, name, getHostSyncChoices(), getDefaultHostSyncChoiceIndex()));
                 continue;
             }
 
-            if (key == paramTimeReleaseId)
+            if (key == paramReleaseId)
             {
                 crossoverGroup->addChild(floatParam(id,
                                                name,
@@ -329,7 +333,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
                 continue;
             }
 
-            if (key == paramTimeReleaseCurveId)
+            if (key == paramReleaseCurveId)
             {
                 crossoverGroup->addChild(floatParam(id,
                                                name,
@@ -339,7 +343,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
                 continue;
             }
 
-            if (key == paramSensThresholdId)
+            if (key == paramThresholdId)
             {
                 crossoverGroup->addChild(floatParam(id,
                                                name,
@@ -349,7 +353,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
                 continue;
             }
 
-            if (key == paramSensKneeId)
+            if (key == paramKneeId)
             {
                 crossoverGroup->addChild(floatParam(id,
                                                name,
@@ -359,7 +363,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
                 continue;
             }
 
-            if (key == paramSensRetriggerId)
+            if (key == paramRetriggerId)
             {
                 crossoverGroup->addChild(floatParam(id,
                                                name,
@@ -369,7 +373,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
                 continue;
             }
 
-            if (key == paramSensOneShotId)
+            if (key == paramOneShotId)
             {
                 crossoverGroup->addChild(boolParam(id, name, false));
                 continue;
@@ -381,7 +385,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
                                                name,
                                                juce::NormalisableRange<float> { 0.0f, 20.0f, 0.01f },
                                                1.0f,
-                                               [] (float value, int) { return formatLookaheadValue(value); }));
+                                               [] (float value, int) { return formatTimeValue(value); }));
             }
         }
 
@@ -396,30 +400,29 @@ void TrsModuleProcessor::cacheParameterPointers()
     for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
     {
         auto& crossover = rawRangeParameters[rangeIndex];
-        crossover.transOn = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTransOnId));
-        crossover.transGain = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTransGainId));
-        crossover.sustainOn = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSusOnId));
-        crossover.sustainGain = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSusGainId));
-        crossover.hold = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeHoldId));
-        crossover.holdMode = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeHoldModeId));
-        crossover.holdSync = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeHoldSyncId));
-        crossover.release = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeReleaseId));
-        crossover.releaseCurve = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeReleaseCurveId));
-        crossover.releaseMode = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeReleaseModeId));
-        crossover.releaseSync = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTimeReleaseSyncId));
-        crossover.threshold = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSensThresholdId));
-        crossover.knee = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSensKneeId));
-        crossover.retrigger = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSensRetriggerId));
-        crossover.oneShot = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSensOneShotId));
+        crossover.transientEnabled = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTransientEnabledId));
+        crossover.transientGain = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTransientGainId));
+        crossover.sustainEnabled = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSustainEnabledId));
+        crossover.sustainGain = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSustainGainId));
+        crossover.hold = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramHoldId));
+        crossover.holdMode = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramHoldModeId));
+        crossover.holdSync = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramHoldSyncId));
+        crossover.release = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramReleaseId));
+        crossover.releaseCurve = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramReleaseCurveId));
+        crossover.releaseMode = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramReleaseModeId));
+        crossover.releaseSync = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramReleaseSyncId));
+        crossover.threshold = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramThresholdId));
+        crossover.knee = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramKneeId));
+        crossover.retrigger = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramRetriggerId));
+        crossover.oneShot = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramOneShotId));
         crossover.lookahead = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramLookaheadId));
     }
 
 }
 
-trs::dsp::DspCore::Parameters TrsModuleProcessor::readCrossoverRangeParameters(const size_t rangeIndex) const noexcept
+trs::dsp::DspCore::Parameters TrsModuleProcessor::readCrossoverRangeParameters(const size_t rangeIndex, const double hostBpm) const noexcept
 {
     const auto& crossover = rawRangeParameters[juce::jmin(rangeIndex, numRanges - 1)];
-    const auto hostBpm = getHostBpm();
     const auto holdType = static_cast<int>(std::round(getParameterValue(crossover.holdMode, 0.0f)));
     const auto releaseType = static_cast<int>(std::round(getParameterValue(crossover.releaseMode, 0.0f)));
     const auto holdHostSync = holdType > 0;
@@ -430,9 +433,9 @@ trs::dsp::DspCore::Parameters TrsModuleProcessor::readCrossoverRangeParameters(c
                                                                                  static_cast<float>(getDefaultHostSyncChoiceIndex()))));
 
     trs::dsp::DspCore::Parameters result;
-    result.transEnabled = isEnabled(crossover.transOn);
-    result.sustainEnabled = isEnabled(crossover.sustainOn);
-    result.transGainDb = juce::jlimit(gainMinDb, gainMaxDb, getParameterValue(crossover.transGain, 0.0f));
+    result.transientEnabled = isEnabled(crossover.transientEnabled, true);
+    result.sustainEnabled = isEnabled(crossover.sustainEnabled, true);
+    result.transientGainDb = juce::jlimit(gainMinDb, gainMaxDb, getParameterValue(crossover.transientGain, 0.0f));
     result.sustainGainDb = juce::jlimit(gainMinDb, gainMaxDb, getParameterValue(crossover.sustainGain, 0.0f));
     result.holdMs = holdHostSync ? getHostSyncMilliseconds(holdSyncIndex, hostBpm, holdType)
                                  : juce::jlimit(0.0f, 200.0f, getParameterValue(crossover.hold, 0.0f));
@@ -442,15 +445,17 @@ trs::dsp::DspCore::Parameters TrsModuleProcessor::readCrossoverRangeParameters(c
     result.thresholdDb = juce::jlimit(-48.0f, 0.0f, getParameterValue(crossover.threshold, -48.0f));
     result.kneeDb = juce::jlimit(0.0f, 24.0f, getParameterValue(crossover.knee, 0.0f));
     result.retriggerMs = juce::jlimit(1.0f, 5000.0f, getParameterValue(crossover.retrigger, 1.0f));
-    result.oneShot = isEnabled(crossover.oneShot);
+    result.oneShot = isEnabled(crossover.oneShot, false);
     result.lookaheadMs = juce::jlimit(0.0f, 20.0f, getParameterValue(crossover.lookahead, 1.0f));
     return result;
 }
 
 void TrsModuleProcessor::syncParameters()
 {
+    const auto hostBpm = getHostBpm();
+
     for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
-        currentRangeParameters[rangeIndex] = readCrossoverRangeParameters(rangeIndex);
+        currentRangeParameters[rangeIndex] = readCrossoverRangeParameters(rangeIndex, hostBpm);
 
     processorBank.setRangeParameters(currentRangeParameters);
     const auto rangeLatencies = processorBank.getRangeLatencies();

@@ -1,4 +1,5 @@
 #include "PromptComponents.h"
+#include "Controls.h"
 
 #include <utility>
 
@@ -165,7 +166,7 @@ private:
     CloseCallback onClose;
     bool closePending = false;
 };
-} // namespace
+}
 
 std::unique_ptr<PromptComponent> makeTextPrompt(juce::String currentText,
                                                 std::function<bool(const juce::String&)> onCommit,

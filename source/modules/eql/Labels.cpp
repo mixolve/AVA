@@ -1,4 +1,4 @@
-#include "ProcessorSupport.h"
+#include "FilterSupport.h"
 
 #include <array>
 #include <cmath>
@@ -6,7 +6,7 @@
 
 namespace
 {
-constexpr std::array<float, 6> bellSlopeValues
+constexpr std::array<float, 6> orderSlopeDbPerOctValues
 {
     6.0f,
     12.0f,
@@ -17,33 +17,33 @@ constexpr std::array<float, 6> bellSlopeValues
 };
 }
 
-juce::StringArray EqlModuleProcessor::getBellSlopeChoices() noexcept
+juce::StringArray EqlModuleProcessor::getFilterOrderChoices() noexcept
 {
     return { "01", "02", "04", "08", "16", "++" };
 }
 
-float EqlModuleProcessor::getBellSlopeValueForChoiceIndex(const int choiceIndex) noexcept
+float EqlModuleProcessor::getSlopeDbPerOctForOrderChoice(const int choiceIndex) noexcept
 {
-    if (! juce::isPositiveAndBelow(choiceIndex, static_cast<int>(bellSlopeValues.size())))
+    if (! juce::isPositiveAndBelow(choiceIndex, static_cast<int>(orderSlopeDbPerOctValues.size())))
         return fixedSlopeDbPerOct;
 
-    return bellSlopeValues[static_cast<size_t>(choiceIndex)];
+    return orderSlopeDbPerOctValues[static_cast<size_t>(choiceIndex)];
 }
 
-int EqlModuleProcessor::getBellSlopeChoiceIndexForValue(const float slope) noexcept
+int EqlModuleProcessor::getOrderChoiceForSlopeDbPerOct(const float slope) noexcept
 {
     if (! std::isfinite(slope))
-        return juce::jlimit(0, static_cast<int>(bellSlopeValues.size()) - 1, 3);
+        return juce::jlimit(0, static_cast<int>(orderSlopeDbPerOctValues.size()) - 1, 3);
 
     if (slope > 96.0f)
-        return static_cast<int>(bellSlopeValues.size()) - 1;
+        return static_cast<int>(orderSlopeDbPerOctValues.size()) - 1;
 
     auto bestIndex = 0;
     auto bestDistance = std::numeric_limits<float>::max();
 
-    for (int index = 0; index < static_cast<int>(bellSlopeValues.size()) - 1; ++index)
+    for (int index = 0; index < static_cast<int>(orderSlopeDbPerOctValues.size()) - 1; ++index)
     {
-        const auto distance = std::abs(bellSlopeValues[static_cast<size_t>(index)] - slope);
+        const auto distance = std::abs(orderSlopeDbPerOctValues[static_cast<size_t>(index)] - slope);
 
         if (distance < bestDistance)
         {
@@ -75,9 +75,9 @@ juce::String EqlModuleProcessor::getFilterBandwidthParamId(const int filterIndex
     return makeFilterParameterId("bandwidth", filterIndex);
 }
 
-juce::String EqlModuleProcessor::getFilterSlopeParamId(const int filterIndex)
+juce::String EqlModuleProcessor::getFilterOrderParamId(const int filterIndex)
 {
-    return makeFilterParameterId("slope", filterIndex);
+    return makeFilterParameterId("order", filterIndex);
 }
 
 juce::String EqlModuleProcessor::getFilterGainParamId(const int filterIndex)
@@ -145,7 +145,7 @@ juce::String EqlModuleProcessor::getFilterHeaderText(const int filterIndex, cons
                                    static_cast<int>(std::lround(frequency)));
 }
 
-juce::StringArray getBellSlopeDisplayChoicesForType(const EqlModuleProcessor::FilterType type) noexcept
+juce::StringArray getOrderDisplayChoicesForType(const EqlModuleProcessor::FilterType type) noexcept
 {
     if (type == EqlModuleProcessor::FilterType::bell)
         return { "OFF", "02", "04", "08", "16", "++" };
