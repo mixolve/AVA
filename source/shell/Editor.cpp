@@ -347,7 +347,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
 
     footerTab = std::make_unique<BoxTextButton>(uiAccent);
     footerTab->setButtonText({});
-    footerTab->setSystemSymbol("info.circle");
+    footerTab->setTablerIcon("info-circle");
     footerTab->onClick = [this]
     {
         showInfoPrompt(shell_setup_support::getMixolveInfoMarkdown());

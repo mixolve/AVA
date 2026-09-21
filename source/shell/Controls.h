@@ -154,7 +154,7 @@ public:
     void setBorderVisible(bool shouldShow) noexcept;
     void setCancelClickOnLeave(bool shouldEnable) noexcept;
     void setHorizontalBidirectionalArrowVisible(bool shouldShow) noexcept;
-    void setSystemSymbol(const char* symbolName);
+    void setTablerIcon(const char* iconName);
     bool usesIconOnlyContent() const noexcept;
     void setTextColourOverride(juce::Colour colour);
     void clearTextColourOverride();
@@ -201,7 +201,7 @@ private:
     bool borderVisible = true;
     bool horizontalBidirectionalArrowVisible = false;
     juce::Image horizontalBidirectionalArrowImage;
-    juce::Image systemSymbolImage;
+    juce::Image tablerIconImage;
     bool hasTextColourOverride = false;
     juce::Colour textColourOverride;
     bool dragTargetOutlineVisible = false;

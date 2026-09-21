@@ -72,10 +72,10 @@ CrossoverRangePage::ParameterRow::ParameterRow(CrossoverRangePage& pageIn,
         auxiliaryToggle = makeTextButton(spec.auxiliaryToggleLabel);
         auxiliaryToggle->setClickingTogglesState(! auxiliaryToggleInverted);
 
-        if (spec.auxiliaryToggleSymbol != nullptr
-            && juce::String(spec.auxiliaryToggleSymbol).isNotEmpty())
+        if (spec.auxiliaryToggleIcon != nullptr
+            && juce::String(spec.auxiliaryToggleIcon).isNotEmpty())
         {
-            auxiliaryToggle->setSystemSymbol(spec.auxiliaryToggleSymbol);
+            auxiliaryToggle->setTablerIcon(spec.auxiliaryToggleIcon);
         }
 
         if (auxiliaryToggleInverted)
@@ -522,4 +522,3 @@ void CrossoverRangePage::TimeRow::updateModeControl()
         control->setInteractionEnabled(true);
     }
 }
-

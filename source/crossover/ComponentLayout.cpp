@@ -25,20 +25,28 @@ void CrossoverModuleComponent::resized()
         auto monitorRow = bounds.removeFromTop(rowHeight);
         const auto buttonCount = static_cast<int>(monitorButtons.size());
         const auto totalGapWidth = parameterGap * (buttonCount - 1);
-        const auto baseButtonWidth = (monitorRow.getWidth() - totalGapWidth) / buttonCount;
-        auto remainder = (monitorRow.getWidth() - totalGapWidth) - (baseButtonWidth * buttonCount);
+        const auto rangeButtonCount = buttonCount - 1;
+        const auto rangeButtonsWidth = juce::jmax(0, monitorRow.getWidth() - totalGapWidth - iconControlSize);
+        const auto baseButtonWidth = rangeButtonsWidth / rangeButtonCount;
+        auto remainder = rangeButtonsWidth - baseButtonWidth * rangeButtonCount;
 
-        for (auto& button : monitorButtons)
+        for (int index = 0; index < buttonCount; ++index)
         {
-            const auto buttonWidth = baseButtonWidth + (remainder > 0 ? 1 : 0);
+            const auto isSettingsButton = index == rangeButtonCount;
+            const auto buttonWidth = isSettingsButton
+                ? iconControlSize
+                : baseButtonWidth + (remainder > 0 ? 1 : 0);
 
-            if (button != nullptr)
+            if (auto& button = monitorButtons[static_cast<size_t>(index)])
                 button->setBounds(monitorRow.removeFromLeft(buttonWidth));
             else
                 monitorRow.removeFromLeft(buttonWidth);
 
-            monitorRow.removeFromLeft(parameterGap);
-            remainder = juce::jmax(0, remainder - 1);
+            if (! isSettingsButton)
+            {
+                monitorRow.removeFromLeft(parameterGap);
+                remainder = juce::jmax(0, remainder - 1);
+            }
         }
 
         if (! bounds.isEmpty())
@@ -258,4 +266,3 @@ void CrossoverModuleComponent::updatePageViewport()
     pageViewport.setViewPosition(0, juce::jlimit(0, maxScrollY, previousScrollY));
     pageScrollRestored = true;
 }
-

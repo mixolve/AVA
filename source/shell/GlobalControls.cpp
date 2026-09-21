@@ -26,7 +26,7 @@ void AvaAudioProcessorEditor::setupShellControls()
     undoButton = std::make_unique<BoxTextButton>(uiGrey500);
     undoButton->setButtonText("U");
     undoButton->setTextJustification(juce::Justification::centred);
-    undoButton->setSystemSymbol("arrow.uturn.backward");
+    undoButton->setTablerIcon("arrow-back-up");
     undoButton->onClick = [this]
     {
         performUndo();
@@ -37,7 +37,7 @@ void AvaAudioProcessorEditor::setupShellControls()
     redoButton = std::make_unique<BoxTextButton>(uiGrey500);
     redoButton->setButtonText("R");
     redoButton->setTextJustification(juce::Justification::centred);
-    redoButton->setSystemSymbol("arrow.uturn.forward");
+    redoButton->setTablerIcon("arrow-forward-up");
     redoButton->onClick = [this]
     {
         performRedo();

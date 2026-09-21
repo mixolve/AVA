@@ -77,6 +77,7 @@ juce::String firstPresetName(const juce::XmlElement& presetsXml)
 
     return {};
 }
+
 }
 
 namespace eql_presets
@@ -85,14 +86,13 @@ void ensureDefaultPresetExists(EqlModuleProcessor& processor)
 {
     auto presetsXml = loadFilterPresetsXml();
 
-    if (presetsXml != nullptr)
-    {
-        if (getStoredDefaultPresetName(*presetsXml).isNotEmpty())
-            return;
+    if (presetsXml != nullptr && getStoredDefaultPresetName(*presetsXml).isNotEmpty())
+        return;
 
-        // Do not inject a default into existing collections that predate default metadata.
-        if (countPresets(*presetsXml) > 0)
-            return;
+    if (presetsXml != nullptr && findPresetElement(*presetsXml, "default") != nullptr)
+    {
+        processor.setDefaultFilterPreset("default");
+        return;
     }
 
     if (processor.saveFilterPreset("default"))

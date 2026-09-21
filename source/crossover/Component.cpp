@@ -77,7 +77,7 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
     if (config.showCrossoverNavigation)
     {
         auto allButton = makeTextButton({});
-        allButton->setSystemSymbol("gearshape");
+        allButton->setTablerIcon("settings");
         allButton->setClickingTogglesState(false);
         allButton->onClick = [this] { showCrossoverSettings(); };
         addAndMakeVisible(*allButton);
@@ -105,4 +105,3 @@ CrossoverModuleComponent::~CrossoverModuleComponent()
         removeChildComponent(pinnedTailComponent);
     pageViewport.setViewedComponent(nullptr, false);
 }
-

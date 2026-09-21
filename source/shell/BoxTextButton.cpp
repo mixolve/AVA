@@ -1,5 +1,5 @@
 #include "Controls.h"
-#include "SystemSymbols.h"
+#include "TablerIcons.h"
 
 #include <utility>
 
@@ -53,20 +53,20 @@ void BoxTextButton::setHorizontalBidirectionalArrowVisible(const bool shouldShow
     horizontalBidirectionalArrowVisible = shouldShow;
 
     if (shouldShow && horizontalBidirectionalArrowImage.isNull())
-        horizontalBidirectionalArrowImage = loadSystemSymbolImage("arrow.left.arrow.right", iconGlyphSize);
+        horizontalBidirectionalArrowImage = loadTablerIcon("arrows-left-right", iconGlyphSize);
 
     repaint();
 }
 
-void BoxTextButton::setSystemSymbol(const char* symbolName)
+void BoxTextButton::setTablerIcon(const char* iconName)
 {
-    systemSymbolImage = loadSystemSymbolImage(symbolName, iconGlyphSize);
+    tablerIconImage = loadTablerIcon(iconName, iconGlyphSize);
     repaint();
 }
 
 bool BoxTextButton::usesIconOnlyContent() const noexcept
 {
-    return systemSymbolImage.isValid()
+    return tablerIconImage.isValid()
         || (horizontalBidirectionalArrowVisible && getButtonText().isEmpty());
 }
 
@@ -384,13 +384,12 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
         .withSizeKeepingCentre(static_cast<int>(iconGlyphSize), static_cast<int>(iconGlyphSize))
         .toFloat();
 
-    if (systemSymbolImage.isValid())
+    if (tablerIconImage.isValid())
     {
-        graphics.setColour(interactionHighlight ? uiBlack : uiWhite);
-        graphics.drawImage(systemSymbolImage,
-                           iconBounds,
-                           juce::RectanglePlacement::centred,
-                           true);
+        juce::DrawableImage drawable;
+        drawable.setImage(tablerIconImage);
+        drawable.setOverlayColour(interactionHighlight ? uiBlack : uiWhite);
+        drawable.drawWithin(graphics, iconBounds, juce::RectanglePlacement::centred, 1.0f);
         drawBottomDivider();
         return;
     }
@@ -399,11 +398,10 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
     {
         if (horizontalBidirectionalArrowImage.isValid())
         {
-            graphics.setColour(interactionHighlight ? uiBlack : uiWhite);
-            graphics.drawImage(horizontalBidirectionalArrowImage,
-                               iconBounds,
-                               juce::RectanglePlacement::centred,
-                               true);
+            juce::DrawableImage drawable;
+            drawable.setImage(horizontalBidirectionalArrowImage);
+            drawable.setOverlayColour(interactionHighlight ? uiBlack : uiWhite);
+            drawable.drawWithin(graphics, iconBounds, juce::RectanglePlacement::centred, 1.0f);
             drawBottomDivider();
             return;
         }

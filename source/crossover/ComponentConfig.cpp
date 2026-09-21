@@ -66,7 +66,7 @@ CrossoverControlSpec parameterToggleControl(const char* suffix,
                                        const bool toggleInverted = false,
                                        const int parameterTitleWidth = 0,
                                        const int auxiliaryToggleWidth = 0,
-                                       const char* auxiliaryToggleSymbol = "")
+                                       const char* auxiliaryToggleIcon = "")
 {
     auto spec = parameterControl(suffix, label, decimals);
     spec.auxiliaryToggleSuffix = toggleSuffix;
@@ -77,7 +77,7 @@ CrossoverControlSpec parameterToggleControl(const char* suffix,
     spec.auxiliaryToggleInverted = toggleInverted;
     spec.parameterTitleWidth = parameterTitleWidth;
     spec.auxiliaryToggleWidth = auxiliaryToggleWidth;
-    spec.auxiliaryToggleSymbol = auxiliaryToggleSymbol;
+    spec.auxiliaryToggleIcon = auxiliaryToggleIcon;
     return spec;
 }
 
@@ -197,11 +197,11 @@ CrossoverModuleComponent::Config makeTlsCrossoverConfig(TlsModuleProcessor& proc
         toggleControl("listen_ss", "SS", "", "", "listen"),
 
         headingControl("GAIN", 2),
-        parameterToggleControl("gain_stereo", "STEREO", 2, "gain_stereo_mute", "MUTE", "gain", "", true, false, 95, iconControlSize, "speaker.slash"),
-        parameterToggleControl("gain_left", "LEFT", 2, "gain_left_mute", "MUTE", "gain", "gain_left_order", false, false, 95, iconControlSize, "speaker.slash"),
-        parameterToggleControl("gain_right", "RIGHT", 2, "gain_right_mute", "MUTE", "gain", "gain_right_order", false, false, 95, iconControlSize, "speaker.slash"),
-        parameterToggleControl("gain_mid", "MID", 2, "gain_mid_mute", "MUTE", "gain", "gain_mid_order", false, false, 95, iconControlSize, "speaker.slash"),
-        parameterToggleControl("gain_side", "SIDE", 2, "gain_side_mute", "MUTE", "gain", "gain_side_order", false, false, 95, iconControlSize, "speaker.slash"),
+        parameterToggleControl("gain_stereo", "STEREO", 2, "gain_stereo_mute", "MUTE", "gain", "", true, false, 95, iconControlSize, "volume-off"),
+        parameterToggleControl("gain_left", "LEFT", 2, "gain_left_mute", "MUTE", "gain", "gain_left_order", false, false, 95, iconControlSize, "volume-off"),
+        parameterToggleControl("gain_right", "RIGHT", 2, "gain_right_mute", "MUTE", "gain", "gain_right_order", false, false, 95, iconControlSize, "volume-off"),
+        parameterToggleControl("gain_mid", "MID", 2, "gain_mid_mute", "MUTE", "gain", "gain_mid_order", false, false, 95, iconControlSize, "volume-off"),
+        parameterToggleControl("gain_side", "SIDE", 2, "gain_side_mute", "MUTE", "gain", "gain_side_order", false, false, 95, iconControlSize, "volume-off"),
 
         headingControl("DELAY", 2),
         parameterControl("stereo_delay", "STEREO", 2),

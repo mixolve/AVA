@@ -1,8 +1,5 @@
 #include "PresetStorage.h"
 
-#include <array>
-#include <cstdint>
-
 static bool writeXmlToFile(const juce::XmlElement& element, const juce::File& file);
 
 static juce::File getDocumentsPresetStorageDirectory()
@@ -27,34 +24,7 @@ static juce::File getFilterPresetsDirectory()
 
 static juce::String makePresetFileStem(const juce::String& presetName)
 {
-    const auto trimmedName = presetName.trim();
-    const auto utf8 = trimmedName.toRawUTF8();
-    auto hash = std::uint64_t { 14695981039346656037ull };
-
-    for (const auto* byte = reinterpret_cast<const unsigned char*>(utf8);
-         byte != nullptr && *byte != 0;
-         ++byte)
-    {
-        hash ^= static_cast<std::uint64_t>(*byte);
-        hash *= std::uint64_t { 1099511628211ull };
-    }
-
-    auto readablePrefix = juce::File::createLegalFileName(trimmedName).trim();
-    readablePrefix = readablePrefix.substring(0, 48);
-
-    if (readablePrefix.isEmpty())
-        readablePrefix = "preset";
-
-    std::array<char, 17> hashText {};
-    constexpr char hexDigits[] = "0123456789abcdef";
-
-    for (int digit = 15; digit >= 0; --digit)
-    {
-        hashText[static_cast<size_t>(digit)] = hexDigits[hash & 0x0fu];
-        hash >>= 4u;
-    }
-
-    return readablePrefix + "-" + juce::String(hashText.data());
+    return juce::File::createLegalFileName(presetName.trim()).trim();
 }
 
 static juce::File getPresetFileForName(const juce::File& directory, const juce::String& presetName)

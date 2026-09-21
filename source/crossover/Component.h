@@ -43,7 +43,7 @@ public:
         const char* exclusiveGroup = "";
         const char* auxiliaryToggleSuffix = "";
         const char* auxiliaryToggleLabel = "";
-        const char* auxiliaryToggleSymbol = "";
+        const char* auxiliaryToggleIcon = "";
         const char* enabledWhenSuffix = "";
         const char* reorderGroup = "";
         const char* orderSuffix = "";
