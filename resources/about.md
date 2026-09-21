@@ -6,4 +6,10 @@ VIBECODED. V:01
 
 [MANUAL](ava-manual://open)
 
+[LICENSES](ava-licenses://open)
+
+
+
+
+
 CONTACT: MIXOLVE@GMAIL.COM (RU/ENG)

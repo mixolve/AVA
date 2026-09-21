@@ -198,7 +198,7 @@ void AvaAudioProcessorEditor::valueTreePropertyChanged(juce::ValueTree& treeWhos
 
 void AvaAudioProcessorEditor::valueTreeRedirected(juce::ValueTree& treeWhichHasBeenChanged)
 {
-    if (treeWhichHasBeenChanged == valueTreeState.state)
+    if (treeWhichHasBeenChanged == valueTreeState.state && ! suppressProcessorStateResync)
         scheduleProcessorStateResync();
 
     scheduleHistorySnapshot();

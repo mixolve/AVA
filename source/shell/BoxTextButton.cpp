@@ -53,20 +53,29 @@ void BoxTextButton::setHorizontalBidirectionalArrowVisible(const bool shouldShow
     horizontalBidirectionalArrowVisible = shouldShow;
 
     if (shouldShow && horizontalBidirectionalArrowImage.isNull())
-        horizontalBidirectionalArrowImage = loadTablerIcon("arrows-left-right", iconGlyphSize);
+        horizontalBidirectionalArrowImage = loadTablerIcon("layers-difference", iconGlyphSize);
 
     repaint();
 }
 
 void BoxTextButton::setTablerIcon(const char* iconName)
 {
+    iconOnlyText = false;
     tablerIconImage = loadTablerIcon(iconName, iconGlyphSize);
     repaint();
 }
 
+void BoxTextButton::setIconOnlyText(const juce::String& text)
+{
+    tablerIconImage = {};
+    iconOnlyText = true;
+    setButtonText(text);
+}
+
 bool BoxTextButton::usesIconOnlyContent() const noexcept
 {
-    return tablerIconImage.isValid()
+    return iconOnlyText
+        || tablerIconImage.isValid()
         || (horizontalBidirectionalArrowVisible && getButtonText().isEmpty());
 }
 
@@ -388,7 +397,7 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
     {
         juce::DrawableImage drawable;
         drawable.setImage(tablerIconImage);
-        drawable.setOverlayColour(interactionHighlight ? uiBlack : uiWhite);
+        drawable.setOverlayColour(interactionHighlight ? uiBlack : textColour);
         drawable.drawWithin(graphics, iconBounds, juce::RectanglePlacement::centred, 1.0f);
         drawBottomDivider();
         return;
@@ -400,7 +409,7 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
         {
             juce::DrawableImage drawable;
             drawable.setImage(horizontalBidirectionalArrowImage);
-            drawable.setOverlayColour(interactionHighlight ? uiBlack : uiWhite);
+            drawable.setOverlayColour(interactionHighlight ? uiBlack : textColour);
             drawable.drawWithin(graphics, iconBounds, juce::RectanglePlacement::centred, 1.0f);
             drawBottomDivider();
             return;

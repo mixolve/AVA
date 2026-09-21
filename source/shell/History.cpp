@@ -80,16 +80,25 @@ bool AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snap
     const juce::ScopedValueSetter<bool> suppressHistory(suppressHistorySnapshots, true);
     const juce::ScopedValueSetter<bool> suppressHostSlotSync(suppressHostSlotAutomationSync, true);
     pendingHistorySnapshot.store(false, std::memory_order_relaxed);
-    detachModuleEditorBindings();
-    if (! audioProcessor.applyHistoryStateInformation(mergedSnapshot.getData(),
-                                                      static_cast<int>(mergedSnapshot.getSize())))
+
     {
-        restoreEditorStateFromValueTree();
-        ensureModuleTitle();
-        updateSectionStates();
-        resized();
-        return false;
+        // State replacement sends synchronous ValueTree callbacks before the old
+        // module processor has been destroyed. Rebind only after the replacement
+        // is complete, otherwise the editor can retain listeners to freed state.
+        const juce::ScopedValueSetter<bool> suppressResync(suppressProcessorStateResync, true);
+        detachModuleEditorBindings();
+
+        if (! audioProcessor.applyHistoryStateInformation(mergedSnapshot.getData(),
+                                                           static_cast<int>(mergedSnapshot.getSize())))
+        {
+            restoreEditorStateFromValueTree();
+            ensureModuleTitle();
+            updateSectionStates();
+            resized();
+            return false;
+        }
     }
+
     if (bypassParameter != nullptr)
         bypassParameter->setValueNotifyingHost(preservedBypassValue);
 

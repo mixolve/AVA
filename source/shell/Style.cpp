@@ -39,12 +39,12 @@ bool isMouseHovering(const juce::Component& component) noexcept
     return false;
 }
 
-juce::Typeface::Ptr getUiRegularTypeface()
+juce::Typeface::Ptr getUiTypeface()
 {
 #if JUCE_TARGET_HAS_BINARY_DATA
-    static const auto regularTypeface = juce::Typeface::createSystemTypefaceFor(BinaryData::SometypeMonoRegular_ttf,
-                                                                                BinaryData::SometypeMonoRegular_ttfSize);
-    return regularTypeface;
+    static const auto typeface = juce::Typeface::createSystemTypefaceFor(BinaryData::IosevkaCharonMonoMedium_ttf,
+                                                                         BinaryData::IosevkaCharonMonoMedium_ttfSize);
+    return typeface;
 #else
     return {};
 #endif
@@ -53,11 +53,11 @@ juce::Typeface::Ptr getUiRegularTypeface()
 juce::FontOptions makeUiFontOptions()
 {
 #if JUCE_TARGET_HAS_BINARY_DATA
-    if (auto typeface = getUiRegularTypeface())
+    if (auto typeface = getUiTypeface())
         return juce::FontOptions(typeface).withHeight(uiFontSize);
 #endif
 
-    return juce::FontOptions("Sometype Mono", uiFontSize, juce::Font::plain);
+    return juce::FontOptions("Iosevka Charon Mono", "Medium", uiFontSize);
 }
 
 juce::Font makeUiFont()

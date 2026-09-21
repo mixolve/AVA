@@ -18,23 +18,22 @@ struct MarkdownLink
     juce::String url;
 };
 
-juce::URL createOfflineManualUrl()
+juce::URL createOfflineDocumentUrl(const char* fileName, const void* data, const size_t dataSize)
 {
-    const auto manualDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                                     .getChildFile("mixolve-ava");
+    const auto documentDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                       .getChildFile("mixolve-ava");
 
-    if (manualDirectory.createDirectory().failed())
+    if (documentDirectory.createDirectory().failed())
         return {};
 
-    const auto manualFile = manualDirectory.getChildFile("manual.md");
-    manualFile.setReadOnly(false);
+    const auto documentFile = documentDirectory.getChildFile(fileName);
+    documentFile.setReadOnly(false);
 
-    if (! manualFile.replaceWithData(BinaryData::manual_md,
-                                      static_cast<size_t>(BinaryData::manual_mdSize)))
+    if (! documentFile.replaceWithData(data, dataSize))
         return {};
 
-    manualFile.setReadOnly(true);
-    return juce::URL(manualFile);
+    documentFile.setReadOnly(true);
+    return juce::URL(documentFile);
 }
 
 juce::String getDisplayNameFromUrl(const juce::String& urlText)
@@ -289,8 +288,10 @@ class MarkdownLinkRow final : public MarkdownRowComponent
 public:
     MarkdownLinkRow(juce::String text, juce::String urlText)
         : linkButton(std::move(text),
-                     urlText.startsWithIgnoreCase("ava-manual://") ? juce::URL {}
-                                                                  : juce::URL(urlText))
+                     urlText.startsWithIgnoreCase("ava-manual://")
+                         || urlText.startsWithIgnoreCase("ava-licenses://")
+                         ? juce::URL {}
+                         : juce::URL(urlText))
     {
         setOpaque(false);
         setWantsKeyboardFocus(false);
@@ -310,10 +311,24 @@ public:
         {
             linkButton.onClick = []
             {
-                const auto manualUrl = createOfflineManualUrl();
+                const auto manualUrl = createOfflineDocumentUrl(
+                    "manual.md", BinaryData::manual_md,
+                    static_cast<size_t>(BinaryData::manual_mdSize));
 
                 if (manualUrl.isWellFormed())
                     manualUrl.launchInDefaultBrowser();
+            };
+        }
+        else if (urlText.startsWithIgnoreCase("ava-licenses://"))
+        {
+            linkButton.onClick = []
+            {
+                const auto licensesUrl = createOfflineDocumentUrl(
+                    "licenses.md", BinaryData::licenses_md,
+                    static_cast<size_t>(BinaryData::licenses_mdSize));
+
+                if (licensesUrl.isWellFormed())
+                    licensesUrl.launchInDefaultBrowser();
             };
         }
 

@@ -77,7 +77,7 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
     if (config.showCrossoverNavigation)
     {
         auto allButton = makeTextButton({});
-        allButton->setTablerIcon("settings");
+        allButton->setTablerIcon("adjustments-alt");
         allButton->setClickingTogglesState(false);
         allButton->onClick = [this] { showCrossoverSettings(); };
         addAndMakeVisible(*allButton);

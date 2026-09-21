@@ -35,7 +35,7 @@ inline const auto uiGrey500 = uiGreyLight;
 int getEditorInsetX(int width);
 int getEditorInsetTop(int height);
 int getEditorInsetBottom(int height);
-juce::Typeface::Ptr getUiRegularTypeface();
+juce::Typeface::Ptr getUiTypeface();
 juce::FontOptions makeUiFontOptions();
 juce::Font makeUiFont();
 int getTextPixelWidth(const juce::Font& font, const juce::String& text);

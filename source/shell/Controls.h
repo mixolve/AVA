@@ -155,6 +155,7 @@ public:
     void setCancelClickOnLeave(bool shouldEnable) noexcept;
     void setHorizontalBidirectionalArrowVisible(bool shouldShow) noexcept;
     void setTablerIcon(const char* iconName);
+    void setIconOnlyText(const juce::String& text);
     bool usesIconOnlyContent() const noexcept;
     void setTextColourOverride(juce::Colour colour);
     void clearTextColourOverride();
@@ -202,6 +203,7 @@ private:
     bool horizontalBidirectionalArrowVisible = false;
     juce::Image horizontalBidirectionalArrowImage;
     juce::Image tablerIconImage;
+    bool iconOnlyText = false;
     bool hasTextColourOverride = false;
     juce::Colour textColourOverride;
     bool dragTargetOutlineVisible = false;

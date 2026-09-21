@@ -46,7 +46,7 @@ private:
 
 AvaAudioProcessorEditor::AvaLookAndFeel::AvaLookAndFeel()
 {
-    if (auto typeface = getUiRegularTypeface())
+    if (auto typeface = getUiTypeface())
         setDefaultSansSerifTypeface(typeface);
 }
 
@@ -54,7 +54,7 @@ juce::Typeface::Ptr AvaAudioProcessorEditor::AvaLookAndFeel::getTypefaceForFont(
 {
 #if JUCE_TARGET_HAS_BINARY_DATA
     juce::ignoreUnused(font);
-    if (auto typeface = getUiRegularTypeface())
+    if (auto typeface = getUiTypeface())
         return typeface;
 #else
     juce::ignoreUnused(font);
