@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 
 namespace ava::modules::state
@@ -165,8 +166,11 @@ inline bool hasExactParameterState(const juce::ValueTree& candidate,
         if (range.interval > 0.0f)
         {
             const auto snappedValue = static_cast<double>(range.snapToLegalValue(static_cast<float>(*plainValue)));
+            const auto floatRoundingTolerance = static_cast<double>(std::numeric_limits<float>::epsilon())
+                * juce::jmax(1.0, std::abs(snappedValue)) * 2.0;
             const auto gridTolerance = juce::jmax(1.0e-6,
-                                                  static_cast<double>(range.interval) * 1.0e-4);
+                                                  static_cast<double>(range.interval) * 1.0e-4,
+                                                  floatRoundingTolerance);
 
             if (std::abs(snappedValue - *plainValue) > gridTolerance)
                 return false;

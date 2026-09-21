@@ -123,12 +123,27 @@ void AvaAudioProcessor::notifyHostOfStateChange()
     if (suppressHostStateNotifications.load(std::memory_order_relaxed))
         return;
 
+    const auto makeChangeDetails = []
+    {
+        auto details = juce::AudioProcessorListener::ChangeDetails()
+                           .withNonParameterStateChanged(true);
+
+       #if JucePlugin_Build_AU
+        // JUCE's AU wrapper does not react to nonParameterStateChanged. Audio Unit
+        // hosts only receive kAudioUnitProperty_ClassInfo when one of the legacy
+        // change flags is also set, so use the program flag to make them request
+        // and persist the current plug-in state.
+        details = details.withProgramChanged(true);
+       #endif
+
+        return details;
+    };
+
     if (auto* messageManager = juce::MessageManager::getInstanceWithoutCreating();
         messageManager != nullptr && messageManager->isThisTheMessageThread())
     {
         pendingHostStateNotification.store(false, std::memory_order_release);
-        updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
-                              .withNonParameterStateChanged(true));
+        updateHostDisplay(makeChangeDetails());
         return;
     }
 

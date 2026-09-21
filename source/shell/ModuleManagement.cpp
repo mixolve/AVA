@@ -234,8 +234,14 @@ void AvaAudioProcessor::applyPendingShellUpdates()
     if (pendingHostStateNotification.exchange(false, std::memory_order_acq_rel)
         && ! suppressHostStateNotifications.load(std::memory_order_relaxed))
     {
-        updateHostDisplay(juce::AudioProcessorListener::ChangeDetails()
-                              .withNonParameterStateChanged(true));
+        auto details = juce::AudioProcessorListener::ChangeDetails()
+                           .withNonParameterStateChanged(true);
+
+       #if JucePlugin_Build_AU
+        details = details.withProgramChanged(true);
+       #endif
+
+        updateHostDisplay(details);
     }
 }
 
