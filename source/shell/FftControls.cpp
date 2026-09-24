@@ -26,15 +26,6 @@ void AvaAudioProcessorEditor::rebindFftModeControls(FftModuleProcessor& fftProce
     rebindIfNeeded(fftAdaptiveOffsetControl.get(),
                    correlationMode ? FftModuleProcessor::paramCorrelationAdaptiveOffsetId
                              : FftModuleProcessor::paramSpectralAdaptiveOffsetId);
-    rebindIfNeeded(fftAdaptiveAttackControl.get(),
-                   correlationMode ? FftModuleProcessor::paramCorrelationAdaptiveAttackId
-                             : FftModuleProcessor::paramSpectralAdaptiveAttackId);
-    rebindIfNeeded(fftAdaptiveHoldControl.get(),
-                   correlationMode ? FftModuleProcessor::paramCorrelationAdaptiveHoldId
-                             : FftModuleProcessor::paramSpectralAdaptiveHoldId);
-    rebindIfNeeded(fftAdaptiveReleaseControl.get(),
-                   correlationMode ? FftModuleProcessor::paramCorrelationAdaptiveReleaseId
-                             : FftModuleProcessor::paramSpectralAdaptiveReleaseId);
     rebindIfNeeded(fftDspSlopeControl.get(),
                    correlationMode ? FftModuleProcessor::paramCorrelationSlopeId
                              : FftModuleProcessor::paramDspSlopeId);
@@ -109,7 +100,7 @@ void AvaAudioProcessorEditor::setupFftControls(juce::AudioProcessorValueTreeStat
         filterContent.addAndMakeVisible(*fftDspOverlapControl);
 
         fftDynamicProcessorHeader = std::make_unique<BoxTextButton>(uiAccent);
-        configureSectionHeader(*fftDynamicProcessorHeader, "DYNAMIC PROCESSOR");
+        configureSectionHeader(*fftDynamicProcessorHeader, "PROCESSOR");
         filterContent.addAndMakeVisible(*fftDynamicProcessorHeader);
 
         fftDynamicModeControl = std::make_unique<ChoiceControl>(fftState,
@@ -187,6 +178,9 @@ void AvaAudioProcessorEditor::setupFftControls(juce::AudioProcessorValueTreeStat
                                                                 FftModuleProcessor::paramDspSlopeId,
                                                                 "SLOPE",
                                                                 2);
+        fftDspSlopeControl->getProperties().set(juce::Identifier("oscFallbackParameterIds"),
+                                                juce::String(FftModuleProcessor::paramDspSlopeId) + "\n"
+                                                    + juce::String(FftModuleProcessor::paramCorrelationSlopeId));
         filterContent.addAndMakeVisible(*fftDspSlopeControl);
 
         fftCorrelationImpactControl = std::make_unique<ParameterControl>(fftState,
@@ -223,6 +217,7 @@ void AvaAudioProcessorEditor::setupFftControls(juce::AudioProcessorValueTreeStat
         filterContent.addAndMakeVisible(*fftCorrelationImpactControl);
 
         fftDeltaButton = std::make_unique<BoxTextButton>(uiAccent);
+        fftDeltaButton->getProperties().set(juce::Identifier("oscParameterId"), FftModuleProcessor::paramDeltaId);
         fftDeltaButton->setButtonText("DELTA");
         fftDeltaButton->setTextJustification(juce::Justification::centred);
         fftDeltaButton->setClickingTogglesState(true);
@@ -242,29 +237,36 @@ void AvaAudioProcessorEditor::setupFftControls(juce::AudioProcessorValueTreeStat
 
         fftDualMonoLeftThresholdControl = std::make_unique<ParameterControl>(fftState,
                                                                              FftModuleProcessor::paramDualMonoLeftThresholdId,
-                                                                             "L.THRESH",
+                                                                             "L-THRESHOLD",
                                                                              2);
+        fftDualMonoLeftThresholdControl->getProperties().set(juce::Identifier("oscFallbackParameterIds"),
+                                                             juce::String(FftModuleProcessor::paramDualMonoLeftThresholdId) + "\n"
+                                                                 + juce::String(FftModuleProcessor::paramCorrelationThresholdId));
         filterContent.addAndMakeVisible(*fftDualMonoLeftThresholdControl);
 
         fftDualMonoLeftAdaptiveControl = std::make_unique<ParameterControl>(fftState,
                                                                             FftModuleProcessor::paramDualMonoLeftAdaptiveId,
-                                                                            "L.ADAPTIVE",
+                                                                            "L-ADAPTIVE",
                                                                             2);
+        fftDualMonoLeftAdaptiveControl->getProperties().set(juce::Identifier("oscFallbackParameterIds"),
+                                                            juce::String(FftModuleProcessor::paramDualMonoLeftAdaptiveId) + "\n"
+                                                                + juce::String(FftModuleProcessor::paramCorrelationAdaptiveId));
         filterContent.addAndMakeVisible(*fftDualMonoLeftAdaptiveControl);
 
         fftDualMonoRightThresholdControl = std::make_unique<ParameterControl>(fftState,
                                                                               FftModuleProcessor::paramDualMonoRightThresholdId,
-                                                                              "R.THRESH",
+                                                                              "R-THRESHOLD",
                                                                               2);
         filterContent.addAndMakeVisible(*fftDualMonoRightThresholdControl);
 
         fftDualMonoRightAdaptiveControl = std::make_unique<ParameterControl>(fftState,
                                                                              FftModuleProcessor::paramDualMonoRightAdaptiveId,
-                                                                             "R.ADAPTIVE",
+                                                                             "R-ADAPTIVE",
                                                                              2);
         filterContent.addAndMakeVisible(*fftDualMonoRightAdaptiveControl);
 
         fftDualMonoLinkButton = std::make_unique<BoxTextButton>(uiAccent);
+        fftDualMonoLinkButton->getProperties().set(juce::Identifier("oscParameterId"), FftModuleProcessor::paramDualMonoLinkId);
         fftDualMonoLinkButton->setButtonText("LINK-LR (STEREO)");
         fftDualMonoLinkButton->setTextJustification(juce::Justification::centred);
         fftDualMonoLinkButton->setClickingTogglesState(true);
@@ -285,29 +287,32 @@ void AvaAudioProcessorEditor::setupFftControls(juce::AudioProcessorValueTreeStat
         filterContent.addAndMakeVisible(*fftDualMonoLinkButton);
 
         fftAdaptiveSettingsHeader = std::make_unique<BoxTextButton>(uiAccent);
-        configureSectionHeader(*fftAdaptiveSettingsHeader, "ADAPTIVE SETTINGS");
+        configureSectionHeader(*fftAdaptiveSettingsHeader, "ADAPTIVE");
         filterContent.addAndMakeVisible(*fftAdaptiveSettingsHeader);
 
         fftAdaptiveOffsetControl = std::make_unique<ParameterControl>(fftState,
                                                                        FftModuleProcessor::paramSpectralAdaptiveOffsetId,
                                                                        "OFFSET",
                                                                        2);
+        fftAdaptiveOffsetControl->getProperties().set(juce::Identifier("oscFallbackParameterIds"),
+                                                       juce::String(FftModuleProcessor::paramSpectralAdaptiveOffsetId) + "\n"
+                                                           + juce::String(FftModuleProcessor::paramCorrelationAdaptiveOffsetId));
         filterContent.addAndMakeVisible(*fftAdaptiveOffsetControl);
 
         fftAdaptiveAttackControl = std::make_unique<ParameterControl>(fftState,
-                                                                       FftModuleProcessor::paramSpectralAdaptiveAttackId,
+                                                                       FftModuleProcessor::paramAdaptiveAttackId,
                                                                        "ATTACK",
                                                                        2);
         filterContent.addAndMakeVisible(*fftAdaptiveAttackControl);
 
         fftAdaptiveHoldControl = std::make_unique<ParameterControl>(fftState,
-                                                                     FftModuleProcessor::paramSpectralAdaptiveHoldId,
+                                                                     FftModuleProcessor::paramAdaptiveHoldId,
                                                                      "HOLD",
                                                                      2);
         filterContent.addAndMakeVisible(*fftAdaptiveHoldControl);
 
         fftAdaptiveReleaseControl = std::make_unique<ParameterControl>(fftState,
-                                                                        FftModuleProcessor::paramSpectralAdaptiveReleaseId,
+                                                                        FftModuleProcessor::paramAdaptiveReleaseId,
                                                                         "RELEASE",
                                                                         2);
         filterContent.addAndMakeVisible(*fftAdaptiveReleaseControl);

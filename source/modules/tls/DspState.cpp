@@ -66,10 +66,10 @@ void DspCore::updateDerivedParameters()
         : dbToAmp(juce::jlimit(-99.0, 48.0, roundToParameterStep(parameters.gainLr)));
 
     auto orderedGains = std::array<std::pair<int, GainOperation>, 4> {{
-        { juce::jlimit(0, 3, parameters.gainLOrder), GainOperation::left },
-        { juce::jlimit(0, 3, parameters.gainROrder), GainOperation::right },
-        { juce::jlimit(0, 3, parameters.gainMidOrder), GainOperation::mid },
-        { juce::jlimit(0, 3, parameters.gainSideOrder), GainOperation::side }
+        { juce::jlimit(2, 5, parameters.gainLOrder), GainOperation::left },
+        { juce::jlimit(2, 5, parameters.gainROrder), GainOperation::right },
+        { juce::jlimit(2, 5, parameters.gainMidOrder), GainOperation::mid },
+        { juce::jlimit(2, 5, parameters.gainSideOrder), GainOperation::side }
     }};
     std::stable_sort(orderedGains.begin(), orderedGains.end(), [] (const auto& first, const auto& second)
     {

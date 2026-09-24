@@ -89,6 +89,19 @@ void BoxTextButton::mouseDown(const juce::MouseEvent& event)
     repaint();
 }
 
+void BoxTextButton::mouseDoubleClick(const juce::MouseEvent& event)
+{
+    if (isEnabled() && ! actionPromptActive && onDoubleClick != nullptr
+        && event.mods.isLeftButtonDown())
+    {
+        ++pendingClickGeneration;
+        onDoubleClick();
+        return;
+    }
+
+    juce::TextButton::mouseDoubleClick(event);
+}
+
 void BoxTextButton::mouseDrag(const juce::MouseEvent& event)
 {
     if (! isEnabled())
@@ -213,6 +226,16 @@ void BoxTextButton::mouseUp(const juce::MouseEvent& event)
         {
             action = longPressTrailingAction;
         }
+        if (longPressTrailingAction != nullptr)
+            ++resolvedIndex;
+
+        if (action == nullptr
+            && ! selectMove
+            && longPressAdditionalPromptAction != nullptr
+            && selectedIndex == resolvedIndex)
+        {
+            action = longPressAdditionalPromptAction;
+        }
 
         dismissActionPrompt();
 
@@ -290,7 +313,24 @@ void BoxTextButton::mouseUp(const juce::MouseEvent& event)
         return;
 
     if (contains(event.getPosition()))
-        triggerClick();
+    {
+        if (onDoubleClick != nullptr && onClick != nullptr)
+        {
+            if (event.getNumberOfClicks() > 1)
+                return;
+
+            const auto generation = ++pendingClickGeneration;
+            juce::Timer::callAfterDelay(juce::MouseEvent::getDoubleClickTimeout(),
+                                       [safeThis = juce::Component::SafePointer<BoxTextButton>(this), generation]
+            {
+                if (safeThis != nullptr && safeThis->isEnabled()
+                    && safeThis->pendingClickGeneration == generation)
+                    safeThis->triggerClick();
+            });
+        }
+        else
+            triggerClick();
+    }
 }
 
 void BoxTextButton::mouseExit(const juce::MouseEvent&)

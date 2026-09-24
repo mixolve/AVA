@@ -51,6 +51,7 @@ CopyPasteTextEditor::CopyPasteTextEditor()
 {
     setLookAndFeel(&popupLookAndFeel);
     setMouseCursor(juce::MouseCursor::NormalCursor);
+    setColour(juce::CaretComponent::caretColourId, uiWhite);
 }
 
 CopyPasteTextEditor::~CopyPasteTextEditor()

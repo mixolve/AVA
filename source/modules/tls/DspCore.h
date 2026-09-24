@@ -35,10 +35,10 @@ public:
         bool gainRMute = false;
         float gainLr = 0.0f;
         bool gainLrMute = false;
-        int gainLOrder = 0;
-        int gainROrder = 1;
-        int gainMidOrder = 2;
-        int gainSideOrder = 3;
+        int gainLOrder = 2;
+        int gainROrder = 3;
+        int gainMidOrder = 4;
+        int gainSideOrder = 5;
         bool halfPositive = false;
         bool halfNegative = false;
         bool fullPositive = false;

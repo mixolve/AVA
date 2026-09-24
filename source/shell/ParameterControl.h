@@ -22,6 +22,7 @@ public:
     void rebind(juce::AudioProcessorValueTreeState& state);
     void rebind(juce::AudioProcessorValueTreeState& state, const juce::String& parameterIdIn);
     bool isBoundTo(const juce::String& parameterIdIn) const noexcept;
+    const juce::String& getParameterId() const noexcept { return parameterId; }
     void setValue(double value, bool sendNotification);
     void setOverrideText(const juce::String& text);
     void clearOverrideText();

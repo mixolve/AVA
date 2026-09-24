@@ -9,8 +9,8 @@
 namespace
 {
 constexpr auto bankStateType = "eql_bank_state";
-constexpr auto rangeStateType = "range";
-constexpr auto rangeCountKey = "range_count";
+constexpr auto rangeStateType = "band";
+constexpr auto rangeCountKey = "band_count";
 constexpr auto rangeIndexKey = "index";
 }
 
@@ -197,6 +197,16 @@ bool EqlProcessorBank::setStateInformation(const void* data, const int sizeInByt
 void EqlProcessorBank::setSelectedRange(const size_t rangeIndex) noexcept
 {
     ranges.setSelectedRange(rangeIndex);
+}
+
+EqlModuleProcessor* EqlProcessorBank::getProcessor(const size_t rangeIndex) noexcept
+{
+    return ranges.getProcessor(rangeIndex);
+}
+
+const EqlModuleProcessor* EqlProcessorBank::getProcessor(const size_t rangeIndex) const noexcept
+{
+    return ranges.getProcessor(rangeIndex);
 }
 
 EqlModuleProcessor* EqlProcessorBank::getSelectedProcessor() noexcept

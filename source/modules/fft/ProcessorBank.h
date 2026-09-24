@@ -25,6 +25,8 @@ public:
     bool setStateFromXmlString(const juce::String& stateXmlString);
 
     void setSelectedRange(size_t rangeIndex) noexcept;
+    FftModuleProcessor* getProcessor(size_t rangeIndex) noexcept;
+    const FftModuleProcessor* getProcessor(size_t rangeIndex) const noexcept;
     FftModuleProcessor* getSelectedProcessor() noexcept;
     const FftModuleProcessor* getSelectedProcessor() const noexcept;
 

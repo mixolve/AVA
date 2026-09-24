@@ -2,8 +2,29 @@
 #include "FilterSection.h"
 #include "../modules/eql/FilterSupport.h"
 #include "../modules/eql/Processor.h"
+#include "../modules/eql/ProcessorBank.h"
 
+#include <cmath>
 #include <utility>
+
+namespace
+{
+int parseFilterDeleteActionIndex(const juce::String& action)
+{
+    constexpr auto prefix = "filter-";
+    constexpr auto suffix = "_delete.hidden";
+
+    if (! action.startsWith(prefix) || ! action.endsWith(suffix))
+        return -1;
+
+    const auto numberText = action.substring(juce::String(prefix).length(),
+                                             action.length() - juce::String(suffix).length());
+    if (numberText.isEmpty() || ! numberText.containsOnly("0123456789"))
+        return -1;
+
+    return numberText.getIntValue() - 1;
+}
+}
 
 void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeState& initialEqlState)
 {
@@ -164,7 +185,7 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
             const auto parameterId = EqlModuleProcessor::getFilterBypassParamId(filterIndex);
 
             if (auto* parameter = findHostAssignableParameter(parameterId))
-                handleHostSlotAssignRequest(parameterId, "B", parameter->getValue());
+                handleHostSlotAssignRequest(parameterId, "BP", parameter->getValue());
         }, "H?");
         section->bypassButton->onClick = [this]
         {
@@ -205,10 +226,111 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
 
         clearKeyboardFocus(*this);
     };
-    addFilterButton->setLongPressAction([this]
+    addFilterButton->setLongPressPromptActions([this]
     {
         clearAllFilters();
         clearKeyboardFocus(*this);
-    }, 500, "SURE?");
+    }, {}, "DALL?");
     addAndMakeVisible(*addFilterButton);
+}
+
+bool AvaAudioProcessorEditor::handleOscEqlAction(const size_t bandIndex,
+                                                  const juce::String& action,
+                                                  const float value)
+{
+    if (audioProcessor.getActiveModule() != AvaAudioProcessor::ActiveModule::eql
+        || bandIndex >= audioProcessor.getCrossoverSettings().activeSplitCount + 1)
+        return false;
+
+    auto* bank = audioProcessor.getEqlProcessorBank();
+    auto* eqlProcessor = bank != nullptr ? bank->getProcessor(bandIndex) : nullptr;
+    if (eqlProcessor == nullptr)
+        return false;
+
+    const auto selectedBand = bandIndex == audioProcessor.getSelectedCrossoverRange();
+    const auto filterDeleteIndex = parseFilterDeleteActionIndex(action);
+
+    if (filterDeleteIndex >= 0)
+    {
+        if (std::abs(value - 1.0f) > 1.0e-6f)
+            return false;
+
+        const auto previousCount = eqlProcessor->getActiveFilterCount();
+        const juce::ScopedValueSetter<bool> suppressHandlers(suppressFilterSectionValueChangeHandlers, true);
+        if (! eqlProcessor->removeFilter(filterDeleteIndex))
+            return false;
+
+        if (selectedBand)
+        {
+            removeFilterSectionUiState(filterDeleteIndex, previousCount);
+            enforceSingleExpandedFilterSection();
+            storeEditorStateToValueTree();
+            updateSectionStates();
+            resized();
+        }
+
+        scheduleHistorySnapshot();
+        return true;
+    }
+
+    if (action == "add")
+    {
+        if (std::abs(value - 1.0f) > 1.0e-6f || ! eqlProcessor->addFilter())
+            return false;
+
+        if (selectedBand)
+        {
+            const auto newFilterIndex = eqlProcessor->getActiveFilterCount() - 1;
+            filterDisplayOrder[static_cast<size_t>(newFilterIndex)] = newFilterIndex;
+            resetFilterSectionUiState(newFilterIndex);
+            enforceSingleExpandedFilterSection(newFilterIndex);
+            storeEditorStateToValueTree();
+            selectFilterSection(newFilterIndex);
+        }
+
+        scheduleHistorySnapshot();
+        return true;
+    }
+
+    if (action == "delete-all.hidden")
+    {
+        if (std::abs(value - 1.0f) > 1.0e-6f)
+            return false;
+
+        if (selectedBand)
+        {
+            clearAllFilters();
+            return true;
+        }
+
+        if (! eqlProcessor->clearFilters())
+            return false;
+
+        scheduleHistorySnapshot();
+        return true;
+    }
+
+    if (action == "preset")
+    {
+        const auto presetNumber = juce::roundToInt(value);
+        const auto presetNames = eqlProcessor->getFilterPresetNames();
+        if (! juce::isPositiveAndBelow(presetNumber - 1, presetNames.size())
+            || std::abs(value - static_cast<float>(presetNumber)) > 1.0e-6f)
+            return false;
+
+        const auto presetName = presetNames[presetNumber - 1];
+        if (! eqlProcessor->loadFilterPreset(presetName))
+            return false;
+
+        if (selectedBand)
+        {
+            reloadFilterPresetFromProcessor();
+            refreshFilterPresetList(presetName);
+        }
+
+        scheduleHistorySnapshot();
+        return true;
+    }
+
+    return false;
 }

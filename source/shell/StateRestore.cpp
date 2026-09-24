@@ -8,6 +8,7 @@
 #include "../modules/fft/ProcessorBank.h"
 #include "../modules/tls/Processor.h"
 #include "../modules/trs/Processor.h"
+#include "../routing/Runtime.h"
 
 #include <optional>
 
@@ -15,7 +16,7 @@ namespace
 {
 size_t getRestoredSelectedCrossoverRange(const juce::ValueTree& state)
 {
-    const auto key = crossover_ui::makeStatePropertyId("crossover", "visible_range_index");
+    const auto key = crossover_ui::makeStatePropertyId("crossover", "visible_band_index");
     return static_cast<size_t>(static_cast<int>(state.getProperty(key, 0)));
 }
 
@@ -153,6 +154,11 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
     const juce::ScopedLock lock(processingLock);
 
     parameters.replaceState(restoredState);
+    if (routingRuntime != nullptr)
+    {
+        routingRuntime->synchronize(parameters.state);
+        routingRuntime->restoreProcessorStates(parameters.state);
+    }
     selectedCrossoverRange.store(restoredSelectedRange, std::memory_order_relaxed);
     clearActiveModuleStateListeners();
     resetModuleProcessors();
@@ -176,9 +182,12 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
     if (restoredABCompareState.has_value())
         shell_state_serialization::restoreABCompareState(*this, *restoredABCompareState);
 
+    if (routingRuntime != nullptr)
+        routingRuntime->refreshDelayCapacity();
     updateShellLatency();
     setLastEditorSize(static_cast<int>(parameters.state.getProperty(editorWidthStateKey, 0)),
                       static_cast<int>(parameters.state.getProperty(editorHeightStateKey, 0)));
+    refreshOscConfiguration();
 
     if (wasProcessingPrepared && currentSampleRate > 0.0)
         processingPrepared.store(true, std::memory_order_release);
@@ -243,6 +252,11 @@ bool AvaAudioProcessor::restoreStateInformationPreservingLoadedModule(const void
     }
 
     parameters.replaceState(restoredState);
+    if (routingRuntime != nullptr)
+    {
+        routingRuntime->synchronize(parameters.state);
+        routingRuntime->restoreProcessorStates(parameters.state);
+    }
     selectedCrossoverRange.store(restoredSelectedRange, std::memory_order_relaxed);
 
     if (eqlProcessorBank != nullptr)
@@ -258,9 +272,12 @@ bool AvaAudioProcessor::restoreStateInformationPreservingLoadedModule(const void
     if (restoredABCompareState.has_value())
         shell_state_serialization::restoreABCompareState(*this, *restoredABCompareState);
 
+    if (routingRuntime != nullptr)
+        routingRuntime->refreshDelayCapacity();
     updateShellLatency();
     setLastEditorSize(static_cast<int>(parameters.state.getProperty(editorWidthStateKey, 0)),
                       static_cast<int>(parameters.state.getProperty(editorHeightStateKey, 0)));
+    refreshOscConfiguration();
 
     if (suspendProcessingForRestore && wasProcessingPrepared && currentSampleRate > 0.0)
         processingPrepared.store(true, std::memory_order_release);

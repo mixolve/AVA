@@ -6,8 +6,8 @@
 namespace
 {
 constexpr auto bankStateType = "fft_bank_state";
-constexpr auto rangeStateType = "range";
-constexpr auto rangeCountKey = "range_count";
+constexpr auto rangeStateType = "band";
+constexpr auto rangeCountKey = "band_count";
 constexpr auto rangeIndexKey = "index";
 }
 
@@ -172,6 +172,16 @@ bool FftProcessorBank::setStateFromXmlString(const juce::String& stateXmlString)
 void FftProcessorBank::setSelectedRange(const size_t rangeIndex) noexcept
 {
     ranges.setSelectedRange(rangeIndex);
+}
+
+FftModuleProcessor* FftProcessorBank::getProcessor(const size_t rangeIndex) noexcept
+{
+    return ranges.getProcessor(rangeIndex);
+}
+
+const FftModuleProcessor* FftProcessorBank::getProcessor(const size_t rangeIndex) const noexcept
+{
+    return ranges.getProcessor(rangeIndex);
 }
 
 FftModuleProcessor* FftProcessorBank::getSelectedProcessor() noexcept

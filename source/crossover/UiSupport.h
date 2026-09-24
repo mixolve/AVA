@@ -15,7 +15,7 @@ namespace crossover_ui
 inline constexpr size_t splitControlCount = ava::crossover::Splitter::numSplits;
 
 inline constexpr std::array<const char*, splitControlCount> splitParameterSuffixes {
-    "split_1_frequency", "split_2_frequency", "split_3_frequency", "split_4_frequency", "split_5_frequency"
+    "split-1", "split-2", "split-3", "split-4", "split-5"
 };
 
 inline constexpr std::array<const char*, splitControlCount> splitLabels {
@@ -23,7 +23,7 @@ inline constexpr std::array<const char*, splitControlCount> splitLabels {
 };
 
 inline constexpr std::array<const char*, 7> globalListenSuffixes {
-    "listen_lc", "listen_rc", "listen_mc", "listen_sc", "listen_ll", "listen_rr", "listen_ss"
+    "lc", "rc", "mc", "sc", "ll", "rr", "ss"
 };
 
 inline constexpr std::array<const char*, 7> globalListenLabels {

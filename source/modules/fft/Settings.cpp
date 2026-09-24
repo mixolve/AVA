@@ -77,9 +77,6 @@ FftModuleProcessor::ProcessingSettings FftModuleProcessor::getProcessingSettings
     settings.leftAdaptiveAmount = juce::jlimit(0.0f, 100.0f, dualMonoLeftAdaptiveParam != nullptr ? dualMonoLeftAdaptiveParam->load(std::memory_order_relaxed) : 0.0f);
     settings.rightAdaptiveAmount = juce::jlimit(0.0f, 100.0f, dualMonoRightAdaptiveParam != nullptr ? dualMonoRightAdaptiveParam->load(std::memory_order_relaxed) : 0.0f);
     const auto* adaptiveOffsetParam = settings.correlationMode ? correlationAdaptiveOffsetParam : spectralAdaptiveOffsetParam;
-    const auto* adaptiveAttackParam = settings.correlationMode ? correlationAdaptiveAttackParam : spectralAdaptiveAttackParam;
-    const auto* adaptiveHoldParam = settings.correlationMode ? correlationAdaptiveHoldParam : spectralAdaptiveHoldParam;
-    const auto* adaptiveReleaseParam = settings.correlationMode ? correlationAdaptiveReleaseParam : spectralAdaptiveReleaseParam;
     settings.adaptiveOffset = juce::jlimit(settings.correlationMode ? -1.0f : 0.0f,
                                            settings.correlationMode ? 1.0f : 48.0f,
                                            adaptiveOffsetParam != nullptr
@@ -87,18 +84,18 @@ FftModuleProcessor::ProcessingSettings FftModuleProcessor::getProcessingSettings
                                                : 0.0f);
     settings.adaptiveAttackMs = juce::jlimit(0.0f,
                                              200.0f,
-                                             adaptiveAttackParam != nullptr
-                                                 ? adaptiveAttackParam->load(std::memory_order_relaxed)
+                                             this->adaptiveAttackParam != nullptr
+                                                 ? this->adaptiveAttackParam->load(std::memory_order_relaxed)
                                                  : 30.0f);
     settings.adaptiveHoldMs = juce::jlimit(0.0f,
                                            2000.0f,
-                                           adaptiveHoldParam != nullptr
-                                               ? adaptiveHoldParam->load(std::memory_order_relaxed)
+                                           this->adaptiveHoldParam != nullptr
+                                               ? this->adaptiveHoldParam->load(std::memory_order_relaxed)
                                                : 0.0f);
     settings.adaptiveReleaseMs = juce::jlimit(0.0f,
                                               2000.0f,
-                                              adaptiveReleaseParam != nullptr
-                                                  ? adaptiveReleaseParam->load(std::memory_order_relaxed)
+                                              this->adaptiveReleaseParam != nullptr
+                                                  ? this->adaptiveReleaseParam->load(std::memory_order_relaxed)
                                                   : 300.0f);
     settings.slopeDbPerOct = juce::jlimit(-9.0f, 9.0f, dspSlopeParam != nullptr ? dspSlopeParam->load(std::memory_order_relaxed) : 4.5f);
     settings.attackMs = juce::jlimit(0.0f, 200.0f, attackParam != nullptr ? attackParam->load(std::memory_order_relaxed) : 0.0f);

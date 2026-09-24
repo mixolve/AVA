@@ -22,18 +22,18 @@ struct ParameterOrderEntry
 };
 
 inline constexpr auto trsCrossoverOrder = std::to_array<ParameterOrderEntry>({
-    { TrsModuleProcessor::paramTransientEnabledId, "TRANSIENT / MUTE" },
-    { TrsModuleProcessor::paramSustainEnabledId, "SUSTAIN / MUTE" },
-    { TrsModuleProcessor::paramTransientGainId, "TRANSIENT / GAIN" },
-    { TrsModuleProcessor::paramSustainGainId, "SUSTAIN / GAIN" },
+    { TrsModuleProcessor::paramTransientGainId, "GAIN / TRANSIENT" },
+    { TrsModuleProcessor::paramTransientMuteId, "MUTE / TRANSIENT" },
+    { TrsModuleProcessor::paramSustainGainId, "GAIN / SUSTAIN" },
+    { TrsModuleProcessor::paramSustainMuteId, "MUTE / SUSTAIN" },
     { TrsModuleProcessor::paramHoldId, "HOLD" },
-    { TrsModuleProcessor::paramHoldModeId, "HOLD-TYPE" },
+    { TrsModuleProcessor::paramHoldTypeId, "HOLD-TYPE" },
     { TrsModuleProcessor::paramHoldSyncId, "HOLD" },
     { TrsModuleProcessor::paramReleaseId, "RELEASE" },
-    { TrsModuleProcessor::paramReleaseModeId, "REL-TYPE" },
+    { TrsModuleProcessor::paramReleaseTypeId, "RELEASE-TYPE" },
     { TrsModuleProcessor::paramReleaseSyncId, "RELEASE" },
-    { TrsModuleProcessor::paramReleaseCurveId, "REL-CURVE" },
-    { TrsModuleProcessor::paramThresholdId, "THRESH" },
+    { TrsModuleProcessor::paramReleaseCurveId, "RELEASE-CURVE" },
+    { TrsModuleProcessor::paramThresholdId, "THRESHOLD" },
     { TrsModuleProcessor::paramKneeId, "KNEE" },
     { TrsModuleProcessor::paramRetriggerId, "RETRIGGER" },
     { TrsModuleProcessor::paramOneShotId, "ONE-SHOT" },
@@ -282,12 +282,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
         {
             const auto key = juce::String(entry.key);
             const auto id = makeRangeParameterId(rangeIndex, entry.key);
-            const auto name = "TRS / RANGE " + juce::String(static_cast<int>(rangeIndex + 1))
-                + " / TRANSIENT PROCESSOR / " + juce::String(entry.label);
+            const auto name = "TRS / BAND " + juce::String(static_cast<int>(rangeIndex + 1))
+                + " / " + juce::String(entry.label);
 
-            if (key == paramTransientEnabledId || key == paramSustainEnabledId)
+            if (key == paramTransientMuteId || key == paramSustainMuteId)
             {
-                crossoverGroup->addChild(boolParam(id, name, true));
+                crossoverGroup->addChild(boolParam(id, name, false));
                 continue;
             }
 
@@ -311,7 +311,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout TrsModuleProcessor::createPa
                 continue;
             }
 
-            if (key == paramHoldModeId || key == paramReleaseModeId)
+            if (key == paramHoldTypeId || key == paramReleaseTypeId)
             {
                 crossoverGroup->addChild(choiceParam(id, name, timeModeChoices, 0));
                 continue;
@@ -400,16 +400,16 @@ void TrsModuleProcessor::cacheParameterPointers()
     for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
     {
         auto& crossover = rawRangeParameters[rangeIndex];
-        crossover.transientEnabled = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTransientEnabledId));
+        crossover.transientMute = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTransientMuteId));
         crossover.transientGain = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramTransientGainId));
-        crossover.sustainEnabled = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSustainEnabledId));
+        crossover.sustainMute = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSustainMuteId));
         crossover.sustainGain = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramSustainGainId));
         crossover.hold = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramHoldId));
-        crossover.holdMode = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramHoldModeId));
+        crossover.holdType = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramHoldTypeId));
         crossover.holdSync = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramHoldSyncId));
         crossover.release = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramReleaseId));
         crossover.releaseCurve = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramReleaseCurveId));
-        crossover.releaseMode = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramReleaseModeId));
+        crossover.releaseType = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramReleaseTypeId));
         crossover.releaseSync = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramReleaseSyncId));
         crossover.threshold = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramThresholdId));
         crossover.knee = parameters.getRawParameterValue(makeRangeParameterId(rangeIndex, paramKneeId));
@@ -423,8 +423,8 @@ void TrsModuleProcessor::cacheParameterPointers()
 trs::dsp::DspCore::Parameters TrsModuleProcessor::readCrossoverRangeParameters(const size_t rangeIndex, const double hostBpm) const noexcept
 {
     const auto& crossover = rawRangeParameters[juce::jmin(rangeIndex, numRanges - 1)];
-    const auto holdType = static_cast<int>(std::round(getParameterValue(crossover.holdMode, 0.0f)));
-    const auto releaseType = static_cast<int>(std::round(getParameterValue(crossover.releaseMode, 0.0f)));
+    const auto holdType = static_cast<int>(std::round(getParameterValue(crossover.holdType, 0.0f)));
+    const auto releaseType = static_cast<int>(std::round(getParameterValue(crossover.releaseType, 0.0f)));
     const auto holdHostSync = holdType > 0;
     const auto releaseHostSync = releaseType > 0;
     const auto holdSyncIndex = static_cast<int>(std::round(getParameterValue(crossover.holdSync,
@@ -433,8 +433,8 @@ trs::dsp::DspCore::Parameters TrsModuleProcessor::readCrossoverRangeParameters(c
                                                                                  static_cast<float>(getDefaultHostSyncChoiceIndex()))));
 
     trs::dsp::DspCore::Parameters result;
-    result.transientEnabled = isEnabled(crossover.transientEnabled, true);
-    result.sustainEnabled = isEnabled(crossover.sustainEnabled, true);
+    result.transientEnabled = ! isEnabled(crossover.transientMute, false);
+    result.sustainEnabled = ! isEnabled(crossover.sustainMute, false);
     result.transientGainDb = juce::jlimit(gainMinDb, gainMaxDb, getParameterValue(crossover.transientGain, 0.0f));
     result.sustainGainDb = juce::jlimit(gainMinDb, gainMaxDb, getParameterValue(crossover.sustainGain, 0.0f));
     result.holdMs = holdHostSync ? getHostSyncMilliseconds(holdSyncIndex, hostBpm, holdType)

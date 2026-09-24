@@ -3,6 +3,8 @@
 #include "FilterSection.h"
 #include "PresetSections.h"
 #include "../crossover/Component.h"
+#include "../routing/Panel.h"
+#include "OscPanel.h"
 
 #include <cmath>
 
@@ -49,6 +51,8 @@ double focusedParameterValueToSliderValue(const juce::Slider& slider, const doub
 
 AvaAudioProcessorEditor::~AvaAudioProcessorEditor()
 {
+    audioProcessor.setOscActionEditor(nullptr);
+    oscParameterListWindow.reset();
     commitPendingHistorySnapshot(true);
     unregisterParameterListeners();
     storeEditorStateToValueTree();
@@ -58,6 +62,10 @@ AvaAudioProcessorEditor::~AvaAudioProcessorEditor()
 
 void AvaAudioProcessorEditor::timerCallback()
 {
+    if (activeInstanceId != 0
+        && audioProcessor.getRoutingInstanceHandle(activeInstanceId) == nullptr)
+        closeRoutingInstance();
+
     commitPendingHistorySnapshot();
     syncFocusedParameterControl();
 
@@ -100,6 +108,9 @@ void AvaAudioProcessorEditor::timerCallback()
 
     if (auto* editor = dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get()))
         editor->refreshExternalState();
+
+    if (oscPanel != nullptr)
+        oscPanel->refresh();
 
     refreshFftAnalyserResponse();
 }

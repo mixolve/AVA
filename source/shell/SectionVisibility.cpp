@@ -1,8 +1,10 @@
 #include "Editor.h"
+#include "OscPanel.h"
 #include "FilterSection.h"
 #include "PresetSections.h"
 #include "../crossover/Component.h"
 #include "../modules/eql/Processor.h"
+#include "../routing/Panel.h"
 
 namespace
 {
@@ -96,13 +98,13 @@ void AvaAudioProcessorEditor::setFftControlsVisible(const bool shouldShow)
     setComponentVisible(fftAnalyserTimeControl.get(), shouldShow);
 
     if (fftDualMonoLeftThresholdControl != nullptr)
-        fftDualMonoLeftThresholdControl->setTitleText(correlationMode ? "THRESH" : "L.THRESH");
+        fftDualMonoLeftThresholdControl->setTitleText(correlationMode ? "THRESHOLD" : "L-THRESHOLD");
     if (fftDualMonoLeftAdaptiveControl != nullptr)
-        fftDualMonoLeftAdaptiveControl->setTitleText(correlationMode ? "ADAPTIVE" : "L.ADAPTIVE");
+        fftDualMonoLeftAdaptiveControl->setTitleText(correlationMode ? "ADAPTIVE" : "L-ADAPTIVE");
     if (fftDualMonoRightThresholdControl != nullptr)
-        fftDualMonoRightThresholdControl->setTitleText("R.THRESH");
+        fftDualMonoRightThresholdControl->setTitleText("R-THRESHOLD");
     if (fftDualMonoRightAdaptiveControl != nullptr)
-        fftDualMonoRightAdaptiveControl->setTitleText("R.ADAPTIVE");
+        fftDualMonoRightAdaptiveControl->setTitleText("R-ADAPTIVE");
     if (fftAdaptiveOffsetControl != nullptr)
         fftAdaptiveOffsetControl->setTitleText("OFFSET");
 
@@ -227,6 +229,20 @@ void AvaAudioProcessorEditor::updateSectionStates()
         hostButton->setToggleState(hostParametersExpanded, juce::dontSendNotification);
     }
 
+    if (routingButton != nullptr)
+    {
+        routingButton->setVisible(globalControlsVisible);
+        routingButton->setToggleState(routingExpanded, juce::dontSendNotification);
+    }
+    if (routingPanel != nullptr)
+        routingPanel->setVisible(routingExpanded);
+    if (oscButton != nullptr)
+        oscButton->setToggleState(oscExpanded, juce::dontSendNotification);
+    if (oscPanel != nullptr)
+        oscPanel->setVisible(oscExpanded);
+    if (focusedParameterControl != nullptr)
+        focusedParameterControl->setVisible(! routingExpanded && ! oscExpanded);
+
     ensureModuleTitle();
 
     const auto hostParametersVisible = hostParametersExpanded;
@@ -245,7 +261,7 @@ void AvaAudioProcessorEditor::updateSectionStates()
     if (moduleAddButton != nullptr)
     {
         const auto noModuleLoaded = audioProcessor.getActiveModule() == AvaAudioProcessor::ActiveModule::none;
-        moduleAddButton->setVisible(noModuleLoaded && moduleContentVisible && ! hostParametersExpanded);
+        moduleAddButton->setVisible(noModuleLoaded && moduleContentVisible && ! hostParametersExpanded && ! routingExpanded && ! oscExpanded);
         moduleAddButton->setEnabled(noModuleLoaded && moduleContentVisible);
     }
 

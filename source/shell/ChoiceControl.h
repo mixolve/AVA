@@ -21,6 +21,7 @@ public:
     void detach() noexcept;
     void rebind(juce::AudioProcessorValueTreeState& state);
     int getSelectedChoiceIndex() const noexcept;
+    const juce::String& getParameterId() const noexcept { return parameterId; }
     void setSelectedChoiceIndex(int choiceIndex, bool sendNotification);
     void setChoices(const juce::StringArray& choicesIn);
     void setChoiceEnabled(int choiceIndex, bool shouldEnable);

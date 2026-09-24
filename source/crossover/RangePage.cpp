@@ -123,6 +123,7 @@ CrossoverRangePage::CrossoverRangePage(CrossoverModuleComponent& ownerIn,
     if (owner.config.showCrossoverSolo)
     {
         const auto soloParameterId = owner.config.makeCrossoverSoloParameterId(rangeIndex);
+        soloButton.getProperties().set(juce::Identifier("oscParameterId"), soloParameterId);
         listenedParameterIds.push_back(soloParameterId);
         owner.valueTreeState.addParameterListener(soloParameterId, this);
     }

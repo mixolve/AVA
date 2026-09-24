@@ -51,13 +51,26 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
         gainParameter = dynamic_cast<juce::AudioParameterFloat*>(parameter);
 
     header->setButtonText({});
+    {
+        juce::StringArray fallbackParameterIds;
+        fallbackParameterIds.add(EqlModuleProcessor::getFilterTypeParamId(filterIndexIn));
+        fallbackParameterIds.add(EqlModuleProcessor::getFilterPlaceParamId(filterIndexIn));
+        fallbackParameterIds.add(EqlModuleProcessor::getFilterOrderParamId(filterIndexIn));
+        fallbackParameterIds.add(EqlModuleProcessor::getFilterFrequencyParamId(filterIndexIn));
+        fallbackParameterIds.add(EqlModuleProcessor::getFilterBandwidthParamId(filterIndexIn));
+        fallbackParameterIds.add(EqlModuleProcessor::getFilterGainParamId(filterIndexIn));
+        header->getProperties().set(juce::Identifier("oscFallbackParameterIds"),
+                                    fallbackParameterIds.joinIntoString("\n"));
+    }
     header->setTextJustification(juce::Justification::centred);
     header->setClickingTogglesState(false);
     header->setToggleAccentVisible(true);
     header->setCancelClickOnLeave(true);
 
 
-    bypassButton->setButtonText("B");
+    bypassButton->getProperties().set(juce::Identifier("oscParameterId"),
+                                      EqlModuleProcessor::getFilterBypassParamId(filterIndexIn));
+    bypassButton->setButtonText("BP");
     bypassButton->setTextJustification(juce::Justification::centred);
     bypassButton->setClickingTogglesState(true);
     bypassButton->setCancelClickOnLeave(true);

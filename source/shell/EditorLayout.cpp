@@ -3,6 +3,8 @@
 #include "../crossover/Component.h"
 #include "UiConstants.h"
 #include "PresetSections.h"
+#include "../routing/Panel.h"
+#include "OscPanel.h"
 
 void AvaAudioProcessorEditor::paint(juce::Graphics& g)
 {
@@ -104,7 +106,10 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
     hostParametersViewport.setBounds({});
     hostParametersContent.setSize(0, 0);
 
-    std::array<BoxTextButton*, 9> panelButtons {
+    constexpr int globalButtonGap = 6;
+    std::array<BoxTextButton*, 11> panelButtons {
+        routingButton.get(),
+        oscButton.get(),
         abSlotAButton.get(),
         abSwitchButton.get(),
         abSlotBButton.get(),
@@ -116,9 +121,17 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
         footerTab.get()
     };
 
-    const auto buttonWidth = [] (const BoxTextButton* button)
+    const auto buttonWidthDelta = [this] (const BoxTextButton* button)
     {
-        return button != nullptr && button->usesIconOnlyContent() ? iconControlSize : rowHeight;
+        if (button == abSlotAButton.get() || button == abSlotBButton.get())
+            return -4;
+        return button == globalBypassButton.get() ? 8 : 0;
+    };
+    const auto buttonWidth = [&buttonWidthDelta] (const BoxTextButton* button)
+    {
+        const auto baseWidth = button != nullptr && button->usesIconOnlyContent()
+            ? iconControlSize : rowHeight;
+        return baseWidth + buttonWidthDelta(button);
     };
     auto visibleButtonCount = 0;
     auto iconButtonCount = 0;
@@ -138,7 +151,7 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
 
     const auto minimumSingleRowWidth = (iconButtonCount * iconControlSize)
         + (textButtonCount * rowHeight)
-        + (juce::jmax(0, visibleButtonCount - 1) * parameterGap);
+        + (juce::jmax(0, visibleButtonCount - 1) * globalButtonGap);
     const auto distributeTextButtons = textButtonCount > 0
         && bounds.getWidth() >= minimumSingleRowWidth;
     auto globalRowCount = 0;
@@ -160,7 +173,7 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
 
         const auto additionalWidth = currentRowWidth == 0
             ? buttonWidth(button)
-            : parameterGap + buttonWidth(button);
+            : globalButtonGap + buttonWidth(button);
 
         if (currentRowWidth > 0 && currentRowWidth + additionalWidth > bounds.getWidth())
         {
@@ -187,7 +200,7 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
         {
             const auto textButtonWidthBudget = rowBounds.getWidth()
                 - (iconButtonCount * iconControlSize)
-                - (juce::jmax(0, visibleButtonCount - 1) * parameterGap);
+                - (juce::jmax(0, visibleButtonCount - 1) * globalButtonGap);
             const auto textButtonWidth = textButtonWidthBudget / textButtonCount;
             auto textButtonWidthRemainder = textButtonWidthBudget % textButtonCount;
             auto textButtonIndex = 0;
@@ -199,11 +212,12 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
 
                 const auto width = button->usesIconOnlyContent()
                     ? iconControlSize
-                    : textButtonWidth + (textButtonIndex++ < textButtonWidthRemainder ? 1 : 0);
+                    : textButtonWidth + (textButtonIndex++ < textButtonWidthRemainder ? 1 : 0)
+                        + buttonWidthDelta(button);
                 button->setBounds(rowBounds.removeFromLeft(width));
 
                 if (! rowBounds.isEmpty())
-                    rowBounds.removeFromLeft(parameterGap);
+                    rowBounds.removeFromLeft(globalButtonGap);
             }
         }
         else
@@ -216,7 +230,7 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
                     continue;
 
                 const auto width = buttonWidth(button);
-                const auto additionalWidth = usedRowWidth == 0 ? width : parameterGap + width;
+                const auto additionalWidth = usedRowWidth == 0 ? width : globalButtonGap + width;
 
                 if (usedRowWidth > 0 && usedRowWidth + additionalWidth > rowBounds.getWidth())
                 {
@@ -224,9 +238,9 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
                     usedRowWidth = 0;
                 }
 
-                const auto x = rowBounds.getX() + (usedRowWidth == 0 ? 0 : usedRowWidth + parameterGap);
+                const auto x = rowBounds.getX() + (usedRowWidth == 0 ? 0 : usedRowWidth + globalButtonGap);
                 button->setBounds(x, rowBounds.getY(), width, rowHeight);
-                usedRowWidth += usedRowWidth == 0 ? width : parameterGap + width;
+                usedRowWidth += usedRowWidth == 0 ? width : globalButtonGap + width;
             }
         }
     }
@@ -292,6 +306,12 @@ void AvaAudioProcessorEditor::layoutFooter(juce::Rectangle<int>& bounds)
     if (focusedParameterControl == nullptr)
         return;
 
+    if (routingExpanded || oscExpanded)
+    {
+        focusedParameterControl->setBounds({});
+        return;
+    }
+
     auto focusedBounds = bounds.removeFromBottom(footerHeight);
     focusedParameterControl->setBounds(focusedBounds);
 }
@@ -327,16 +347,20 @@ void AvaAudioProcessorEditor::finalizeLayout() noexcept
     if (abSwitchButton != nullptr) abSwitchButton->toFront(false);
     if (abSlotBButton != nullptr) abSlotBButton->toFront(false);
     if (globalBypassButton != nullptr) globalBypassButton->toFront(false);
+    if (routingButton != nullptr) routingButton->toFront(false);
+    if (oscButton != nullptr) oscButton->toFront(false);
     if (moduleAddButton != nullptr) moduleAddButton->toFront(false);
     if (hostButton != nullptr) hostButton->toFront(false);
     if (fftDeltaButton != nullptr) fftDeltaButton->toFront(false);
     footerTab->toFront(false);
 
+    if (routingPanel != nullptr && routingExpanded)
+        routingPanel->toFront(false);
+    if (oscPanel != nullptr && oscExpanded)
+        oscPanel->toFront(false);
+
     if (focusedParameterControl != nullptr)
         focusedParameterControl->toFront(false);
-
-    if (horizontalResizeHandle != nullptr)
-        horizontalResizeHandle->toFront(false);
 
     if (verticalResizeHandle != nullptr)
         verticalResizeHandle->toFront(false);
@@ -345,6 +369,12 @@ void AvaAudioProcessorEditor::finalizeLayout() noexcept
     {
         textPromptOverlay->setBounds(getLocalBounds());
         textPromptOverlay->toFront(false);
+    }
+
+    if (activeInstanceEditor != nullptr)
+    {
+        activeInstanceEditor->setBounds(getLocalBounds());
+        activeInstanceEditor->toFront(false);
     }
 
     storeEditorStateToValueTree();
@@ -356,6 +386,9 @@ void AvaAudioProcessorEditor::resized()
         || clipButton == nullptr
         || presetsSection == nullptr
         || globalBypassButton == nullptr
+        || routingButton == nullptr
+        || oscButton == nullptr
+        || oscPanel == nullptr
         || undoButton == nullptr
         || redoButton == nullptr
         || abSlotAButton == nullptr
@@ -380,9 +413,6 @@ void AvaAudioProcessorEditor::resized()
 
     constexpr int resizeHandleThickness = 8;
 
-    if (horizontalResizeHandle != nullptr)
-        horizontalResizeHandle->setBounds(bounds.withLeft(juce::jmax(0, bounds.getRight() - resizeHandleThickness)));
-
     if (verticalResizeHandle != nullptr)
         verticalResizeHandle->setBounds(bounds.withTop(juce::jmax(0, bounds.getBottom() - resizeHandleThickness)));
 
@@ -401,6 +431,23 @@ void AvaAudioProcessorEditor::resized()
 
     layoutFooter(bounds);
     layoutGlobalControlsSection(bounds);
+    if (routingExpanded)
+    {
+        if (routingPanel != nullptr)
+            routingPanel->setBounds(bounds);
+        finalizeLayout();
+        return;
+    }
+
+    if (routingPanel != nullptr)
+        routingPanel->setBounds({});
+    if (oscExpanded)
+    {
+        oscPanel->setBounds(bounds);
+        finalizeLayout();
+        return;
+    }
+    oscPanel->setBounds({});
     layoutCrossoverSection(bounds);
 
     if (const auto* crossover = dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get()))

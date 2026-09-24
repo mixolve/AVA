@@ -211,7 +211,7 @@ double parseFrequencyInput(const juce::String& text)
 
 bool supportsNoteFrequencyInput(const juce::String& parameterId)
 {
-    return parameterId.endsWith("_frequency");
+    return parameterId.endsWith("_freq");
 }
 
 double findNearestChoiceIndex(const double targetValue, const juce::StringArray& choices, const juce::String& enteredText)

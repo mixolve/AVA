@@ -1,10 +1,16 @@
 #include "Editor.h"
+#include "EdgeResizeHandle.h"
 #include "LookAndFeel.h"
 #include "FilterSection.h"
 #include "PresetSections.h"
 #include "SetupSupport.h"
+#include "../routing/Panel.h"
+#include "../routing/State.h"
+#include "OscPanel.h"
 #include "../modules/fft/Processor.h"
 #include "../modules/eql/Processor.h"
+
+#include <algorithm>
 
 namespace
 {
@@ -167,63 +173,6 @@ private:
     double lastDragVerticalDelta = 0.0;
 };
 
-class EdgeResizeHandle final : public juce::Component
-{
-public:
-    enum class Axis
-    {
-        horizontal,
-        vertical
-    };
-
-    EdgeResizeHandle(AvaAudioProcessorEditor& ownerIn, const Axis axisIn)
-        : owner(ownerIn),
-          axis(axisIn)
-    {
-        setMouseCursor(axis == Axis::horizontal ? juce::MouseCursor::LeftRightResizeCursor
-                                                : juce::MouseCursor::UpDownResizeCursor);
-        setWantsKeyboardFocus(false);
-        setMouseClickGrabsKeyboardFocus(false);
-    }
-
-    void paint(juce::Graphics& graphics) override
-    {
-        auto bounds = getLocalBounds();
-        graphics.setColour(uiGrey500);
-
-        if (axis == Axis::horizontal)
-            graphics.fillRect(bounds.removeFromRight(1));
-        else
-            graphics.fillRect(bounds.removeFromBottom(1));
-    }
-
-    void mouseDown(const juce::MouseEvent&) override
-    {
-        dragStartSize = { owner.getWidth(), owner.getHeight() };
-    }
-
-    void mouseDrag(const juce::MouseEvent& event) override
-    {
-        auto width = dragStartSize.x;
-        auto height = dragStartSize.y;
-
-        if (axis == Axis::horizontal)
-            width = juce::jlimit(minimumEditorWidth,
-                                 maximumEditorWidth,
-                                 dragStartSize.x + event.getDistanceFromDragStartX());
-        else
-            height = juce::jlimit(minimumEditorHeight,
-                                  maximumEditorHeight,
-                                  dragStartSize.y + event.getDistanceFromDragStartY());
-
-        owner.setSize(width, height);
-    }
-
-private:
-    AvaAudioProcessorEditor& owner;
-    Axis axis;
-    juce::Point<int> dragStartSize;
-};
 }
 
 AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToEdit)
@@ -232,6 +181,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
       valueTreeState(processorToEdit.getValueTreeState()),
       lookAndFeel(std::make_unique<AvaLookAndFeel>())
 {
+    audioProcessor.setOscActionEditor(this);
     shell_parameter_focus::clearFocus(*this);
 
     setLookAndFeel(lookAndFeel.get());
@@ -244,6 +194,60 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     hostParametersViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     hostParametersViewport.setWantsKeyboardFocus(false);
     addAndMakeVisible(hostParametersViewport);
+    routingPanel = std::make_unique<RoutingPanel>(valueTreeState);
+    routingPanel->setOnOpenRoot([this]
+    {
+        toggleRoutingSection();
+    });
+    if (! audioProcessor.isRoutingInstance())
+    {
+        routingPanel->setOnOpenInstance([this] (const int id)
+        {
+            openRoutingInstance(id);
+        });
+        routingPanel->setOnTopologyChanged([this]
+        {
+            const auto topology = ava::routing::readState(valueTreeState.state);
+            if (activeInstanceId != 0
+                && (activeInstanceId == topology.rootInstanceId
+                    || std::none_of(topology.nodes.begin(), topology.nodes.end(),
+                                    [this] (const auto& node) { return node.id == activeInstanceId; })))
+                closeRoutingInstance();
+            audioProcessor.synchronizeRouting();
+        });
+    }
+    routingPanel->setOnRenameRequest([this] (const int id, const juce::String& currentName,
+                                             juce::Component& anchor)
+    {
+        showTextPrompt(currentName,
+                       [this, id] (const juce::String& newName)
+                       {
+                           return ava::routing::renameInstance(valueTreeState.state, id, newName);
+                       },
+                       getLocalArea(&anchor, anchor.getLocalBounds()));
+    });
+    routingPanel->setVisible(false);
+    addAndMakeVisible(*routingPanel);
+    OscPanel::Actions oscActions;
+    oscActions.getSettings = [this] { return audioProcessor.getOscSettings(); };
+    oscActions.setSettings = [this] (const OscSettings& settings)
+    {
+        return audioProcessor.setOscSettings(settings);
+    };
+    oscActions.isInputPortBusy = [this] { return audioProcessor.isOscInputPortBusy(); };
+    oscActions.toggleParameterList = [this] { showOscParameterList(); };
+    oscActions.isParameterListVisible = [this] { return oscParameterListWindow != nullptr; };
+    oscActions.showTextPrompt = [this] (juce::Component& anchor,
+                                        const juce::String& currentText,
+                                        std::function<bool(const juce::String&)> onCommit)
+    {
+        showTextPrompt(currentText, std::move(onCommit),
+                       getLocalArea(&anchor, anchor.getLocalBounds()));
+    };
+    oscActions.clearFocus = [this] { clearKeyboardFocus(*this); };
+    oscPanel = std::make_unique<OscPanel>(std::move(oscActions));
+    oscPanel->setVisible(false);
+    addAndMakeVisible(*oscPanel);
     filterViewport.setViewedComponent(&filterContent, false);
     filterViewport.setScrollBarsShown(false, false);
     filterViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
@@ -288,7 +292,8 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     };
     addAndMakeVisible(*focusedParameterControl);
 
-    verticalResizeHandle = std::make_unique<EdgeResizeHandle>(*this, EdgeResizeHandle::Axis::vertical);
+    verticalResizeHandle = std::make_unique<EdgeResizeHandle>(
+        *this, EdgeResizeHandle::Axis::vertical, minimumEditorHeight, maximumEditorHeight, uiGrey500);
     addAndMakeVisible(*verticalResizeHandle);
 
     clipButton = std::make_unique<BoxTextButton>(uiClip);
@@ -312,6 +317,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     addAndMakeVisible(*hostButton);
 
     moduleAddButton = std::make_unique<BoxTextButton>(uiClip);
+    moduleAddButton->getProperties().set(juce::Identifier("oscParameterId"), AvaAudioProcessor::oscAddModuleId);
     moduleAddButton->setButtonText("ADD-MODULE");
     moduleAddButton->setTextJustification(juce::Justification::centred);
     moduleAddButton->onClick = [this]
@@ -344,6 +350,9 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
         setupEqlControls(initialEqlProcessor->getValueTreeState());
 
     restoreEditorStateFromValueTree();
+    routingExpanded = ! audioProcessor.isRoutingInstance();
+    hostParametersExpanded = false;
+    oscExpanded = false;
 
     footerTab = std::make_unique<BoxTextButton>(uiAccent);
     footerTab->setIconOnlyText("I");

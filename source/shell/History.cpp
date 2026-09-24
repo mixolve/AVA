@@ -66,12 +66,14 @@ bool AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snap
     struct PreservedUiState
     {
         bool hostParameters = false;
+        bool routing = false;
         int filterScrollY = 0;
     };
 
     const PreservedUiState preservedUiState
     {
         hostParametersExpanded,
+        routingExpanded,
         filterViewport.getViewPositionY()
     };
     auto* bypassParameter = valueTreeState.getParameter(AvaAudioProcessor::paramGlobalBypassId);
@@ -111,6 +113,7 @@ bool AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snap
     refreshEqlFilterSectionsFromProcessor();
 
     hostParametersExpanded = preservedUiState.hostParameters;
+    routingExpanded = preservedUiState.routing;
 
     storeEditorStateToValueTree();
     syncEditorWidthToBounds();

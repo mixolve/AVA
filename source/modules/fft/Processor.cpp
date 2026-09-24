@@ -15,13 +15,10 @@ FftModuleProcessor::FftModuleProcessor(juce::AudioProcessor& owner)
     dualMonoLeftAdaptiveParam = parameters.getRawParameterValue(paramDualMonoLeftAdaptiveId);
     dualMonoRightAdaptiveParam = parameters.getRawParameterValue(paramDualMonoRightAdaptiveId);
     spectralAdaptiveOffsetParam = parameters.getRawParameterValue(paramSpectralAdaptiveOffsetId);
-    spectralAdaptiveAttackParam = parameters.getRawParameterValue(paramSpectralAdaptiveAttackId);
-    spectralAdaptiveHoldParam = parameters.getRawParameterValue(paramSpectralAdaptiveHoldId);
-    spectralAdaptiveReleaseParam = parameters.getRawParameterValue(paramSpectralAdaptiveReleaseId);
+    adaptiveAttackParam = parameters.getRawParameterValue(paramAdaptiveAttackId);
+    adaptiveHoldParam = parameters.getRawParameterValue(paramAdaptiveHoldId);
+    adaptiveReleaseParam = parameters.getRawParameterValue(paramAdaptiveReleaseId);
     correlationAdaptiveOffsetParam = parameters.getRawParameterValue(paramCorrelationAdaptiveOffsetId);
-    correlationAdaptiveAttackParam = parameters.getRawParameterValue(paramCorrelationAdaptiveAttackId);
-    correlationAdaptiveHoldParam = parameters.getRawParameterValue(paramCorrelationAdaptiveHoldId);
-    correlationAdaptiveReleaseParam = parameters.getRawParameterValue(paramCorrelationAdaptiveReleaseId);
     dualMonoLinkParam = parameters.getRawParameterValue(paramDualMonoLinkId);
     dynamicBypassParam = parameters.getRawParameterValue(paramDynamicBypassId);
     dynamicModeParam = parameters.getRawParameterValue(paramDynamicModeId);

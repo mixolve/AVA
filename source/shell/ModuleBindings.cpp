@@ -26,6 +26,7 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
 
             restoreFilterDisplayOrderFromValueTree();
             rebindActiveModuleEditors();
+            refreshHostSlotButtons();
             updateSectionStates();
             resized();
         };
@@ -62,9 +63,9 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
         if (fftDualMonoRightThresholdControl != nullptr) fftDualMonoRightThresholdControl->rebind(fftState, FftModuleProcessor::paramDualMonoRightThresholdId);
         if (fftDualMonoRightAdaptiveControl != nullptr) fftDualMonoRightAdaptiveControl->rebind(fftState);
         if (fftAdaptiveOffsetControl != nullptr) fftAdaptiveOffsetControl->rebind(fftState, FftModuleProcessor::paramSpectralAdaptiveOffsetId);
-        if (fftAdaptiveAttackControl != nullptr) fftAdaptiveAttackControl->rebind(fftState, FftModuleProcessor::paramSpectralAdaptiveAttackId);
-        if (fftAdaptiveHoldControl != nullptr) fftAdaptiveHoldControl->rebind(fftState, FftModuleProcessor::paramSpectralAdaptiveHoldId);
-        if (fftAdaptiveReleaseControl != nullptr) fftAdaptiveReleaseControl->rebind(fftState, FftModuleProcessor::paramSpectralAdaptiveReleaseId);
+        if (fftAdaptiveAttackControl != nullptr) fftAdaptiveAttackControl->rebind(fftState, FftModuleProcessor::paramAdaptiveAttackId);
+        if (fftAdaptiveHoldControl != nullptr) fftAdaptiveHoldControl->rebind(fftState, FftModuleProcessor::paramAdaptiveHoldId);
+        if (fftAdaptiveReleaseControl != nullptr) fftAdaptiveReleaseControl->rebind(fftState, FftModuleProcessor::paramAdaptiveReleaseId);
         if (fftDetectorLowCutControl != nullptr) fftDetectorLowCutControl->rebind(fftState);
         if (fftDetectorHighCutControl != nullptr) fftDetectorHighCutControl->rebind(fftState);
         rebindFftModeControls(fftProcessor);
@@ -202,4 +203,5 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
                           audioProcessor.getTrsModuleProcessor(),
                           trsModuleEditor,
                           [this] (auto& processor) { return makeTrsCrossoverConfig(processor, *this, trsModuleEditor); });
+    refreshHostSlotButtons();
 }

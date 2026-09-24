@@ -20,7 +20,7 @@ void CrossoverModuleComponent::loadUiState()
     crossoverSettingsActive = getBool(state, config.moduleKey, "crossover_settings_active", false);
     visibleRangeIndex = static_cast<size_t>(juce::jlimit(0,
                                                        static_cast<int>(numRanges - 1),
-                                                       getInt(state, config.moduleKey, "visible_range_index", 0)));
+                                                       getInt(state, config.moduleKey, "visible_band_index", 0)));
     restoredPageScrollY = juce::jmax(0, getInt(state, config.moduleKey, "page_scroll_y", 0));
     pageScrollRestored = false;
 
@@ -47,7 +47,7 @@ void CrossoverModuleComponent::saveUiState()
     setBool(state, config.moduleKey, "auto_solo_enabled", autoSoloEnabled);
     setBool(state, config.moduleKey, "manual_solo_inclusive", manualSoloInclusive);
     setBool(state, config.moduleKey, "crossover_settings_active", crossoverSettingsActive);
-    setInt(state, config.moduleKey, "visible_range_index", static_cast<int>(visibleRangeIndex));
+    setInt(state, config.moduleKey, "visible_band_index", static_cast<int>(visibleRangeIndex));
     setInt(state, config.moduleKey, "page_scroll_y", restoredPageScrollY);
     setBool(state, config.moduleKey, "has_ui_state", true);
 
@@ -80,7 +80,7 @@ juce::String CrossoverModuleComponent::getUiStateSignature() const
     values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "auto_solo_enabled"), false).toString());
     values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "manual_solo_inclusive"), false).toString());
     values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "crossover_settings_active"), false).toString());
-    values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "visible_range_index"), 0).toString());
+    values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "visible_band_index"), 0).toString());
     values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "page_scroll_y"), 0).toString());
 
     for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
@@ -92,4 +92,3 @@ juce::String CrossoverModuleComponent::getUiStateSignature() const
 
     return values.joinIntoString("|");
 }
-

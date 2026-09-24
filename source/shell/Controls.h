@@ -164,6 +164,8 @@ public:
                                    std::function<void()> hostAction = {},
                                    juce::String primaryPromptText = "R?");
     void setLongPressTrailingPromptAction(std::function<void()> action, juce::String promptText);
+    void setLongPressTrailingPromptIconAction(std::function<void()> action, const char* iconName);
+    void setLongPressAdditionalPromptIconAction(std::function<void()> action, const char* iconName);
     void setDragTargetOutlineVisible(bool shouldShow) noexcept;
     void flashConfirmationOutline();
 
@@ -171,12 +173,14 @@ public:
     std::function<void(juce::Point<int>)> onDragMove;
     std::function<void()> onDragEnd;
     std::function<void()> onMoveArmed;
+    std::function<void()> onDoubleClick;
 
     void paintButton(juce::Graphics& graphics, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
     void enablementChanged() override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
+    void mouseDoubleClick(const juce::MouseEvent& event) override;
     void mouseMove(const juce::MouseEvent& event) override;
     void mouseEnter(const juce::MouseEvent&) override;
     void mouseExit(const juce::MouseEvent&) override;
@@ -221,6 +225,9 @@ private:
     juce::String longPressPrimaryPromptText = "R?";
     std::function<void()> longPressTrailingAction;
     juce::String longPressTrailingPromptText;
+    juce::Image longPressTrailingPromptIconImage;
+    std::function<void()> longPressAdditionalPromptAction;
+    juce::Image longPressAdditionalPromptIconImage;
     std::unique_ptr<PromptDismissListener> promptDismissListener;
     bool actionPromptActive = false;
     bool actionPromptGlobalListenerActive = false;
@@ -231,6 +238,7 @@ private:
     juce::String moveArmedOriginalText;
     juce::String actionPromptOriginalText;
     bool marqueeRepaintPending = false;
+    int pendingClickGeneration = 0;
 
     void showActionPrompt();
     void dismissActionPrompt();

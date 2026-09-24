@@ -70,7 +70,7 @@ constexpr size_t numRanges = tls::dsp::ProcessorBank::numRanges;
 
 juce::String makeRangeHostName(const size_t rangeIndex, const juce::String& blockName, const juce::String& parameterName)
 {
-    return "TLS / RANGE " + juce::String(static_cast<int>(rangeIndex + 1))
+    return "TLS / BAND " + juce::String(static_cast<int>(rangeIndex + 1))
         + " / " + blockName + " / " + parameterName;
 }
 

@@ -25,7 +25,7 @@ inline bool isCurrentStateProperty(const juce::Identifier& property, const juce:
         "auto_solo_enabled",
         "manual_solo_inclusive",
         "crossover_settings_active",
-        "visible_range_index",
+        "visible_band_index",
         "page_scroll_y",
         "has_ui_state"
     };
@@ -69,7 +69,7 @@ inline bool isCurrentStatePropertyValue(const juce::ValueTree& state,
             return hasExactBooleanValue(state.getProperty(id));
     }
 
-    const auto visibleRangeId = makeStatePropertyId(moduleKey, "visible_range_index");
+    const auto visibleRangeId = makeStatePropertyId(moduleKey, "visible_band_index");
     if (property == visibleRangeId)
         return hasExactIntegerValue(state.getProperty(visibleRangeId),
                                     0,

@@ -14,21 +14,21 @@ class TrsModuleProcessor final
 public:
     using RangeLatencies = ava::modules::SampleRangeBank<trs::dsp::DspCore>::RangeLatencies;
 
-    inline static constexpr auto paramTransientEnabledId = "transient_enabled";
-    inline static constexpr auto paramTransientGainId = "transient_gain";
-    inline static constexpr auto paramSustainEnabledId = "sustain_enabled";
-    inline static constexpr auto paramSustainGainId = "sustain_gain";
+    inline static constexpr auto paramTransientMuteId = "mute.transient.icon";
+    inline static constexpr auto paramTransientGainId = "gain.transient";
+    inline static constexpr auto paramSustainMuteId = "mute.sustain.icon";
+    inline static constexpr auto paramSustainGainId = "gain.sustain";
     inline static constexpr auto paramHoldId = "hold";
-    inline static constexpr auto paramHoldModeId = "hold_mode";
-    inline static constexpr auto paramHoldSyncId = "hold_sync";
+    inline static constexpr auto paramHoldTypeId = "hold-type";
+    inline static constexpr auto paramHoldSyncId = "hold.sync";
     inline static constexpr auto paramReleaseId = "release";
-    inline static constexpr auto paramReleaseCurveId = "release_curve";
-    inline static constexpr auto paramReleaseModeId = "release_mode";
-    inline static constexpr auto paramReleaseSyncId = "release_sync";
+    inline static constexpr auto paramReleaseCurveId = "release-curve";
+    inline static constexpr auto paramReleaseTypeId = "release-type";
+    inline static constexpr auto paramReleaseSyncId = "release.sync";
     inline static constexpr auto paramThresholdId = "threshold";
     inline static constexpr auto paramKneeId = "knee";
     inline static constexpr auto paramRetriggerId = "retrigger";
-    inline static constexpr auto paramOneShotId = "one_shot";
+    inline static constexpr auto paramOneShotId = "one-shot";
     inline static constexpr auto paramLookaheadId = "lookahead";
 
     static constexpr size_t numRanges = ava::crossover::Splitter::numRanges;
@@ -59,16 +59,16 @@ private:
 
     struct RawRangeParameters
     {
-        std::atomic<float>* transientEnabled = nullptr;
+        std::atomic<float>* transientMute = nullptr;
         std::atomic<float>* transientGain = nullptr;
-        std::atomic<float>* sustainEnabled = nullptr;
+        std::atomic<float>* sustainMute = nullptr;
         std::atomic<float>* sustainGain = nullptr;
         std::atomic<float>* hold = nullptr;
-        std::atomic<float>* holdMode = nullptr;
+        std::atomic<float>* holdType = nullptr;
         std::atomic<float>* holdSync = nullptr;
         std::atomic<float>* release = nullptr;
         std::atomic<float>* releaseCurve = nullptr;
-        std::atomic<float>* releaseMode = nullptr;
+        std::atomic<float>* releaseType = nullptr;
         std::atomic<float>* releaseSync = nullptr;
         std::atomic<float>* threshold = nullptr;
         std::atomic<float>* knee = nullptr;

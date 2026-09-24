@@ -6,6 +6,7 @@
 #include "../modules/eql/ProcessorBank.h"
 #include "../modules/fft/ProcessorBank.h"
 #include "../modules/trs/Processor.h"
+#include "../routing/Runtime.h"
 
 namespace
 {
@@ -71,6 +72,7 @@ void AvaAudioProcessor::getStateInformationForABCompareSnapshot(juce::MemoryBloc
 
 void AvaAudioProcessor::writeStateInformation(juce::MemoryBlock& destData, const bool includeABCompareState)
 {
+    const juce::ScopedLock lock(processingLock);
     const auto editorWidth = lastEditorWidth.load(std::memory_order_relaxed);
     const auto editorHeight = lastEditorHeight.load(std::memory_order_relaxed);
     auto state = parameters.copyState();
@@ -102,6 +104,9 @@ void AvaAudioProcessor::writeStateInformation(juce::MemoryBlock& destData, const
     else
         shell_state_serialization::removeABCompareStateProperties(state);
 
+    if (routingRuntime != nullptr)
+        routingRuntime->writeProcessorStates(state);
+
     if (auto stateXml = state.createXml())
         copyXmlToBinary(*stateXml, destData);
 }
@@ -122,6 +127,9 @@ void AvaAudioProcessor::notifyHostOfStateChange()
 {
     if (suppressHostStateNotifications.load(std::memory_order_relaxed))
         return;
+
+    if (parentStateChanged != nullptr)
+        parentStateChanged();
 
     const auto makeChangeDetails = []
     {

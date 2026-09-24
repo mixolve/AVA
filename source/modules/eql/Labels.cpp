@@ -57,22 +57,22 @@ int EqlModuleProcessor::getOrderChoiceForSlopeDbPerOct(const float slope) noexce
 
 juce::String EqlModuleProcessor::getFilterTypeParamId(const int filterIndex)
 {
-    return "filter_" + juce::String(filterIndex + 1) + "_type";
+    return "filter-" + juce::String(filterIndex + 1) + "_type";
 }
 
 juce::String EqlModuleProcessor::getFilterPlaceParamId(const int filterIndex)
 {
-    return "filter_" + juce::String(filterIndex + 1) + "_place";
+    return "filter-" + juce::String(filterIndex + 1) + "_place";
 }
 
 juce::String EqlModuleProcessor::getFilterFrequencyParamId(const int filterIndex)
 {
-    return makeFilterParameterId("frequency", filterIndex);
+    return makeFilterParameterId("freq", filterIndex);
 }
 
 juce::String EqlModuleProcessor::getFilterBandwidthParamId(const int filterIndex)
 {
-    return makeFilterParameterId("bandwidth", filterIndex);
+    return makeFilterParameterId("bw", filterIndex);
 }
 
 juce::String EqlModuleProcessor::getFilterOrderParamId(const int filterIndex)
@@ -87,7 +87,7 @@ juce::String EqlModuleProcessor::getFilterGainParamId(const int filterIndex)
 
 juce::String EqlModuleProcessor::getFilterBypassParamId(const int filterIndex)
 {
-    return makeFilterParameterId("bypass", filterIndex);
+    return makeFilterParameterId("bp", filterIndex);
 }
 
 juce::String EqlModuleProcessor::getFilterHeaderText(const FilterType type, const int filterIndex)

@@ -54,6 +54,8 @@ CrossoverRangePage::ParameterRow::ParameterRow(CrossoverRangePage& pageIn,
         if (owner.config.moduleKey == "tls" && reorderGroup == "gain")
         {
             orderLabel = makeTextButton("00", uiGrey500);
+            if (orderParameterId.isNotEmpty())
+                orderLabel->getProperties().set(juce::Identifier("oscParameterId"), orderParameterId);
             orderLabel->setFillVisible(false);
             orderLabel->setPressFillEnabled(false);
             addAndMakeVisible(*orderLabel);
@@ -70,6 +72,7 @@ CrossoverRangePage::ParameterRow::ParameterRow(CrossoverRangePage& pageIn,
     if (auxiliaryToggleId.isNotEmpty())
     {
         auxiliaryToggle = makeTextButton(spec.auxiliaryToggleLabel);
+        auxiliaryToggle->getProperties().set(juce::Identifier("oscParameterId"), auxiliaryToggleId);
         auxiliaryToggle->setClickingTogglesState(! auxiliaryToggleInverted);
 
         if (spec.auxiliaryToggleIcon != nullptr
@@ -130,10 +133,17 @@ void CrossoverRangePage::ParameterRow::resized()
         : auxiliaryToggleWidth > 0
             ? juce::jmin(auxiliaryToggleWidth, bounds.getWidth())
             : juce::jmax(0, (bounds.getWidth() - (parameterGap * 2)) / 3);
-    const auto titleWidth = parameterTitleWidth > 0
-        ? juce::jmin(parameterTitleWidth,
-                     juce::jmax(0, bounds.getWidth() - toggleWidth - (parameterGap * 2)))
-        : toggleWidth;
+    const auto maximumTitleWidth = juce::jmax(0, bounds.getWidth() - toggleWidth - (parameterGap * 2));
+    const auto titleWidth = auxiliaryToggle->usesIconOnlyContent()
+        ? juce::jlimit(0,
+                       maximumTitleWidth,
+                       bounds.getWidth()
+                           - parameterGap
+                           - (toggleWidth + parameterGap)
+                           - getScaledParameterNameWidth(bounds.getWidth()))
+        : parameterTitleWidth > 0
+            ? juce::jmin(parameterTitleWidth, maximumTitleWidth)
+            : toggleWidth;
     control->setTitleWidthOverride(titleWidth);
     control->setValueLeadingInset(toggleWidth + parameterGap);
     control->setBounds(bounds);
@@ -260,6 +270,7 @@ CrossoverRangePage::ToggleRow::ToggleRow(CrossoverRangePage& pageIn,
       disabledLabel(spec.disabledLabel != nullptr && juce::String(spec.disabledLabel).isNotEmpty() ? spec.disabledLabel : spec.label)
 {
     button = makeTextButton(spec.label);
+    button->getProperties().set(juce::Identifier("oscParameterId"), parameterIdToToggle);
     topGapMultiplier = spec.topGapMultiplier;
     button->setClickingTogglesState(true);
     button->setToggleAccentVisible(spec.toggleAccentVisible);
@@ -311,6 +322,8 @@ CrossoverRangePage::ReadoutRow::ReadoutRow(CrossoverModuleComponent& ownerIn,
       degreeParameterIdToRead(std::move(degreeParameterId)),
       flipParameterIdToRead(std::move(flipParameterId))
 {
+    value.getProperties().set(juce::Identifier("oscParameterId"), degreeParameterIdToRead);
+    value.getProperties().set(juce::Identifier("oscParameterId2"), flipParameterIdToRead);
     value.setFont(makeUiFont());
     value.setColour(juce::Label::textColourId, uiWhite);
     value.setColour(juce::Label::backgroundColourId, uiBlack);
@@ -367,6 +380,8 @@ CrossoverRangePage::TimeRow::TimeRow(CrossoverModuleComponent& ownerIn,
     if (spec.showTimeModeButton)
     {
         modeButton = makeTimeModeButton();
+        modeButton->getProperties().set(juce::Identifier("oscParameterId"), modeParameterIdToEdit);
+        modeButton->getProperties().set(juce::Identifier("oscParameterId2"), syncParameterIdToEdit);
         modeButton->setLongPressPromptActions({}, [this]
         {
             owner.assignButtonToHostSlot(modeParameterIdToEdit, modeParameterIdToEdit, modeButton.get());

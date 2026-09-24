@@ -26,6 +26,8 @@ public:
     bool setStateInformation(const void* data, int sizeInBytes);
 
     void setSelectedRange(size_t rangeIndex) noexcept;
+    EqlModuleProcessor* getProcessor(size_t rangeIndex) noexcept;
+    const EqlModuleProcessor* getProcessor(size_t rangeIndex) const noexcept;
     EqlModuleProcessor* getSelectedProcessor() noexcept;
     const EqlModuleProcessor* getSelectedProcessor() const noexcept;
 

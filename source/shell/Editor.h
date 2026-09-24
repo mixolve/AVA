@@ -14,6 +14,8 @@ class ChoiceControl;
 class LocalChoiceControl;
 class LocalParameterControl;
 class ParameterControl;
+class RoutingPanel;
+class OscPanel;
 
 namespace shell_parameter_focus
 {
@@ -51,9 +53,14 @@ private:
     struct FilterSection;
 
     void toggleHostParametersSection();
+    void toggleRoutingSection();
+    void toggleOscSection();
+    void openRoutingInstance(int instanceId);
+    void closeRoutingInstance();
     void showModulePicker();
     void closeActiveModule();
     void loadModule(AvaAudioProcessor::ActiveModule module);
+    void showOscParameterList();
     void selectFilterSection(int filterIndex);
     void refreshFilterPresetList(const juce::String& preferredSelection = {});
     void reloadFilterPresetFromProcessor();
@@ -74,6 +81,7 @@ public:
                         std::function<void()> onClose = {},
                         std::function<void()> onDismiss = {});
     void showInfoPrompt(const juce::String& markdownText);
+    void setReturnToRoutingAction(std::function<void()> action);
     void showChoicePrompt(const juce::Rectangle<int>& anchorBounds,
                           const juce::StringArray& choices,
                           int selectedIndex,
@@ -84,6 +92,8 @@ public:
                           std::function<void()> onDismiss = {});
     juce::Rectangle<int> getInfoPromptAnchorBounds() const noexcept;
     juce::Rectangle<int> getInfoPromptVisibleBounds() const noexcept;
+    bool handleOscGlobalAction(const juce::String& actionId, float value);
+    bool handleOscEqlAction(size_t bandIndex, const juce::String& action, float value);
 private:
     void dismissTextPrompt();
     void timerCallback() override;
@@ -183,6 +193,8 @@ private:
     std::unique_ptr<AvaLookAndFeel> lookAndFeel;
     std::unique_ptr<BoxTextButton> clipButton;
     std::unique_ptr<BoxTextButton> hostButton;
+    std::unique_ptr<BoxTextButton> routingButton;
+    std::unique_ptr<BoxTextButton> oscButton;
     std::unique_ptr<BoxTextButton> moduleAddButton;
     std::unique_ptr<BoxTextButton> moduleTitle;
     std::unique_ptr<juce::Component> crossoverEditor;
@@ -243,10 +255,16 @@ private:
     ParameterFocusClearingComponent filterContent;
     std::unique_ptr<juce::Slider> focusedParameterControl;
     std::unique_ptr<BoxTextButton> footerTab;
-    std::unique_ptr<juce::Component> horizontalResizeHandle;
     std::unique_ptr<juce::Component> verticalResizeHandle;
     std::unique_ptr<juce::Component> fftAnalyserComponent;
     std::unique_ptr<juce::Component> textPromptOverlay;
+    std::unique_ptr<juce::DocumentWindow> oscParameterListWindow;
+    std::unique_ptr<RoutingPanel> routingPanel;
+    std::shared_ptr<AvaAudioProcessor> activeInstanceProcessor;
+    std::unique_ptr<AvaAudioProcessorEditor> activeInstanceEditor;
+    std::function<void()> returnToRoutingAction;
+    int activeInstanceId = 0;
+    std::unique_ptr<OscPanel> oscPanel;
     std::unique_ptr<juce::Component> tlsModuleEditor;
     std::unique_ptr<juce::Component> dynModuleEditor;
     std::unique_ptr<juce::Component> trsModuleEditor;
@@ -256,6 +274,8 @@ private:
     bool dynModuleLoaded = false;
     bool trsModuleLoaded = false;
     bool hostParametersExpanded = false;
+    bool routingExpanded = false;
+    bool oscExpanded = false;
     std::vector<int> filterDisplayOrder;
     bool suppressFilterSectionValueChangeHandlers = false;
     bool suppressFftAnalyserControlChangeHandlers = false;

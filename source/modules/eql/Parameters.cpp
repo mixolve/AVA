@@ -20,7 +20,7 @@ inline constexpr auto eqlFilterOrder = std::to_array<ParameterOrderEntry>({
     { "freq", "FREQ" },
     { "bw", "BW" },
     { "gain", "GAIN" },
-    { "bypass", "B" },
+    { "bp", "BP" },
 });
 }
 
@@ -114,7 +114,7 @@ void EqlModuleProcessor::appendEqlParameters(std::vector<std::unique_ptr<juce::R
                 continue;
             }
 
-            if (key == "bypass")
+            if (key == "bp")
             {
                 parameterLayout.push_back(std::make_unique<juce::AudioParameterBool>(
                     juce::ParameterID { getFilterBypassParamId(filterIndex), 1 },

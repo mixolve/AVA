@@ -5,6 +5,7 @@
 #include "../modules/dyn/Processor.h"
 #include "../modules/fft/Processor.h"
 #include "../modules/trs/Processor.h"
+#include "../routing/Runtime.h"
 
 #include <cmath>
 
@@ -33,6 +34,9 @@ void AvaAudioProcessor::prepareToPlay(const double sampleRate, const int samples
     if (trsModuleProcessor != nullptr)
         trsModuleProcessor->prepareToPlay(sampleRate, preparedBlockSize);
 
+    if (routingRuntime != nullptr)
+        routingRuntime->prepare(sampleRate, preparedBlockSize, preparedNumChannels);
+
     updateShellLatency();
     processingPrepared.store(true, std::memory_order_release);
 }
@@ -52,6 +56,9 @@ void AvaAudioProcessor::releaseResources()
         dynModuleProcessor->releaseResources();
     if (trsModuleProcessor != nullptr)
         trsModuleProcessor->releaseResources();
+
+    if (routingRuntime != nullptr)
+        routingRuntime->release();
 
     crossoverRouter.reset();
 
@@ -73,6 +80,9 @@ void AvaAudioProcessor::reset()
         dynModuleProcessor->resetProcessingState();
     if (trsModuleProcessor != nullptr)
         trsModuleProcessor->resetProcessingState();
+
+    if (routingRuntime != nullptr)
+        routingRuntime->reset();
 
     crossoverRouter.reset();
 
@@ -137,6 +147,9 @@ void AvaAudioProcessor::requestLatencySamples(const int latencySamples) noexcept
     if (previousRequest == constrainedLatency)
         return;
 
+    if (parentStateChanged != nullptr)
+        parentStateChanged();
+
     if (auto* messageManager = juce::MessageManager::getInstanceWithoutCreating();
         messageManager != nullptr && messageManager->isThisTheMessageThread())
     {
@@ -149,7 +162,8 @@ void AvaAudioProcessor::requestLatencySamples(const int latencySamples) noexcept
 
 void AvaAudioProcessor::updateShellLatency() noexcept
 {
-    auto totalLatencySamples = getActiveModuleLatencySamples();
+    auto totalLatencySamples = routingRuntime != nullptr && routingRuntime->hasMultipleInstances()
+        ? routingRuntime->getLatencySamples() : getActiveModuleLatencySamples();
 
     if (abCompareLatencyLocked.load(std::memory_order_acquire))
     {
@@ -172,7 +186,7 @@ bool AvaAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
         || mainInput == juce::AudioChannelSet::stereo();
 }
 
-void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -193,7 +207,22 @@ void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         return;
     }
 
+    if (routingRuntime != nullptr && routingRuntime->hasMultipleInstances())
+    {
+        routingRuntime->process(buffer, midi);
+        auto clipped = false;
+        for (int channel = 0; channel < juce::jmin(buffer.getNumChannels(), preparedNumChannels); ++channel)
+            clipped = clipped || buffer.getMagnitude(channel, 0, buffer.getNumSamples()) >= 1.0f;
+        globalClipIndicator.store(clipped ? 1.0f : 0.0f, std::memory_order_relaxed);
+        updateShellLatency();
+        return;
+    }
 
+    processOwnBlock(buffer);
+}
+
+void AvaAudioProcessor::processOwnBlock(juce::AudioBuffer<float>& buffer)
+{
     const auto active = activeModule.load(std::memory_order_acquire);
     auto crossoverSettings = getCrossoverSettings();
 

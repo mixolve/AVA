@@ -43,12 +43,15 @@ public:
         }
 
         autoSoloButton = makeTextButton("AUTO-SOLO");
+        if (owner.config.makeCrossoverParameterId != nullptr)
+            autoSoloButton->getProperties().set(juce::Identifier("oscParameterId"),
+                                                owner.config.makeCrossoverParameterId("auto-solo"));
         autoSoloButton->setClickingTogglesState(true);
         autoSoloButton->setToggleState(owner.autoSoloEnabled, juce::dontSendNotification);
         autoSoloButton->setLongPressPromptActions({}, [this]
         {
             if (owner.config.makeCrossoverParameterId != nullptr)
-                owner.assignButtonToHostSlot(owner.config.makeCrossoverParameterId("auto_solo"),
+                owner.assignButtonToHostSlot(owner.config.makeCrossoverParameterId("auto-solo"),
                                              "AUTO-SOLO",
                                              autoSoloButton.get());
         });
@@ -76,6 +79,8 @@ public:
         addAndMakeVisible(*soloModeControl);
 
         addCrossoverButton = makeTextButton("XOV-ADD");
+        addCrossoverButton->getProperties().set(juce::Identifier("oscParameterId"),
+                                                "xov-add");
         addCrossoverButton->onClick = [this]
         {
             owner.changeActiveSplitCount(1);
@@ -84,6 +89,8 @@ public:
         addAndMakeVisible(*addCrossoverButton);
 
         removeCrossoverButton = makeTextButton("XOV-DEL");
+        removeCrossoverButton->getProperties().set(juce::Identifier("oscParameterId"),
+                                                   "xov-del");
         removeCrossoverButton->onClick = [this]
         {
             owner.changeActiveSplitCount(-1);
@@ -121,6 +128,7 @@ public:
             auto button = makeTextButton(globalListenLabels[index]);
             button->setClickingTogglesState(true);
             const auto parameterId = owner.config.makeCrossoverParameterId(globalListenSuffixes[index]);
+            button->getProperties().set(juce::Identifier("oscParameterId"), parameterId);
             globalListenAttachments[index] = std::make_unique<ButtonAttachment>(owner.valueTreeState,
                                                                                    parameterId,
                                                                                    *button);
@@ -353,6 +361,7 @@ private:
     std::array<std::unique_ptr<BoxTextButton>, globalListenSuffixes.size()> globalListenButtons;
     std::array<std::unique_ptr<ButtonAttachment>, globalListenSuffixes.size()> globalListenAttachments;
     std::unique_ptr<BoxTextButton> globalListenInactive;
+
 };
 
 std::unique_ptr<CrossoverModulePage> makeCrossoverSettingsPage(CrossoverModuleComponent& owner)

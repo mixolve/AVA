@@ -140,6 +140,10 @@ void AvaAudioProcessorEditor::restoreEditorStateFromValueTree()
     setLoadedModuleFlags(audioProcessor.getActiveModule());
     hostParametersExpanded = static_cast<bool>(state.getProperty(
         AvaAudioProcessor::editorHostParametersExpandedStateKey, false));
+    routingExpanded = static_cast<bool>(state.getProperty(
+        AvaAudioProcessor::editorRoutingExpandedStateKey, false));
+    if (routingExpanded)
+        hostParametersExpanded = false;
 
     for (int filterIndex = 0; filterIndex < EqlModuleProcessor::maxFilterCount; ++filterIndex)
     {
@@ -181,6 +185,7 @@ void AvaAudioProcessorEditor::storeEditorStateToValueTree() noexcept
         state.removeProperty(AvaAudioProcessor::activeModuleStateKey, nullptr);
 
     state.setProperty(AvaAudioProcessor::editorHostParametersExpandedStateKey, hostParametersExpanded, nullptr);
+    state.setProperty(AvaAudioProcessor::editorRoutingExpandedStateKey, routingExpanded, nullptr);
     storeFilterDisplayOrderToValueTree();
 
     for (int slotIndex = 0; slotIndex < static_cast<int>(hostSlotAssignments.size()); ++slotIndex)

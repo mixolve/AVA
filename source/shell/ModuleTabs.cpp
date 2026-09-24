@@ -185,6 +185,8 @@ void AvaAudioProcessorEditor::ensureModuleTitle()
     if (moduleTitle == nullptr)
     {
         moduleTitle = std::make_unique<BoxTextButton>(uiGrey500);
+        moduleTitle->getProperties().set(juce::Identifier("oscParameterId"),
+                                         AvaAudioProcessor::oscCloseModuleId);
         moduleTitle->setTextJustification(juce::Justification::centred);
         moduleTitle->setAlwaysAccentOutline(false);
         moduleTitle->setToggleAccentVisible(false);
@@ -206,6 +208,11 @@ void AvaAudioProcessorEditor::ensureModuleTitle()
 void AvaAudioProcessorEditor::toggleHostParametersSection()
 {
     hostParametersExpanded = ! hostParametersExpanded;
+    if (hostParametersExpanded)
+    {
+        routingExpanded = false;
+        oscExpanded = false;
+    }
 
     storeEditorStateToValueTree();
     updateSectionStates();

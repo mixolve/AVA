@@ -185,6 +185,22 @@ void BoxTextButton::setLongPressTrailingPromptAction(std::function<void()> actio
 {
     longPressTrailingAction = std::move(action);
     longPressTrailingPromptText = std::move(promptText);
+    longPressTrailingPromptIconImage = {};
+}
+
+void BoxTextButton::setLongPressTrailingPromptIconAction(std::function<void()> action,
+                                                        const char* iconName)
+{
+    longPressTrailingAction = std::move(action);
+    longPressTrailingPromptText.clear();
+    longPressTrailingPromptIconImage = loadTablerIcon(iconName, iconGlyphSize);
+}
+
+void BoxTextButton::setLongPressAdditionalPromptIconAction(std::function<void()> action,
+                                                          const char* iconName)
+{
+    longPressAdditionalPromptAction = std::move(action);
+    longPressAdditionalPromptIconImage = loadTablerIcon(iconName, iconGlyphSize);
 }
 
 void BoxTextButton::setDragTargetOutlineVisible(const bool shouldShow) noexcept
@@ -227,6 +243,7 @@ void BoxTextButton::showActionPrompt()
     dragHoldArmed = false;
     setViewportIgnoreDragFlag(false);
     actionPromptOriginalText = getButtonText();
+    ++pendingClickGeneration;
     actionPromptActive = true;
     actionPromptPressedIndex = -1;
     actionPromptHoverIndex = isMouseHovering(*this) ? getActionPromptHitIndex(getMouseXYRelative()) : -1;
@@ -245,7 +262,8 @@ int BoxTextButton::getActionPromptCount() const noexcept
     return (longPressResetAction != nullptr ? 1 : 0)
         + (longPressHostAction != nullptr ? 1 : 0)
         + ((onMoveArmed != nullptr || onDragDrop != nullptr) ? 1 : 0)
-        + (longPressTrailingAction != nullptr ? 1 : 0);
+        + (longPressTrailingAction != nullptr ? 1 : 0)
+        + (longPressAdditionalPromptAction != nullptr ? 1 : 0);
 }
 
 int BoxTextButton::getActionPromptHitIndex(const juce::Point<int> position) const noexcept
@@ -346,15 +364,33 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
             ? juce::jmax(0, (promptBounds.getWidth() - (actionCount - 1)) / actionCount)
             : 0;
         juce::StringArray promptLabels;
+        juce::Array<juce::Image> promptIcons;
 
         if (longPressResetAction != nullptr)
+        {
             promptLabels.add(longPressPrimaryPromptText);
+            promptIcons.add(juce::Image());
+        }
         if (longPressHostAction != nullptr)
+        {
             promptLabels.add("H?");
+            promptIcons.add(juce::Image());
+        }
         if (onMoveArmed != nullptr || onDragDrop != nullptr)
+        {
             promptLabels.add("M?");
+            promptIcons.add(juce::Image());
+        }
         if (longPressTrailingAction != nullptr)
+        {
             promptLabels.add(longPressTrailingPromptText);
+            promptIcons.add(longPressTrailingPromptIconImage);
+        }
+        if (longPressAdditionalPromptAction != nullptr)
+        {
+            promptLabels.add({});
+            promptIcons.add(longPressAdditionalPromptIconImage);
+        }
 
         for (int index = 0; index < promptLabels.size(); ++index)
         {
@@ -370,11 +406,22 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
             }
 
             graphics.setColour(promptHighlighted ? uiBlack : uiWhite);
-            if (drawLoopingText(graphics,
-                                promptLabels[index],
-                                actionBounds.reduced(uiGap, 0),
-                                font,
-                                juce::Justification::centred))
+            if (promptIcons[index].isValid())
+            {
+                juce::DrawableImage drawable;
+                drawable.setImage(promptIcons[index]);
+                drawable.setOverlayColour(promptHighlighted ? uiBlack : uiWhite);
+                drawable.drawWithin(graphics,
+                                    actionBounds.withSizeKeepingCentre(
+                                        static_cast<int>(iconGlyphSize),
+                                        static_cast<int>(iconGlyphSize)).toFloat(),
+                                    juce::RectanglePlacement::centred, 1.0f);
+            }
+            else if (drawLoopingText(graphics,
+                                     promptLabels[index],
+                                     actionBounds.reduced(2, 0),
+                                     font,
+                                     juce::Justification::centred))
                 scheduleMarqueeRepaint();
 
             if (! isLastAction)

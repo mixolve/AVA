@@ -35,6 +35,7 @@ public:
         textEditor.setPopupMenuEnabled(true);
         textEditor.setJustification(juce::Justification::centred);
         textEditor.setColour(juce::TextEditor::textColourId, uiWhite);
+        textEditor.setColour(juce::CaretComponent::caretColourId, uiWhite);
         textEditor.setColour(juce::TextEditor::backgroundColourId, uiGrey800);
         textEditor.setColour(juce::TextEditor::outlineColourId, uiGrey500);
         textEditor.setColour(juce::TextEditor::focusedOutlineColourId, uiAccent);

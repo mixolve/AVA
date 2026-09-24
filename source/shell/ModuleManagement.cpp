@@ -5,6 +5,7 @@
 #include "../modules/dyn/Processor.h"
 #include "../modules/fft/Processor.h"
 #include "../modules/trs/Processor.h"
+#include "../routing/Runtime.h"
 #include "WindowState.h"
 #include "../modules/eql/Processor.h"
 
@@ -221,6 +222,12 @@ void AvaAudioProcessor::parameterChanged(const juce::String& parameterID, const 
 void AvaAudioProcessor::handleAsyncUpdate()
 {
     ensureActiveCrossoverRangeCount(requestedCrossoverRangeCount.load(std::memory_order_acquire));
+    if (routingRuntime != nullptr)
+    {
+        const juce::ScopedLock lock(processingLock);
+        routingRuntime->refreshDelayCapacity();
+        updateShellLatency();
+    }
     applyPendingShellUpdates();
 }
 

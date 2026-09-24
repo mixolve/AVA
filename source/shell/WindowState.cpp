@@ -6,10 +6,15 @@
 
 namespace
 {
-const std::array<juce::Identifier, 2> editorWindowStateProperties
+const std::array<juce::Identifier, 7> editorWindowStateProperties
 {
     AvaAudioProcessor::editorWidthStateKey,
-    AvaAudioProcessor::editorHeightStateKey
+    AvaAudioProcessor::editorHeightStateKey,
+    AvaAudioProcessor::oscEnabledStateKey,
+    AvaAudioProcessor::oscInputPortStateKey,
+    AvaAudioProcessor::oscOutputHostStateKey,
+    AvaAudioProcessor::oscOutputPortStateKey,
+    AvaAudioProcessor::oscInstanceNameStateKey
 };
 
 }

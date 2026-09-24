@@ -17,7 +17,7 @@ juce::String formatBandwidthValue(const float value)
 
 juce::String makeFilterParameterId(const char* suffix, const int filterIndex)
 {
-    return "filter_" + juce::String(filterIndex + 1) + "_" + suffix;
+    return "filter-" + juce::String(filterIndex + 1) + "_" + suffix;
 }
 
 int clampActiveFilterCount(const int filterCount)

@@ -10,6 +10,7 @@
 #include "../modules/shared/StateUtilities.h"
 #include "../crossover/UiState.h"
 #include "../modules/eql/Processor.h"
+#include "../routing/State.h"
 
 #include <cmath>
 #include <optional>
@@ -50,7 +51,18 @@ bool isCurrentShellProperty(const juce::Identifier& property)
                              AvaAudioProcessor::abCompareActiveSlotStateKey,
                              AvaAudioProcessor::editorWidthStateKey,
                              AvaAudioProcessor::editorHeightStateKey,
-                             AvaAudioProcessor::editorHostParametersExpandedStateKey })
+                             AvaAudioProcessor::editorHostParametersExpandedStateKey,
+                             AvaAudioProcessor::editorRoutingExpandedStateKey,
+                             ava::routing::instancesStateKey,
+                             ava::routing::nextInstanceIdStateKey,
+                             ava::routing::rootInstanceIdStateKey,
+                             ava::routing::namesStateKey,
+                             ava::routing::processorStatesKey,
+                             AvaAudioProcessor::oscEnabledStateKey,
+                             AvaAudioProcessor::oscInputPortStateKey,
+                             AvaAudioProcessor::oscOutputHostStateKey,
+                             AvaAudioProcessor::oscOutputPortStateKey,
+                             AvaAudioProcessor::oscInstanceNameStateKey })
     {
         if (property == juce::Identifier(key))
             return true;
@@ -95,7 +107,7 @@ bool hasCurrentShellInvariants(const juce::ValueTree& state)
     if (! requiredRangeCount.has_value())
         return false;
 
-    const auto visibleRangeKey = crossover_ui::makeStatePropertyId("crossover", "visible_range_index");
+    const auto visibleRangeKey = crossover_ui::makeStatePropertyId("crossover", "visible_band_index");
 
     if (state.hasProperty(visibleRangeKey)
         && static_cast<size_t>(static_cast<int>(state.getProperty(visibleRangeKey))) >= *requiredRangeCount)
@@ -261,15 +273,29 @@ bool hasCurrentShellMetadata(const juce::ValueTree& state,
     if (hasWidth != hasHeight
         || (hasWidth
             && ! crossover_ui::hasExactIntegerValue(state.getProperty(AvaAudioProcessor::editorWidthStateKey),
-                                                      minimumEditorWidth,
-                                                      maximumEditorWidth))
+                                                      1,
+                                                      maximumStoredEditorWidth))
         || (hasHeight
             && ! crossover_ui::hasExactIntegerValue(state.getProperty(AvaAudioProcessor::editorHeightStateKey),
                                                       minimumEditorHeight,
                                                       maximumEditorHeight))
         || (state.hasProperty(AvaAudioProcessor::editorHostParametersExpandedStateKey)
             && ! crossover_ui::hasExactBooleanValue(
-                state.getProperty(AvaAudioProcessor::editorHostParametersExpandedStateKey))))
+                state.getProperty(AvaAudioProcessor::editorHostParametersExpandedStateKey)))
+        || (state.hasProperty(AvaAudioProcessor::editorRoutingExpandedStateKey)
+            && ! crossover_ui::hasExactBooleanValue(
+                state.getProperty(AvaAudioProcessor::editorRoutingExpandedStateKey)))
+        || ! ava::routing::isCurrentState(state)
+        || ! ava::routing::hasCurrentProcessorStates(state)
+        || (state.hasProperty(AvaAudioProcessor::oscEnabledStateKey)
+            && ! crossover_ui::hasExactBooleanValue(state.getProperty(AvaAudioProcessor::oscEnabledStateKey)))
+        || (state.hasProperty(AvaAudioProcessor::oscInputPortStateKey)
+            && ! crossover_ui::hasExactIntegerValue(state.getProperty(AvaAudioProcessor::oscInputPortStateKey), 1, 65535))
+        || (state.hasProperty(AvaAudioProcessor::oscOutputPortStateKey)
+            && ! crossover_ui::hasExactIntegerValue(state.getProperty(AvaAudioProcessor::oscOutputPortStateKey), 1, 65535))
+        || (state.hasProperty(AvaAudioProcessor::oscOutputHostStateKey)
+            && (state.getProperty(AvaAudioProcessor::oscOutputHostStateKey).toString().trim().isEmpty()
+                || state.getProperty(AvaAudioProcessor::oscOutputHostStateKey).toString().length() > 253)))
         return false;
 
     for (size_t rangeIndex = 0; rangeIndex < ava::crossover::BufferRouter::numRanges; ++rangeIndex)

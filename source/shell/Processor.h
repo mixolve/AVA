@@ -3,8 +3,11 @@
 #include <JuceHeader.h>
 #include <array>
 #include <atomic>
+#include <functional>
+#include <memory>
 
 #include "../crossover/BufferRouter.h"
+#include "OscSettings.h"
 
 class FftModuleProcessor;
 class EqlModuleProcessor;
@@ -13,6 +16,9 @@ class EqlProcessorBank;
 class TlsModuleProcessor;
 class DynModuleProcessor;
 class TrsModuleProcessor;
+class OscController;
+class AvaAudioProcessorEditor;
+namespace ava::routing { class Runtime; }
 
 class AvaAudioProcessor final : public juce::AudioProcessor,
                                private juce::AudioProcessorValueTreeState::Listener,
@@ -20,9 +26,19 @@ class AvaAudioProcessor final : public juce::AudioProcessor,
                                private juce::AsyncUpdater
 {
 public:
-    inline static constexpr auto paramGlobalBypassId = "global_bypass";
-    inline static constexpr auto paramCrossoverPrefix = "crossover_";
-    inline static constexpr auto paramCrossoverActiveSplitCountId = "crossover_active_split_count";
+    inline static constexpr auto paramGlobalBypassId = "bp";
+    inline static constexpr auto oscGlobalAbSlotAId = "a";
+    inline static constexpr auto oscGlobalAbSwitchId = "ab-switch.icon";
+    inline static constexpr auto oscGlobalAbSlotBId = "b.ab";
+    inline static constexpr auto oscGlobalUndoId = "undo.icon";
+    inline static constexpr auto oscGlobalRedoId = "redo.icon";
+    inline static constexpr auto oscGlobalClipId = "clip";
+    inline static constexpr auto oscAddModuleId = "add-module";
+    inline static constexpr auto oscCloseModuleId = "close-module.hidden";
+    inline static constexpr auto oscXovAddId = "xov-add";
+    inline static constexpr auto oscXovDelId = "xov-del";
+    inline static constexpr auto oscSoloModeId = "solo-mode";
+    inline static constexpr auto paramCrossoverActiveSplitCountId = "split-count";
     inline static constexpr auto paramHostSlotPrefix = "host_slot_";
     inline static constexpr auto activeModuleStateKey = "ava.active_module";
     inline static constexpr auto eqlModuleStateKey = "ava.eql_state";
@@ -41,6 +57,12 @@ public:
     inline static constexpr auto editorWidthStateKey = "ava.editor.width";
     inline static constexpr auto editorHeightStateKey = "ava.editor.height";
     inline static constexpr auto editorHostParametersExpandedStateKey = "ava.editor.host_parameters_expanded";
+    inline static constexpr auto editorRoutingExpandedStateKey = "ava.editor.routing_expanded";
+    inline static constexpr auto oscEnabledStateKey = "ava.osc.enabled";
+    inline static constexpr auto oscInputPortStateKey = "ava.osc.input_port";
+    inline static constexpr auto oscOutputHostStateKey = "ava.osc.output_host";
+    inline static constexpr auto oscOutputPortStateKey = "ava.osc.output_port";
+    inline static constexpr auto oscInstanceNameStateKey = "ava.osc.instance_name";
     static constexpr int hostAutomationSlotCount = 64;
 
     enum class ActiveModule
@@ -52,7 +74,7 @@ public:
         dyn,
         trs,
     };
-    explicit AvaAudioProcessor();
+    explicit AvaAudioProcessor(bool routingInstance = false);
     ~AvaAudioProcessor() override;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
@@ -98,6 +120,10 @@ public:
     static juce::String getEditorFilterDisplayOrderStateKey(size_t rangeIndex);
     static juce::String getCrossoverParameterId(const char* suffix);
     static juce::String getCrossoverSoloParameterId(size_t rangeIndex);
+    static juce::String getEqlAddActionId(size_t rangeIndex);
+    static juce::String getEqlDeleteAllActionId(size_t rangeIndex);
+    static juce::String getEqlFilterDeleteActionId(size_t rangeIndex, int filterIndex);
+    static juce::String getEqlPresetSelectionId(size_t rangeIndex);
     ava::crossover::Settings getCrossoverSettings() const noexcept;
     static const char* stateIdForModule(ActiveModule module) noexcept;
     ActiveModule getActiveModule() const noexcept;
@@ -124,12 +150,25 @@ public:
     void setLastEditorSize(int width, int height) noexcept;
     void notifyHostOfStateChange();
     void refreshHostSlotTargets();
+    OscSettings getOscSettings() const;
+    bool setOscSettings(const OscSettings& settings);
+    void refreshOscConfiguration();
+    bool isOscInputPortBusy() const noexcept;
+    std::vector<OscParameterInfo> getVisibleOscParameters() const;
+    std::shared_ptr<AvaAudioProcessor> getRoutingInstanceHandle(int instanceId) noexcept;
+    AvaAudioProcessorEditor* getOscActionEditor() const noexcept { return oscActionEditor; }
+    void setOscActionEditor(AvaAudioProcessorEditor* editor) noexcept { oscActionEditor = editor; }
+    AvaAudioProcessor& getOscOwner() noexcept { return routingOwner != nullptr ? *routingOwner : *this; }
+    const AvaAudioProcessor& getOscOwner() const noexcept { return routingOwner != nullptr ? *routingOwner : *this; }
+    void synchronizeRouting();
+    bool isRoutingInstance() const noexcept { return routingInstance; }
 
     float getGlobalClipIndicator() const noexcept
     {
         return globalClipIndicator.load(std::memory_order_relaxed);
     }
 private:
+    friend class ava::routing::Runtime;
     class ScopedProcessingSuspend
     {
     public:
@@ -173,8 +212,15 @@ private:
                                   const juce::Identifier& property) override;
     void handleAsyncUpdate() override;
     void ensureActiveCrossoverRangeCount(size_t rangeCount);
+    void processOwnBlock(juce::AudioBuffer<float>&);
 
     juce::AudioProcessorValueTreeState parameters;
+    std::unique_ptr<OscController> oscController;
+    std::unique_ptr<ava::routing::Runtime> routingRuntime;
+    AvaAudioProcessor* routingOwner = nullptr;
+    AvaAudioProcessorEditor* oscActionEditor = nullptr;
+    bool routingInstance = false;
+    std::function<void()> parentStateChanged;
     ava::crossover::BufferRouter crossoverRouter;
     mutable juce::CriticalSection processingLock;
     juce::AudioProcessorValueTreeState* observedModuleValueTreeState = nullptr;
