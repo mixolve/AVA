@@ -175,11 +175,13 @@ private:
 
 }
 
-AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToEdit)
+AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToEdit,
+                                                 const int routingInstanceIdIn)
     : AudioProcessorEditor(&processorToEdit),
       audioProcessor(processorToEdit),
       valueTreeState(processorToEdit.getValueTreeState()),
-      lookAndFeel(std::make_unique<AvaLookAndFeel>())
+      lookAndFeel(std::make_unique<AvaLookAndFeel>()),
+      routingInstanceId(routingInstanceIdIn)
 {
     audioProcessor.setOscActionEditor(this);
     shell_parameter_focus::clearFocus(*this);
@@ -305,7 +307,8 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     addAndMakeVisible(*clipButton);
 
     hostButton = std::make_unique<BoxTextButton>(uiAccent);
-    hostButton->setButtonText("H");
+    hostButton->setButtonText({});
+    hostButton->setTablerIcon("map-pin-share");
     hostButton->setTextJustification(juce::Justification::centred);
     hostButton->setClickingTogglesState(true);
     hostButton->setToggleAccentVisible(true);

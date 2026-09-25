@@ -33,7 +33,7 @@ void AvaAudioProcessorEditor::openRoutingInstance(const int instanceId)
     activeInstanceEditor.reset();
     activeInstanceProcessor = std::move(instance);
     activeInstanceId = instanceId;
-    activeInstanceEditor = std::make_unique<AvaAudioProcessorEditor>(*activeInstanceProcessor);
+    activeInstanceEditor = std::make_unique<AvaAudioProcessorEditor>(*activeInstanceProcessor, instanceId);
     if (auto* handle = static_cast<EdgeResizeHandle*>(activeInstanceEditor->verticalResizeHandle.get()))
         handle->setResizeOwner(*this);
     activeInstanceEditor->setReturnToRoutingAction(

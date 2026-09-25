@@ -169,7 +169,7 @@ void Runtime::processGroup(const int firstId,
         groupInput.copyFrom(channel, 0, input, channel, 0, samples);
 
     output.clear();
-    const auto maximumLatency = groupLatency(firstId);
+    const auto maximumLatency = parallelLatency(firstId);
     for (auto* node = first; node != nullptr; node = findNode(node->parallelNext))
     {
         const auto found = instances.find(node->id);
@@ -194,9 +194,12 @@ void Runtime::processGroup(const int firstId,
         for (int channel = 0; channel < channels; ++channel)
             output.addFrom(channel, 0, work, channel, 0, samples);
     }
+
+    if (first->groupNext != 0)
+        processGroup(first->groupNext, output, output, midi);
 }
 
-int Runtime::groupLatency(const int firstId) const noexcept
+int Runtime::parallelLatency(const int firstId) const noexcept
 {
     auto result = 0;
     for (auto* node = findNode(firstId); node != nullptr; node = findNode(node->parallelNext))
@@ -204,6 +207,14 @@ int Runtime::groupLatency(const int firstId) const noexcept
         result = juce::jmax(result, nodeLatency(node->id) + groupLatency(node->serialNext));
     }
     return result;
+}
+
+int Runtime::groupLatency(const int firstId) const noexcept
+{
+    const auto* first = findNode(firstId);
+    if (first == nullptr)
+        return 0;
+    return parallelLatency(firstId) + groupLatency(first->groupNext);
 }
 
 int Runtime::nodeLatency(const int id) const noexcept
@@ -219,7 +230,7 @@ int Runtime::nodeLatency(const int id) const noexcept
 
 void Runtime::planGroupDelays(const int firstId)
 {
-    const auto maximumLatency = groupLatency(firstId);
+    const auto maximumLatency = parallelLatency(firstId);
     for (auto* node = findNode(firstId); node != nullptr; node = findNode(node->parallelNext))
     {
         const auto branchLatency = nodeLatency(node->id) + groupLatency(node->serialNext);
@@ -239,6 +250,8 @@ void Runtime::planGroupDelays(const int firstId)
         if (node->serialNext != 0)
             planGroupDelays(node->serialNext);
     }
+    if (const auto* first = findNode(firstId); first != nullptr && first->groupNext != 0)
+        planGroupDelays(first->groupNext);
 }
 
 void Runtime::refreshDelayCapacity()

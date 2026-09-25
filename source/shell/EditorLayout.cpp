@@ -110,6 +110,7 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
     std::array<BoxTextButton*, 11> panelButtons {
         routingButton.get(),
         oscButton.get(),
+        hostButton.get(),
         abSlotAButton.get(),
         abSwitchButton.get(),
         abSlotBButton.get(),
@@ -117,7 +118,6 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
         redoButton.get(),
         globalBypassButton.get(),
         clipButton.get(),
-        hostButton.get(),
         footerTab.get()
     };
 
@@ -316,23 +316,6 @@ void AvaAudioProcessorEditor::layoutFooter(juce::Rectangle<int>& bounds)
     focusedParameterControl->setBounds(focusedBounds);
 }
 
-void AvaAudioProcessorEditor::layoutModuleTitle(juce::Rectangle<int>& bounds)
-{
-    if (moduleTitle == nullptr)
-        return;
-
-    moduleTitle->setBounds({});
-
-    if (! moduleTitle->isVisible())
-        return;
-
-    auto rowBounds = bounds.removeFromTop(rowHeight);
-    moduleTitle->setBounds(rowBounds);
-
-    if (! bounds.isEmpty())
-        bounds.removeFromTop(verticalGap);
-}
-
 void AvaAudioProcessorEditor::finalizeLayout() noexcept
 {
     shell_parameter_focus::clearFocusIfNotShowing(*this);
@@ -461,12 +444,9 @@ void AvaAudioProcessorEditor::resized()
 
     if (! eqlModuleLoaded && ! fftModuleLoaded && ! tlsModuleLoaded && ! dynModuleLoaded && ! trsModuleLoaded)
     {
-        layoutNoModuleState(bounds);
         finalizeLayout();
         return;
     }
-
-    layoutModuleTitle(bounds);
 
     if (tlsModuleLoaded || dynModuleLoaded || trsModuleLoaded)
     {
@@ -483,14 +463,6 @@ void AvaAudioProcessorEditor::resized()
     finalizeLayout();
 }
 
-void AvaAudioProcessorEditor::layoutNoModuleState(juce::Rectangle<int>& bounds)
-{
-    if (moduleAddButton == nullptr || ! moduleAddButton->isVisible())
-        return;
-
-    moduleAddButton->setBounds(bounds.removeFromTop(rowHeight));
-}
-
 void AvaAudioProcessorEditor::layoutCrossoverSection(juce::Rectangle<int>& bounds)
 {
     auto* editor = dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get());
@@ -498,22 +470,15 @@ void AvaAudioProcessorEditor::layoutCrossoverSection(juce::Rectangle<int>& bound
     if (editor == nullptr)
         return;
 
-    const auto reservedModuleButtonHeight = moduleAddButton != nullptr && moduleAddButton->isVisible()
-        ? rowHeight + verticalGap
-        : 0;
     const auto reservedPotentiometerGap = editor->isCrossoverSettingsSelected()
         ? viewportToPotentiometerGap
         : 0;
     const auto availableHeight = juce::jmax(0,
                                             bounds.getHeight()
-                                                - reservedModuleButtonHeight
                                                 - reservedPotentiometerGap);
     const auto sectionHeight = juce::jmin(availableHeight, editor->getPreferredHeight());
     editor->setBounds(bounds.removeFromTop(sectionHeight));
     editor->setVisible(sectionHeight > 0);
-
-    if (! bounds.isEmpty())
-        bounds.removeFromTop(verticalGap);
 }
 
 void AvaAudioProcessorEditor::layoutModuleEditorContent(juce::Rectangle<int>& bounds)

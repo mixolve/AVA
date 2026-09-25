@@ -53,6 +53,34 @@ void CrossoverModuleComponent::resized()
             bounds.removeFromTop(verticalGap);
     }
 
+    if (instanceHeading != nullptr && headerSoloButton != nullptr)
+    {
+        auto headerRow = bounds.removeFromTop(rowHeight);
+        if (crossoverSettingsActive)
+        {
+            const auto leftWidth = juce::jmax(0, (headerRow.getWidth() - parameterGap) / 2);
+            instanceHeading->setBounds(headerRow.removeFromLeft(leftWidth));
+            headerRow.removeFromLeft(juce::jmin(parameterGap, headerRow.getWidth()));
+            headerSoloButton->setBounds({});
+        }
+        else
+        {
+            const auto sideWidth = juce::jmin(120, juce::jmax(0, (headerRow.getWidth() - 2 * parameterGap) / 2));
+            instanceHeading->setBounds(headerRow.removeFromLeft(sideWidth));
+            headerRow.removeFromLeft(juce::jmin(parameterGap, headerRow.getWidth()));
+            const auto soloWidth = juce::jmax(0, headerRow.getWidth() - sideWidth - parameterGap);
+            headerSoloButton->setBounds(headerRow.removeFromLeft(soloWidth));
+            headerRow.removeFromLeft(juce::jmin(parameterGap, headerRow.getWidth()));
+        }
+        if (moduleAddButton != nullptr)
+            moduleAddButton->setBounds(headerRow);
+        if (moduleTitleButton != nullptr)
+            moduleTitleButton->setBounds(headerRow);
+
+        if (! bounds.isEmpty())
+            bounds.removeFromTop(verticalGap);
+    }
+
     updatePinnedHeaderComponent();
     const auto pinnedHeaderHeight = getCurrentPinnedHeaderHeight();
     auto pinnedHeaderBounds = bounds.removeFromTop(pinnedHeaderHeight);
@@ -129,6 +157,7 @@ void CrossoverModuleComponent::refreshExternalState()
         crossoverSettingsPage->refreshExternalState();
 
     updateMonitorButtons();
+    updateHeaderSoloState();
     refreshCurrentPageLayout();
 }
 
@@ -137,6 +166,7 @@ int CrossoverModuleComponent::getPreferredHeight() const noexcept
     const auto pinnedHeaderHeight = getCurrentPinnedHeaderHeight();
 
     return (config.showCrossoverNavigation ? rowHeight + verticalGap : 0)
+        + (config.showCrossoverSolo ? rowHeight + verticalGap : 0)
         + (pinnedHeaderHeight > 0 ? pinnedHeaderHeight + verticalGap : 0)
         + getCurrentPagePreferredHeight()
         + getCurrentPinnedTailHeight();
@@ -156,6 +186,7 @@ void CrossoverModuleComponent::updatePageVisibility()
     if (crossoverSettingsPage != nullptr)
         crossoverSettingsPage->setVisible(crossoverSettingsActive);
 
+    updateHeaderSoloState();
     updatePinnedHeaderComponent();
     updatePinnedTailComponent();
     updatePageViewport();

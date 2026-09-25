@@ -3,6 +3,7 @@
 #include "FilterSection.h"
 #include "PresetSections.h"
 #include "FilterOrderState.h"
+#include "../crossover/Component.h"
 #include "../modules/dyn/Processor.h"
 #include "../modules/eql/Processor.h"
 #include "../modules/fft/Processor.h"
@@ -23,9 +24,9 @@ void AvaAudioProcessorEditor::showModulePicker()
     if (! canLoadModule)
         return;
 
-    auto anchorBounds = moduleAddButton->getBounds();
+    auto anchorBounds = getLocalArea(moduleAddButton.get(), moduleAddButton->getLocalBounds());
     anchorBounds.setSize(juce::jmax(120, anchorBounds.getWidth()), anchorBounds.getHeight());
-    anchorBounds.setCentre(moduleAddButton->getBounds().getCentre());
+    anchorBounds.setCentre(getLocalArea(moduleAddButton.get(), moduleAddButton->getLocalBounds()).getCentre());
 
     showChoicePrompt(anchorBounds,
                      { "TLS", "EQL", "FFT", "DYN", "TRS" },
@@ -190,7 +191,7 @@ void AvaAudioProcessorEditor::ensureModuleTitle()
         moduleTitle->setTextJustification(juce::Justification::centred);
         moduleTitle->setAlwaysAccentOutline(false);
         moduleTitle->setToggleAccentVisible(false);
-        moduleTitle->setLongPressAction([this]
+        moduleTitle->setLongPressPromptActions([this]
         {
             juce::MessageManager::callAsync([safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
             {
@@ -200,9 +201,12 @@ void AvaAudioProcessorEditor::ensureModuleTitle()
                 safeEditor->closeActiveModule();
                 clearKeyboardFocus(*safeEditor);
             });
-        }, 500, "CLOSE?");
-        addAndMakeVisible(*moduleTitle);
+        }, {}, "CLOSE?");
+        addChildComponent(*moduleTitle);
     }
+
+    if (auto* crossover = dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get()))
+        crossover->setModuleActionButtons(*moduleAddButton, *moduleTitle);
 }
 
 void AvaAudioProcessorEditor::toggleHostParametersSection()

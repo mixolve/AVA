@@ -79,6 +79,8 @@ void AvaAudioProcessorEditor::timerCallback()
     if (moduleStateChanged)
         resyncEditorFromProcessorState();
 
+    updateInstanceHeadings();
+
     const auto clipValue = audioProcessor.getGlobalClipIndicator();
     const auto now = juce::Time::getMillisecondCounter();
 

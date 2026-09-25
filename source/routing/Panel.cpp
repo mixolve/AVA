@@ -1,6 +1,7 @@
 #include "Panel.h"
 #include "State.h"
 #include "../shell/Controls.h"
+#include "../shell/Editor.h"
 #include "../shell/Style.h"
 
 #include <algorithm>
@@ -35,10 +36,12 @@ public:
     Content(juce::AudioProcessorValueTreeState& stateIn,
             std::function<void(int, const juce::String&)> openActionIn,
             std::function<void(int, const juce::String&, juce::Component&)> renameActionIn,
-            std::function<void()> topologyChangedIn)
+            std::function<void()> topologyChangedIn,
+            std::function<void()> layoutChangedIn)
         : state(stateIn), openAction(std::move(openActionIn)),
           renameAction(std::move(renameActionIn)),
-          topologyChanged(std::move(topologyChangedIn))
+          topologyChanged(std::move(topologyChangedIn)),
+          layoutChanged(std::move(layoutChangedIn))
     {
         setOpaque(true);
         refresh();
@@ -57,7 +60,6 @@ public:
             if (found == locations.end())
                 continue;
             const auto& bounds = found->second;
-            const auto centreX = static_cast<float>(bounds.getCentreX());
             if (node.serialNext != 0)
             {
                 const auto child = locations.find(node.serialNext);
@@ -65,20 +67,74 @@ public:
                 {
                     const auto childFrame = frames.find(node.serialNext);
                     const auto target = childFrame == frames.end() ? child->second : childFrame->second;
-                    graphics.drawLine(centreX, static_cast<float>(bounds.getBottom()),
-                                      static_cast<float>(target.getCentreX()),
-                                      static_cast<float>(target.getY()), 1.0f);
+                    if (horizontal)
+                        graphics.drawLine(static_cast<float>(bounds.getRight()),
+                                          static_cast<float>(bounds.getCentreY()),
+                                          static_cast<float>(target.getX()),
+                                          static_cast<float>(target.getCentreY()), 1.0f);
+                    else
+                        graphics.drawLine(static_cast<float>(bounds.getCentreX()),
+                                          static_cast<float>(bounds.getBottom()),
+                                          static_cast<float>(target.getCentreX()),
+                                          static_cast<float>(target.getY()), 1.0f);
                 }
             }
             if (node.parallelNext != 0)
             {
                 const auto sibling = locations.find(node.parallelNext);
                 if (sibling != locations.end())
-                    graphics.drawLine(static_cast<float>(bounds.getRight()),
-                                      static_cast<float>(bounds.getCentreY()),
-                                      static_cast<float>(sibling->second.getX()),
-                                      static_cast<float>(sibling->second.getCentreY()), 1.0f);
+                {
+                    if (horizontal)
+                        graphics.drawLine(static_cast<float>(bounds.getCentreX()),
+                                          static_cast<float>(bounds.getBottom()),
+                                          static_cast<float>(sibling->second.getCentreX()),
+                                          static_cast<float>(sibling->second.getY()), 1.0f);
+                    else
+                        graphics.drawLine(static_cast<float>(bounds.getRight()),
+                                          static_cast<float>(bounds.getCentreY()),
+                                          static_cast<float>(sibling->second.getX()),
+                                          static_cast<float>(sibling->second.getCentreY()), 1.0f);
+                }
             }
+        }
+
+        for (const auto& [id, exit] : groupExits)
+        {
+            const auto body = groupBodies.find(id);
+            if (body == groupBodies.end())
+                continue;
+            if (horizontal)
+                graphics.drawLine(static_cast<float>(body->second.getRight()),
+                                  static_cast<float>(exit.getCentreY()),
+                                  static_cast<float>(exit.getX()),
+                                  static_cast<float>(exit.getCentreY()), 1.0f);
+            else
+                graphics.drawLine(static_cast<float>(exit.getCentreX()),
+                                  static_cast<float>(body->second.getBottom()),
+                                  static_cast<float>(exit.getCentreX()),
+                                  static_cast<float>(exit.getY()), 1.0f);
+        }
+
+        for (const auto& node : displayedState.nodes)
+        {
+            if (node.groupNext == 0)
+                continue;
+            const auto body = groupBodies.find(node.id);
+            const auto next = locations.find(node.groupNext);
+            if (body == groupBodies.end() || next == locations.end())
+                continue;
+            const auto nextFrame = frames.find(node.groupNext);
+            const auto target = nextFrame == frames.end() ? next->second : nextFrame->second;
+            if (horizontal)
+                graphics.drawLine(static_cast<float>(body->second.getRight()),
+                                  static_cast<float>(body->second.getCentreY()),
+                                  static_cast<float>(target.getX()),
+                                  static_cast<float>(target.getCentreY()), 1.0f);
+            else
+                graphics.drawLine(static_cast<float>(body->second.getCentreX()),
+                                  static_cast<float>(body->second.getBottom()),
+                                  static_cast<float>(target.getCentreX()),
+                                  static_cast<float>(target.getY()), 1.0f);
         }
     }
 
@@ -86,16 +142,57 @@ public:
     {
         locations.clear();
         frames.clear();
+        groupBodies.clear();
+        groupExits.clear();
         const auto width = laneWidth();
         const auto group = measureGroup(displayedState.entryInstanceId, width);
-        const auto startX = juce::jmax(uiGap, (getWidth() - group.width) / 2);
-        layoutGroup(displayedState.entryInstanceId, startX, uiGap, width);
+        if (horizontal)
+            layoutGroup(displayedState.entryInstanceId,
+                        uiGap,
+                        juce::jmax(uiGap, (getHeight() - group.height) / 2),
+                        width);
+        else
+            layoutGroup(displayedState.entryInstanceId,
+                        juce::jmax(uiGap, (getWidth() - group.width) / 2),
+                        uiGap,
+                        width);
         repaint();
     }
 
-    void setAvailableWidth(const int width)
+    void mouseUp(const juce::MouseEvent& event) override
     {
-        availableWidth = juce::jmax(1, width);
+        if (! event.mods.isPopupMenu() || event.mouseWasDraggedSinceMouseDown())
+            return;
+
+        auto* editor = findParentComponentOfClass<AvaAudioProcessorEditor>();
+        if (editor == nullptr)
+            return;
+
+        auto anchorBounds = juce::Rectangle<int>(120, rowHeight);
+        anchorBounds.setCentre(event.getPosition());
+        editor->showChoicePrompt(editor->getLocalArea(this, anchorBounds),
+                                 { "VERTICAL", "HORIZONTAL" },
+                                 horizontal ? 1 : 0,
+                                 { true, true },
+                                 juce::Justification::centred,
+                                 [safeThis = juce::Component::SafePointer<Content>(this)] (const int choice)
+                                 {
+                                     if (safeThis != nullptr && (choice == 0 || choice == 1))
+                                         safeThis->setHorizontalOrientation(choice == 1);
+                                 });
+    }
+
+    void setHorizontalOrientation(const bool shouldBeHorizontal)
+    {
+        if (horizontal == shouldBeHorizontal)
+            return;
+
+        horizontal = shouldBeHorizontal;
+        for (auto& [id, instance] : controls)
+            configureAddActions(*instance.name, id);
+        resized();
+        if (layoutChanged != nullptr)
+            layoutChanged();
     }
 
     int getPreferredWidth() const
@@ -123,6 +220,7 @@ public:
         if (moveSourceId != 0 && findNode(moveSourceId) == nullptr)
             moveSourceId = 0;
         controls.clear();
+        groupExitButtons.clear();
 
         for (const auto& node : displayedState.nodes)
         {
@@ -149,30 +247,7 @@ public:
                 moveSourceId = id;
                 updateMoveTargets();
             };
-            instance.name->setLongPressTrailingPromptIconAction([this, id]
-            {
-                if (moveSourceId != 0)
-                {
-                    if (moveSourceId != id)
-                        if (ava::routing::moveInstanceSerialAfter(state.state, moveSourceId, id))
-                            notifyTopologyChanged();
-                    clearMove();
-                }
-                else if (ava::routing::insertSerialInstance(state.state, id))
-                    notifyTopologyChanged();
-            }, "arrows-down");
-            instance.name->setLongPressAdditionalPromptIconAction([this, id]
-            {
-                if (moveSourceId != 0)
-                {
-                    if (moveSourceId != id)
-                        if (ava::routing::moveInstanceParallelTo(state.state, moveSourceId, id))
-                            notifyTopologyChanged();
-                    clearMove();
-                }
-                else if (ava::routing::insertParallelInstance(state.state, id))
-                    notifyTopologyChanged();
-            }, "arrows-right");
+            configureAddActions(*instance.name, id);
             instance.name->onClick = [this, id, label]
             {
                 if (moveSourceId != 0)
@@ -188,11 +263,64 @@ public:
 
             controls.emplace(id, std::move(instance));
         }
+        for (const auto& node : displayedState.nodes)
+        {
+            if (node.parallelNext == 0 || node.groupNext != 0)
+                continue;
+            const auto isParallelChild = std::any_of(displayedState.nodes.begin(), displayedState.nodes.end(),
+                                                     [id = node.id] (const auto& candidate)
+                                                     {
+                                                         return candidate.parallelNext == id;
+                                                     });
+            if (isParallelChild)
+                continue;
+            auto button = makeButton("+");
+            button->setEnabled(displayedState.nodes.size() < ava::routing::maximumInstanceCount);
+            button->onClick = [this, id = node.id]
+            {
+                if (moveSourceId != 0)
+                {
+                    clearMove();
+                    return;
+                }
+                if (ava::routing::insertInstanceAfterGroup(state.state, id))
+                    notifyTopologyChanged();
+            };
+            groupExitButtons.emplace(node.id, std::move(button));
+        }
         updateMoveTargets();
         resized();
     }
 
 private:
+    void configureAddActions(BoxTextButton& button, const int id)
+    {
+        button.setLongPressTrailingPromptIconAction([this, id]
+        {
+            if (moveSourceId != 0)
+            {
+                if (moveSourceId != id)
+                    if (ava::routing::moveInstanceSerialAfter(state.state, moveSourceId, id))
+                        notifyTopologyChanged();
+                clearMove();
+            }
+            else if (ava::routing::insertSerialInstance(state.state, id))
+                notifyTopologyChanged();
+        }, horizontal ? "arrows-right" : "arrows-down");
+        button.setLongPressAdditionalPromptIconAction([this, id]
+        {
+            if (moveSourceId != 0)
+            {
+                if (moveSourceId != id)
+                    if (ava::routing::moveInstanceParallelTo(state.state, moveSourceId, id))
+                        notifyTopologyChanged();
+                clearMove();
+            }
+            else if (ava::routing::insertParallelInstance(state.state, id))
+                notifyTopologyChanged();
+        }, horizontal ? "arrows-down" : "arrows-right");
+    }
+
     const ava::routing::State::Node* findNode(const int id) const
     {
         const auto found = std::find_if(displayedState.nodes.begin(), displayedState.nodes.end(),
@@ -206,6 +334,16 @@ private:
         int height = 0;
     };
 
+    int horizontalGroupGap(const int firstId) const
+    {
+        const auto* first = findNode(firstId);
+        if (first == nullptr)
+            return 0;
+
+        // A parallel group's frame supplies one of the two gaps before its first button.
+        return first->parallelNext != 0 ? uiGap : uiGapDouble;
+    }
+
     Size measureBranch(const int id, const int width) const
     {
         const auto* node = findNode(id);
@@ -213,11 +351,15 @@ private:
             return {};
 
         const auto child = measureGroup(node->serialNext, width);
+        if (horizontal)
+            return { width + (child.width == 0 ? 0 : horizontalGroupGap(node->serialNext) + child.width),
+                     juce::jmax(rowHeight, child.height) };
+
         return { juce::jmax(width, child.width),
                  rowHeight + (child.height == 0 ? 0 : uiGap + child.height) };
     }
 
-    Size measureGroup(const int firstId, const int width) const
+    Size measureGroupBody(const int firstId, const int width) const
     {
         const auto* first = findNode(firstId);
         if (first == nullptr)
@@ -229,11 +371,22 @@ private:
         for (auto* node = first; node != nullptr; node = findNode(node->parallelNext))
         {
             const auto branch = measureBranch(node->id, width);
-            result.width += branch.width;
-            result.height = juce::jmax(result.height, branch.height);
+            if (horizontal)
+            {
+                result.width = juce::jmax(result.width, branch.width);
+                result.height += branch.height;
+            }
+            else
+            {
+                result.width += branch.width;
+                result.height = juce::jmax(result.height, branch.height);
+            }
             ++count;
         }
-        result.width += uiGap * (count - 1);
+        if (horizontal)
+            result.height += uiGap * (count - 1);
+        else
+            result.width += uiGap * (count - 1);
         if (framed)
         {
             result.width += 2 * uiGap;
@@ -242,19 +395,36 @@ private:
         return result;
     }
 
+    Size measureGroup(const int firstId, const int width) const
+    {
+        const auto* first = findNode(firstId);
+        if (first == nullptr)
+            return {};
+
+        const auto body = measureGroupBody(firstId, width);
+        if (first->groupNext != 0)
+        {
+            const auto child = measureGroup(first->groupNext, width);
+            if (horizontal)
+                return { body.width + uiGapDouble + child.width,
+                         juce::jmax(body.height, child.height) };
+            return { juce::jmax(body.width, child.width),
+                     body.height + uiGapDouble + child.height };
+        }
+        if (first->parallelNext == 0)
+            return body;
+
+        if (horizontal)
+            return { body.width + uiGap + rowHeight,
+                     juce::jmax(body.height, rowHeight) };
+
+        return { juce::jmax(body.width, rowHeight),
+                 body.height + uiGap + rowHeight };
+    }
+
     int laneWidth() const
     {
-        auto low = 120;
-        auto high = 560;
-        while (low < high)
-        {
-            const auto candidate = (low + high + 1) / 2;
-            if (measureGroup(displayedState.entryInstanceId, candidate).width + 2 * uiGap <= availableWidth)
-                low = candidate;
-            else
-                high = candidate - 1;
-        }
-        return low;
+        return 120;
     }
 
     void layoutBranch(const int id, const int x, const int y, const int width)
@@ -265,15 +435,20 @@ private:
             return;
 
         const auto branch = measureBranch(id, width);
-        const auto nameX = x + (branch.width - width) / 2;
-        found->second.name->setBounds(nameX, y, width, rowHeight);
-        locations[id] = { nameX, y, width, rowHeight };
+        const auto nameX = horizontal ? x : x + (branch.width - width) / 2;
+        const auto nameY = horizontal ? y + (branch.height - rowHeight) / 2 : y;
+        found->second.name->setBounds(nameX, nameY, width, rowHeight);
+        locations[id] = { nameX, nameY, width, rowHeight };
 
         if (node->serialNext != 0)
         {
             const auto child = measureGroup(node->serialNext, width);
-            layoutGroup(node->serialNext, x + (branch.width - child.width) / 2,
-                        y + rowHeight + uiGap, width);
+            if (horizontal)
+                layoutGroup(node->serialNext, x + width + horizontalGroupGap(node->serialNext),
+                            y + (branch.height - child.height) / 2, width);
+            else
+                layoutGroup(node->serialNext, x + (branch.width - child.width) / 2,
+                            y + rowHeight + uiGap, width);
         }
     }
 
@@ -285,16 +460,56 @@ private:
 
         const auto framed = first->parallelNext != 0;
         const auto group = measureGroup(firstId, width);
+        const auto body = measureGroupBody(firstId, width);
+        const auto bodyX = horizontal ? x : x + (group.width - body.width) / 2;
+        const auto bodyY = horizontal ? y + (group.height - body.height) / 2 : y;
+        groupBodies[firstId] = { bodyX, bodyY, body.width, body.height };
         if (framed)
-            frames[firstId] = { x, y, group.width, group.height };
+            frames[firstId] = groupBodies[firstId];
 
-        auto branchX = x + (framed ? uiGap : 0);
-        const auto branchY = y + (framed ? uiGap : 0);
-        for (auto* node = first; node != nullptr; node = findNode(node->parallelNext))
+        if (horizontal)
         {
-            layoutBranch(node->id, branchX, branchY, width);
-            branchX += measureBranch(node->id, width).width + uiGap;
+            auto branchY = bodyY + (framed ? uiGap : 0);
+            for (auto* node = first; node != nullptr; node = findNode(node->parallelNext))
+            {
+                const auto branch = measureBranch(node->id, width);
+                layoutBranch(node->id, bodyX + (framed ? uiGap : 0), branchY, width);
+                branchY += branch.height + uiGap;
+            }
         }
+        else
+        {
+            auto branchX = bodyX + (framed ? uiGap : 0);
+            const auto branchY = bodyY + (framed ? uiGap : 0);
+            for (auto* node = first; node != nullptr; node = findNode(node->parallelNext))
+            {
+                layoutBranch(node->id, branchX, branchY, width);
+                branchX += measureBranch(node->id, width).width + uiGap;
+            }
+        }
+
+        if (first->groupNext != 0)
+        {
+            const auto child = measureGroup(first->groupNext, width);
+            if (horizontal)
+                layoutGroup(first->groupNext, bodyX + body.width + uiGapDouble,
+                            y + (group.height - child.height) / 2, width);
+            else
+                layoutGroup(first->groupNext, x + (group.width - child.width) / 2,
+                            bodyY + body.height + uiGapDouble, width);
+            return;
+        }
+        if (! framed)
+            return;
+
+        const auto exitX = horizontal ? bodyX + body.width + uiGap
+                                      : bodyX + (body.width - rowHeight) / 2;
+        const auto exitY = horizontal ? bodyY + (body.height - rowHeight) / 2
+                                      : bodyY + body.height + uiGap;
+        const auto exit = juce::Rectangle<int>(exitX, exitY, rowHeight, rowHeight);
+        groupExits[firstId] = exit;
+        if (const auto button = groupExitButtons.find(firstId); button != groupExitButtons.end())
+            button->second->setBounds(exit);
     }
 
     std::unique_ptr<BoxTextButton> makeButton(const juce::String& text)
@@ -333,12 +548,16 @@ private:
     std::function<void(int, const juce::String&)> openAction;
     std::function<void(int, const juce::String&, juce::Component&)> renameAction;
     std::function<void()> topologyChanged;
+    std::function<void()> layoutChanged;
     ava::routing::State displayedState;
     std::map<int, InstanceControls> controls;
+    std::map<int, std::unique_ptr<BoxTextButton>> groupExitButtons;
     std::map<int, juce::Rectangle<int>> locations;
     std::map<int, juce::Rectangle<int>> frames;
-    int availableWidth = 420;
+    std::map<int, juce::Rectangle<int>> groupBodies;
+    std::map<int, juce::Rectangle<int>> groupExits;
     int moveSourceId = 0;
+    bool horizontal = false;
 };
 
 RoutingPanel::RoutingPanel(juce::AudioProcessorValueTreeState& state)
@@ -357,6 +576,10 @@ RoutingPanel::RoutingPanel(juce::AudioProcessorValueTreeState& state)
           {
               if (onTopologyChanged != nullptr)
                   onTopologyChanged();
+          },
+          [this]
+          {
+              resized();
           }))
 {
     setOpaque(true);
@@ -478,7 +701,6 @@ void RoutingPanel::resized()
     {
         const auto availableWidth = juce::jmax(1, viewport.getWidth()
             - (verticalNeeded ? thickness : 0));
-        content->setAvailableWidth(availableWidth);
         const auto nextHorizontalNeeded = content->getPreferredWidth() > availableWidth;
         const auto availableHeight = juce::jmax(1, viewport.getHeight()
             - (nextHorizontalNeeded ? thickness : 0));
@@ -493,7 +715,6 @@ void RoutingPanel::resized()
         - (verticalNeeded ? thickness : 0));
     const auto visibleHeight = juce::jmax(1, viewport.getHeight()
         - (horizontalNeeded ? thickness : 0));
-    content->setAvailableWidth(visibleWidth);
     content->setSize(juce::jmax(visibleWidth, content->getPreferredWidth()),
                      juce::jmax(visibleHeight, content->getPreferredHeight()));
 }

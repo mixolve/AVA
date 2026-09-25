@@ -173,45 +173,55 @@ void NoTickComboBox::showPopup()
 
     if (promptStylePopupEnabled)
     {
-        if (auto* owner = findParentComponentOfClass<AvaAudioProcessorEditor>())
+        const auto itemCount = getNumItems();
+
+        if (itemCount > 0)
         {
-            const auto itemCount = getNumItems();
+            juce::StringArray itemTexts;
+            std::vector<bool> itemEnabledStates;
+            itemTexts.ensureStorageAllocated(itemCount);
+            itemEnabledStates.reserve(static_cast<size_t>(itemCount));
 
-            if (itemCount > 0)
+            for (int index = 0; index < itemCount; ++index)
             {
-                juce::StringArray itemTexts;
-                std::vector<bool> itemEnabledStates;
-                itemTexts.ensureStorageAllocated(itemCount);
-                itemEnabledStates.reserve(static_cast<size_t>(itemCount));
+                itemTexts.add(getItemText(index));
+                itemEnabledStates.push_back(isItemEnabled(getItemId(index)));
+            }
 
-                for (int index = 0; index < itemCount; ++index)
-                {
-                    itemTexts.add(getItemText(index));
-                    itemEnabledStates.push_back(isItemEnabled(getItemId(index)));
-                }
+            const auto currentSelectedItemIndex = getSelectedItemIndex();
+            auto onSelect = [safePointer = juce::Component::SafePointer<NoTickComboBox>(this), currentSelectedItemIndex] (int selectedIndex)
+            {
+                if (safePointer == nullptr)
+                    return;
 
-                const auto anchorBounds = owner->getLocalArea(this, getLocalBounds());
-                const auto currentSelectedItemIndex = getSelectedItemIndex();
+                const auto shouldReSelectCurrentItem = selectedIndex == currentSelectedItemIndex;
+                safePointer->setSelectedItemIndex(selectedIndex, juce::sendNotificationSync);
 
-                owner->showChoicePrompt(anchorBounds,
+                if (shouldReSelectCurrentItem && safePointer->onReselectedCurrentItem != nullptr)
+                    safePointer->onReselectedCurrentItem();
+
+                if (auto* handler = safePointer->getAccessibilityHandler())
+                    handler->grabFocus();
+            };
+
+            if (choicePromptPresenter != nullptr)
+            {
+                choicePromptPresenter(itemTexts,
+                                      currentSelectedItemIndex,
+                                      std::move(itemEnabledStates),
+                                      popupMenuTextJustification,
+                                      std::move(onSelect));
+                return;
+            }
+
+            if (auto* owner = findParentComponentOfClass<AvaAudioProcessorEditor>())
+            {
+                owner->showChoicePrompt(owner->getLocalArea(this, getLocalBounds()),
                                         itemTexts,
                                         currentSelectedItemIndex,
                                         std::move(itemEnabledStates),
                                         popupMenuTextJustification,
-                                        [safePointer = juce::Component::SafePointer<NoTickComboBox>(this), currentSelectedItemIndex] (int selectedIndex)
-                                        {
-                                            if (safePointer == nullptr)
-                                                return;
-
-                                            const auto shouldReSelectCurrentItem = selectedIndex == currentSelectedItemIndex;
-                                            safePointer->setSelectedItemIndex(selectedIndex, juce::sendNotificationSync);
-
-                                            if (shouldReSelectCurrentItem && safePointer->onReselectedCurrentItem != nullptr)
-                                                safePointer->onReselectedCurrentItem();
-
-                                            if (auto* handler = safePointer->getAccessibilityHandler())
-                                                handler->grabFocus();
-                                        });
+                                        std::move(onSelect));
                 return;
             }
         }
@@ -356,6 +366,11 @@ juce::Justification NoTickComboBox::getPopupMenuTextJustification() const noexce
 void NoTickComboBox::setPromptStylePopupEnabled(const bool shouldEnable) noexcept
 {
     promptStylePopupEnabled = shouldEnable;
+}
+
+void NoTickComboBox::setChoicePromptPresenter(ChoicePromptPresenter presenter)
+{
+    choicePromptPresenter = std::move(presenter);
 }
 
 void NoTickComboBox::setChoiceEnabled(const int choiceIndex, const bool shouldEnable)

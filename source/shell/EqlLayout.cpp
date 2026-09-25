@@ -21,39 +21,6 @@ void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& boun
             bounds.removeFromBottom(verticalGap);
     }
 
-    auto actionRowBounds = bounds.removeFromTop(rowHeight);
-
-    std::array<BoxTextButton*, 4> actionButtons {
-        addFilterButton.get(),
-        sortPlaceButton.get(),
-        sortFreqButton.get(),
-        sortDuoButton.get()
-    };
-
-    auto remainingActionBounds = actionRowBounds;
-    const auto actionButtonCount = static_cast<int>(actionButtons.size());
-    const auto actionTotalGap = parameterGap * (actionButtonCount - 1);
-    const auto actionBaseWidth = juce::jmax(0, (remainingActionBounds.getWidth() - actionTotalGap) / actionButtonCount);
-
-    for (int buttonIndex = 0; buttonIndex < actionButtonCount; ++buttonIndex)
-    {
-        auto* button = actionButtons[static_cast<size_t>(buttonIndex)];
-
-        if (button == nullptr)
-            continue;
-
-        const auto isLastButton = buttonIndex + 1 == actionButtonCount;
-        auto buttonBounds = isLastButton ? remainingActionBounds
-                                         : remainingActionBounds.removeFromLeft(actionBaseWidth);
-        button->setBounds(buttonBounds);
-
-        if (! isLastButton)
-            remainingActionBounds.removeFromLeft(parameterGap);
-    }
-
-    if (! bounds.isEmpty())
-        bounds.removeFromTop(globalToFilterGap);
-
     filterViewport.setBounds(bounds);
     filterViewport.setVisible(true);
     filterContent.setSize(bounds.getWidth(), juce::jmax(bounds.getHeight(), getFilterContentHeight()));
@@ -113,37 +80,64 @@ void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& boun
 
     if (presetsSection != nullptr)
     {
-        auto presetContentBounds = presetsBounds;
+        auto presetRowBounds = presetsBounds.removeFromTop(rowHeight);
+        auto leftToggleBounds = presetRowBounds.removeFromLeft(iconControlSize);
+        presetRowBounds.removeFromLeft(juce::jmin(parameterGap, presetRowBounds.getWidth()));
+        auto rightToggleBounds = presetRowBounds.removeFromRight(iconControlSize);
+        presetRowBounds.removeFromRight(juce::jmin(parameterGap, presetRowBounds.getWidth()));
+        presetsSection->filterActionsToggleButton->setBounds(leftToggleBounds);
+        presetsSection->actionsToggleButton->setBounds(rightToggleBounds);
 
-        auto presetNameRowBounds = presetContentBounds.removeFromTop(rowHeight);
-        presetsSection->presetCombo.setBounds(presetNameRowBounds);
-
-        if (! presetContentBounds.isEmpty())
-            presetContentBounds.removeFromTop(verticalGap);
-
-        auto presetButtonRowBounds = presetContentBounds.removeFromTop(rowHeight);
-
-        const auto presetButtonCount = 5;
-        const auto totalGapWidth = presetRowGap * (presetButtonCount - 1);
-        const auto availableButtonWidth = juce::jmax(0, presetButtonRowBounds.getWidth() - totalGapWidth);
-        const auto baseButtonWidth = availableButtonWidth / presetButtonCount;
-        const auto buttonWidthRemainder = availableButtonWidth % presetButtonCount;
-
-        auto placePresetButton = [&presetButtonRowBounds, baseButtonWidth, buttonWidthRemainder] (BoxTextButton& button, const int index)
+        auto placeButtons = [] (juce::Rectangle<int> rowBounds, const auto& buttons)
         {
-            const auto buttonWidth = baseButtonWidth + (index < buttonWidthRemainder ? 1 : 0);
-            auto buttonBounds = presetButtonRowBounds.removeFromLeft(buttonWidth);
-            button.setBounds(buttonBounds);
+            const auto count = static_cast<int>(buttons.size());
+            const auto totalGapWidth = presetRowGap * (count - 1);
+            const auto availableButtonWidth = juce::jmax(0, rowBounds.getWidth() - totalGapWidth);
+            const auto baseButtonWidth = availableButtonWidth / count;
+            const auto buttonWidthRemainder = availableButtonWidth % count;
 
-            if (index + 1 < presetButtonCount)
-                presetButtonRowBounds.removeFromLeft(presetRowGap);
+            for (int index = 0; index < count; ++index)
+            {
+                const auto buttonWidth = baseButtonWidth + (index < buttonWidthRemainder ? 1 : 0);
+                buttons[static_cast<size_t>(index)]->setBounds(rowBounds.removeFromLeft(buttonWidth));
+
+                if (index + 1 < count)
+                    rowBounds.removeFromLeft(presetRowGap);
+            }
         };
 
-        placePresetButton(*presetsSection->addButton, 0);
-        placePresetButton(*presetsSection->saveButton, 1);
-        placePresetButton(*presetsSection->renameButton, 2);
-        placePresetButton(*presetsSection->defaultButton, 3);
-        placePresetButton(*presetsSection->deleteButton, 4);
+        if (presetsSection->filterActionsExpanded)
+        {
+            presetsSection->presetCombo.setBounds({});
+            placeButtons(presetRowBounds, std::array<BoxTextButton*, 4> {
+                addFilterButton.get(), sortPlaceButton.get(), sortFreqButton.get(), sortDuoButton.get()
+            });
+        }
+        else
+        {
+            for (auto* button : { addFilterButton.get(), sortPlaceButton.get(), sortFreqButton.get(), sortDuoButton.get() })
+                button->setBounds({});
+        }
+
+        if (presetsSection->actionsExpanded)
+        {
+            presetsSection->presetCombo.setBounds({});
+            placeButtons(presetRowBounds, std::array<BoxTextButton*, 5> {
+                presetsSection->addButton.get(), presetsSection->saveButton.get(),
+                presetsSection->renameButton.get(), presetsSection->defaultButton.get(),
+                presetsSection->deleteButton.get()
+            });
+        }
+        else
+        {
+            if (! presetsSection->filterActionsExpanded)
+                presetsSection->presetCombo.setBounds(presetRowBounds);
+            presetsSection->addButton->setBounds({});
+            presetsSection->saveButton->setBounds({});
+            presetsSection->renameButton->setBounds({});
+            presetsSection->defaultButton->setBounds({});
+            presetsSection->deleteButton->setBounds({});
+        }
     }
 
 }

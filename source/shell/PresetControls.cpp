@@ -22,6 +22,30 @@ void AvaAudioProcessorEditor::setupPresetControls()
             refreshFilterPresetList(presetName);
         }
     };
+    presetsSection->filterActionsToggleButton->onClick = [this]
+    {
+        presetsSection->filterActionsExpanded = presetsSection->filterActionsToggleButton->getToggleState();
+        if (presetsSection->filterActionsExpanded)
+        {
+            presetsSection->actionsExpanded = false;
+            presetsSection->actionsToggleButton->setToggleState(false, juce::dontSendNotification);
+        }
+        setPresetsVisible(eqlModuleLoaded);
+        resized();
+        clearKeyboardFocus(*this);
+    };
+    presetsSection->actionsToggleButton->onClick = [this]
+    {
+        presetsSection->actionsExpanded = presetsSection->actionsToggleButton->getToggleState();
+        if (presetsSection->actionsExpanded)
+        {
+            presetsSection->filterActionsExpanded = false;
+            presetsSection->filterActionsToggleButton->setToggleState(false, juce::dontSendNotification);
+        }
+        setPresetsVisible(eqlModuleLoaded);
+        resized();
+        clearKeyboardFocus(*this);
+    };
     presetsSection->addButton->onClick = [this]
     {
         addFilterPreset();
@@ -52,6 +76,8 @@ void AvaAudioProcessorEditor::setupPresetControls()
         clearKeyboardFocus(*this);
     }, 500, "S?");
     addAndMakeVisible(presetsSection->presetCombo);
+    addAndMakeVisible(*presetsSection->filterActionsToggleButton);
+    addAndMakeVisible(*presetsSection->actionsToggleButton);
     addAndMakeVisible(*presetsSection->addButton);
     addAndMakeVisible(*presetsSection->saveButton);
     addAndMakeVisible(*presetsSection->renameButton);
@@ -59,7 +85,7 @@ void AvaAudioProcessorEditor::setupPresetControls()
     addAndMakeVisible(*presetsSection->deleteButton);
     presetsSection->onRenameRequested = [this] (const juce::String& currentName)
     {
-        auto promptBounds = moduleTitle != nullptr ? moduleTitle->getBounds()
+        auto promptBounds = moduleTitle != nullptr ? getLocalArea(moduleTitle.get(), moduleTitle->getLocalBounds())
                                                    : juce::Rectangle<int>();
 
         if (! promptBounds.isEmpty())

@@ -184,7 +184,7 @@ CrossoverModuleComponent::Config makeTlsCrossoverConfig(TlsModuleProcessor& proc
     config.showCrossoverControls = false;
     config.showCrossoverNavigation = false;
     config.showCrossoverSolo = false;
-    config.pinModuleHeading = true;
+    config.showModuleHeading = false;
     config.rangeControls = {
         headingControl("LISTEN", 0),
         toggleControl("lc", "LC", "", "", "listen", 1, 4),
@@ -252,7 +252,7 @@ CrossoverModuleComponent::Config makeDynCrossoverConfig(DynModuleProcessor& proc
     config.showCrossoverControls = false;
     config.showCrossoverNavigation = false;
     config.showCrossoverSolo = false;
-    config.pinModuleHeading = true;
+    config.showModuleHeading = false;
     config.rangeControls = {
         headingControl("MAIN", 0),
         parameterControl("morph", "MORPH", 2, 0),
@@ -313,7 +313,7 @@ CrossoverModuleComponent::Config makeTrsCrossoverConfig(TrsModuleProcessor& proc
     config.showCrossoverControls = false;
     config.showCrossoverNavigation = false;
     config.showCrossoverSolo = false;
-    config.pinModuleHeading = true;
+    config.showModuleHeading = false;
     config.rangeControls = {
         headingControl("TRANSIENT", 0),
         parameterToggleControl(TrsModuleProcessor::paramTransientGainId,

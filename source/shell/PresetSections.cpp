@@ -30,6 +30,15 @@ AvaAudioProcessorEditor::PresetsSection::PresetsSection()
 {
     configurePresetCombo(presetCombo);
 
+    filterActionsToggleButton = makeSectionButton({}, uiAccent);
+    filterActionsToggleButton->setTablerIcon("arrows-down-up");
+    filterActionsToggleButton->setClickingTogglesState(true);
+
+    actionsToggleButton = makeSectionButton({}, uiAccent);
+    actionsToggleButton->setTablerIcon("arrows-down-up");
+    actionsToggleButton->setClickingTogglesState(true);
+    actionsToggleButton->setToggleState(actionsExpanded, juce::dontSendNotification);
+
     addButton = makeSectionButton("ADD", uiAccent);
     saveButton = makeSectionButton("SV", uiGrey500);
     renameButton = makeSectionButton("RN", uiGrey500);
@@ -71,7 +80,7 @@ void AvaAudioProcessorEditor::PresetsSection::beginRename()
 
 int AvaAudioProcessorEditor::PresetsSection::getPresetRowPreferredHeight() const noexcept
 {
-    return (rowHeight * 2) + verticalGap;
+    return rowHeight;
 }
 
 juce::String AvaAudioProcessorEditor::PresetsSection::getSelectedPresetName() const

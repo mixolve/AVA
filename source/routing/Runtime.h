@@ -50,6 +50,7 @@ private:
     void planGroupDelays(int firstId);
     void applyDelay(int id, juce::AudioBuffer<float>&);
     int nodeLatency(int id) const noexcept;
+    int parallelLatency(int firstId) const noexcept;
     int groupLatency(int firstId) const noexcept;
 
     AvaAudioProcessor& owner;

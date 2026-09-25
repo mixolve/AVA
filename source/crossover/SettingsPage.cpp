@@ -21,17 +21,6 @@ public:
         if (! owner.config.showCrossoverControls)
             return;
 
-        if (owner.config.showCrossoverSolo)
-        {
-            decorativeSoloButton = makeTextButton("SOLO");
-            decorativeSoloButton->setEnabled(false);
-            decorativeSoloButton->setAlpha(1.0f);
-            decorativeSoloButton->setClickingTogglesState(false);
-            decorativeSoloButton->setPressFillEnabled(false);
-            decorativeSoloButton->setInterceptsMouseClicks(false, false);
-            addAndMakeVisible(*decorativeSoloButton);
-        }
-
         if (owner.config.crossoverSettingsHeading.isNotEmpty())
         {
             settingsHeading = makeTextButton(owner.config.crossoverSettingsHeading, uiGrey500);
@@ -171,9 +160,6 @@ public:
 
         auto height = 0;
 
-        if (decorativeSoloButton != nullptr)
-            height += rowHeight + verticalGap;
-
         if (settingsHeading != nullptr)
             height += rowHeight + verticalGap;
 
@@ -266,7 +252,6 @@ public:
                 bounds.removeFromTop(verticalGap);
         };
 
-        placeButton(decorativeSoloButton.get());
         placeButton(settingsHeading.get());
         placeButton(addCrossoverButton.get());
 
@@ -350,7 +335,6 @@ private:
     }
 
     CrossoverModuleComponent& owner;
-    std::unique_ptr<BoxTextButton> decorativeSoloButton;
     std::unique_ptr<BoxTextButton> settingsHeading;
     std::unique_ptr<BoxTextButton> autoSoloButton;
     std::unique_ptr<LocalChoiceControl> soloModeControl;

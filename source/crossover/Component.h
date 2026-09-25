@@ -109,6 +109,8 @@ public:
     juce::Rectangle<int> getContentBounds() const noexcept;
     void refreshCurrentPageLayout();
     void refreshExternalState();
+    void setInstanceName(const juce::String& name);
+    void setModuleActionButtons(BoxTextButton& addButton, BoxTextButton& titleButton);
     int getPreferredHeight() const noexcept;
     bool isCrossoverSettingsSelected() const noexcept { return crossoverSettingsActive; }
     size_t getVisibleCrossoverRange() const noexcept { return visibleRangeIndex; }
@@ -132,6 +134,7 @@ private:
     void synchroniseManualSoloMaskFromParameters();
     bool isRangeSoloEnabled(size_t rangeIndex) const noexcept;
     void updateMonitorButtons();
+    void updateHeaderSoloState();
     void updatePageVisibility();
     void updatePinnedHeaderComponent();
     void updatePinnedTailComponent();
@@ -157,6 +160,10 @@ private:
     Config config;
     juce::AudioProcessorValueTreeState& valueTreeState;
     std::array<std::unique_ptr<BoxTextButton>, numMonitorButtons> monitorButtons;
+    std::unique_ptr<BoxTextButton> instanceHeading;
+    std::unique_ptr<BoxTextButton> headerSoloButton;
+    BoxTextButton* moduleAddButton = nullptr;
+    BoxTextButton* moduleTitleButton = nullptr;
     std::array<juce::RangedAudioParameter*, numRanges> soloParameters {};
     juce::RangedAudioParameter* activeSplitCountParameter = nullptr;
     std::array<std::unique_ptr<CrossoverModulePage>, numRanges> rangePages;

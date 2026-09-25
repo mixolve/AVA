@@ -5,6 +5,7 @@
 #include "../crossover/Component.h"
 #include "../modules/eql/Processor.h"
 #include "../routing/Panel.h"
+#include "../routing/State.h"
 
 namespace
 {
@@ -21,12 +22,21 @@ void AvaAudioProcessorEditor::setPresetsVisible(const bool shouldShow)
     if (presetsSection == nullptr)
         return;
 
-    setComponentVisible(&presetsSection->presetCombo, shouldShow);
-    setComponentVisible(presetsSection->addButton.get(), shouldShow);
-    setComponentVisible(presetsSection->saveButton.get(), shouldShow);
-    setComponentVisible(presetsSection->renameButton.get(), shouldShow);
-    setComponentVisible(presetsSection->defaultButton.get(), shouldShow);
-    setComponentVisible(presetsSection->deleteButton.get(), shouldShow);
+    setComponentVisible(&presetsSection->presetCombo,
+                        shouldShow && ! presetsSection->filterActionsExpanded && ! presetsSection->actionsExpanded);
+    setComponentVisible(presetsSection->filterActionsToggleButton.get(), shouldShow);
+    setComponentVisible(presetsSection->actionsToggleButton.get(), shouldShow);
+    const auto showFilterActions = shouldShow && presetsSection->filterActionsExpanded;
+    setComponentVisible(addFilterButton.get(), showFilterActions);
+    setComponentVisible(sortPlaceButton.get(), showFilterActions);
+    setComponentVisible(sortFreqButton.get(), showFilterActions);
+    setComponentVisible(sortDuoButton.get(), showFilterActions);
+    const auto showActions = shouldShow && presetsSection->actionsExpanded;
+    setComponentVisible(presetsSection->addButton.get(), showActions);
+    setComponentVisible(presetsSection->saveButton.get(), showActions);
+    setComponentVisible(presetsSection->renameButton.get(), showActions);
+    setComponentVisible(presetsSection->defaultButton.get(), showActions);
+    setComponentVisible(presetsSection->deleteButton.get(), showActions);
 }
 
 void AvaAudioProcessorEditor::setEqlFilterSectionsVisible(const bool shouldShow)
@@ -51,10 +61,6 @@ void AvaAudioProcessorEditor::setEqlControlsVisible(const bool shouldShow)
 {
     filterViewport.setVisible(shouldShow);
     setPresetsVisible(shouldShow);
-    setComponentVisible(addFilterButton.get(), shouldShow);
-    setComponentVisible(sortPlaceButton.get(), shouldShow);
-    setComponentVisible(sortFreqButton.get(), shouldShow);
-    setComponentVisible(sortDuoButton.get(), shouldShow);
     setEqlFilterSectionsVisible(shouldShow);
 }
 
@@ -125,7 +131,7 @@ void AvaAudioProcessorEditor::updateEqlSectionStates(const int activeFilterCount
         if (sortButton == nullptr)
             continue;
 
-        sortButton->setVisible(eqlModuleLoaded);
+        sortButton->setVisible(eqlModuleLoaded && presetsSection != nullptr && presetsSection->filterActionsExpanded);
         sortButton->setEnabled(canSortFilters);
         sortButton->setAlpha(1.0f);
     }
@@ -202,10 +208,44 @@ void AvaAudioProcessorEditor::updateEqlSectionStates(const int activeFilterCount
 
     if (addFilterButton != nullptr)
     {
-        addFilterButton->setVisible(eqlModuleLoaded);
+        addFilterButton->setVisible(eqlModuleLoaded && presetsSection != nullptr && presetsSection->filterActionsExpanded);
         addFilterButton->setEnabled(true);
         addFilterButton->setAlpha(1.0f);
     }
+}
+
+juce::String AvaAudioProcessorEditor::getInstanceDisplayName() const
+{
+    const auto& owner = audioProcessor.getOscOwner();
+    const auto routing = ava::routing::readState(owner.getValueTreeState().state);
+    return ava::routing::getDisplayName(routing,
+                                         routingInstanceId != 0 ? routingInstanceId : routing.rootInstanceId);
+}
+
+void AvaAudioProcessorEditor::updateInstanceHeadings()
+{
+    const auto name = getInstanceDisplayName();
+
+    juce::String moduleLabel;
+    switch (audioProcessor.getActiveModule())
+    {
+        case AvaAudioProcessor::ActiveModule::tls: moduleLabel = "TLS"; break;
+        case AvaAudioProcessor::ActiveModule::eql: moduleLabel = "EQL"; break;
+        case AvaAudioProcessor::ActiveModule::fft: moduleLabel = "FFT"; break;
+        case AvaAudioProcessor::ActiveModule::dyn: moduleLabel = "DYN"; break;
+        case AvaAudioProcessor::ActiveModule::trs: moduleLabel = "TRS"; break;
+        case AvaAudioProcessor::ActiveModule::none: break;
+    }
+
+    if (moduleTitle != nullptr)
+    {
+        const auto title = moduleLabel;
+        if (moduleTitle->getButtonText() != title)
+            moduleTitle->setButtonText(title);
+    }
+
+    if (auto* crossover = dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get()))
+        crossover->setInstanceName(name);
 }
 
 void AvaAudioProcessorEditor::updateSectionStates()
@@ -244,6 +284,7 @@ void AvaAudioProcessorEditor::updateSectionStates()
         focusedParameterControl->setVisible(! routingExpanded && ! oscExpanded);
 
     ensureModuleTitle();
+    updateInstanceHeadings();
 
     const auto hostParametersVisible = hostParametersExpanded;
     const auto moduleContentVisible = crossoverEditor != nullptr
@@ -251,9 +292,7 @@ void AvaAudioProcessorEditor::updateSectionStates()
 
     if (moduleTitle != nullptr)
     {
-        const juce::String moduleLabel = eqlModuleLoaded ? "EQL" : (fftModuleLoaded ? "FFT" : "");
-        moduleTitle->setButtonText(moduleLabel);
-        moduleTitle->setVisible(moduleContentVisible && moduleLabel.isNotEmpty());
+        moduleTitle->setVisible(audioProcessor.getActiveModule() != AvaAudioProcessor::ActiveModule::none);
     }
 
     hostParametersViewport.setVisible(hostParametersVisible);
@@ -261,8 +300,8 @@ void AvaAudioProcessorEditor::updateSectionStates()
     if (moduleAddButton != nullptr)
     {
         const auto noModuleLoaded = audioProcessor.getActiveModule() == AvaAudioProcessor::ActiveModule::none;
-        moduleAddButton->setVisible(noModuleLoaded && moduleContentVisible && ! hostParametersExpanded && ! routingExpanded && ! oscExpanded);
-        moduleAddButton->setEnabled(noModuleLoaded && moduleContentVisible);
+        moduleAddButton->setVisible(noModuleLoaded);
+        moduleAddButton->setEnabled(noModuleLoaded);
     }
 
     setComponentVisible(globalBypassButton.get(), globalControlsVisible);

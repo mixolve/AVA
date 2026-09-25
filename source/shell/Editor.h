@@ -38,7 +38,7 @@ class AvaAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                       private juce::ValueTree::Listener
 {
 public:
-    explicit AvaAudioProcessorEditor(AvaAudioProcessor&);
+    explicit AvaAudioProcessorEditor(AvaAudioProcessor&, int routingInstanceId = 0);
     ~AvaAudioProcessorEditor() override;
 
     void mouseDown(const juce::MouseEvent& event) override;
@@ -123,6 +123,8 @@ private:
     void resetFilterSectionUiState(int filterIndex);
     void removeFilterSectionUiState(int removedIndex, int previousCount);
     void updateSectionStates();
+    juce::String getInstanceDisplayName() const;
+    void updateInstanceHeadings();
     void setPresetsVisible(bool shouldShow);
     void setEqlFilterSectionsVisible(bool shouldShow);
     void setEqlControlsVisible(bool shouldShow);
@@ -169,9 +171,7 @@ private:
     void layoutGlobalControlsSection(juce::Rectangle<int>& bounds);
     void layoutFooter(juce::Rectangle<int>& bounds);
     void layoutCrossoverSection(juce::Rectangle<int>& bounds);
-    void layoutModuleTitle(juce::Rectangle<int>& bounds);
     void finalizeLayout() noexcept;
-    void layoutNoModuleState(juce::Rectangle<int>& bounds);
     void layoutModuleEditorContent(juce::Rectangle<int>& bounds);
     void layoutFftModuleSections(juce::Rectangle<int>& bounds);
     void layoutEqlModuleSections(juce::Rectangle<int>& bounds);
@@ -264,6 +264,7 @@ private:
     std::unique_ptr<AvaAudioProcessorEditor> activeInstanceEditor;
     std::function<void()> returnToRoutingAction;
     int activeInstanceId = 0;
+    int routingInstanceId = 0;
     std::unique_ptr<OscPanel> oscPanel;
     std::unique_ptr<juce::Component> tlsModuleEditor;
     std::unique_ptr<juce::Component> dynModuleEditor;

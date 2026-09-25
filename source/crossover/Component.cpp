@@ -35,6 +35,32 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
 
     loadUiState();
 
+    if (config.showCrossoverSolo)
+    {
+        instanceHeading = makeTextButton({}, uiGrey500);
+        instanceHeading->setFillVisible(false);
+        instanceHeading->setAlwaysAccentOutline(false);
+        instanceHeading->setToggleAccentVisible(false);
+        instanceHeading->setPressFillEnabled(false);
+        instanceHeading->setInterceptsMouseClicks(false, false);
+        addAndMakeVisible(*instanceHeading);
+
+        headerSoloButton = makeTextButton("SOLO");
+        headerSoloButton->setClickingTogglesState(false);
+        headerSoloButton->setLongPressPromptActions({}, [this]
+        {
+            if (config.makeCrossoverSoloParameterId != nullptr)
+                assignButtonToHostSlot(config.makeCrossoverSoloParameterId(visibleRangeIndex),
+                                       "SOLO", headerSoloButton.get());
+        });
+        headerSoloButton->onClick = [this]
+        {
+            toggleManualSolo(visibleRangeIndex);
+            updateHeaderSoloState();
+        };
+        addAndMakeVisible(*headerSoloButton);
+    }
+
     size_t activeSoloCount = 0;
 
     for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
@@ -85,6 +111,7 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
     }
 
     crossoverSettingsPage = makeCrossoverSettingsPage(*this);
+    updateHeaderSoloState();
 
     pageViewport.setInterceptsMouseClicks(false, true);
     pageViewport.setScrollBarsShown(false, false);
@@ -94,6 +121,38 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
 
     updateMonitorButtons();
     updatePageVisibility();
+}
+
+void CrossoverModuleComponent::setInstanceName(const juce::String& name)
+{
+    if (instanceHeading != nullptr && instanceHeading->getButtonText() != name)
+        instanceHeading->setButtonText(name);
+}
+
+void CrossoverModuleComponent::setModuleActionButtons(BoxTextButton& addButton,
+                                                       BoxTextButton& titleButton)
+{
+    moduleAddButton = &addButton;
+    moduleTitleButton = &titleButton;
+    if (addButton.getParentComponent() != this)
+        addChildComponent(addButton);
+    if (titleButton.getParentComponent() != this)
+        addChildComponent(titleButton);
+    resized();
+}
+
+void CrossoverModuleComponent::updateHeaderSoloState()
+{
+    if (headerSoloButton == nullptr)
+        return;
+
+    const auto enabled = ! crossoverSettingsActive && ! autoSoloEnabled && getActiveRangeCount() > 1;
+    headerSoloButton->setVisible(! crossoverSettingsActive);
+    headerSoloButton->setEnabled(enabled);
+    headerSoloButton->setAlpha(1.0f);
+    headerSoloButton->setToggleState(enabled && isRangeSoloEnabled(visibleRangeIndex), juce::dontSendNotification);
+    headerSoloButton->getProperties().set(juce::Identifier("oscParameterId"),
+                                           config.makeCrossoverSoloParameterId(visibleRangeIndex));
 }
 
 CrossoverModuleComponent::~CrossoverModuleComponent()

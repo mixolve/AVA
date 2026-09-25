@@ -44,12 +44,13 @@ bool decodeTopology(const juce::String& encoded, State& state)
         for (const auto& record : records)
         {
             const auto fields = juce::StringArray::fromTokens(record, ":", "");
-            if (fields.size() != 3 || fields.joinIntoString(":") != record)
+            if ((fields.size() != 3 && fields.size() != 4) || fields.joinIntoString(":") != record)
                 return false;
             State::Node node;
             if (! parseNumber(fields[0], node.id, true)
                 || ! parseNumber(fields[1], node.serialNext, false)
-                || ! parseNumber(fields[2], node.parallelNext, false))
+                || ! parseNumber(fields[2], node.parallelNext, false)
+                || (fields.size() == 4 && ! parseNumber(fields[3], node.groupNext, false)))
                 return false;
             state.nodes.push_back(node);
         }
@@ -91,21 +92,29 @@ bool decodeTopology(const juce::String& encoded, State& state)
     if (state.nodes.empty() || state.nodes.size() > maximumInstanceCount)
         return false;
     std::map<int, int> incoming;
+    std::set<int> parallelChildren;
     for (const auto& node : state.nodes)
         if (! incoming.emplace(node.id, 0).second)
             return false;
     for (const auto& node : state.nodes)
-        for (const auto child : { node.serialNext, node.parallelNext })
+    {
+        if (node.parallelNext != 0)
+            parallelChildren.insert(node.parallelNext);
+        for (const auto child : { node.serialNext, node.parallelNext, node.groupNext })
             if (child != 0)
             {
                 const auto found = incoming.find(child);
                 if (found == incoming.end() || ++found->second > 1)
                     return false;
             }
+    }
     if (incoming.find(state.entryInstanceId) == incoming.end())
         return false;
     for (const auto& [id, count] : incoming)
         if (count != (id == state.entryInstanceId ? 0 : 1))
+            return false;
+    for (const auto& node : state.nodes)
+        if (node.groupNext != 0 && parallelChildren.contains(node.id))
             return false;
 
     std::set<int> visited;
@@ -116,7 +125,8 @@ bool decodeTopology(const juce::String& encoded, State& state)
         const auto* node = findNode(state, id);
         return node != nullptr
             && (node->serialNext == 0 || visit(node->serialNext))
-            && (node->parallelNext == 0 || visit(node->parallelNext));
+            && (node->parallelNext == 0 || visit(node->parallelNext))
+            && (node->groupNext == 0 || visit(node->groupNext));
     };
     return visit(state.entryInstanceId) && visited.size() == state.nodes.size();
 }
@@ -176,7 +186,8 @@ void write(juce::ValueTree& tree, const State& state)
     juce::StringArray records;
     for (const auto& node : state.nodes)
         records.add(juce::String(node.id) + ":" + juce::String(node.serialNext)
-                    + ":" + juce::String(node.parallelNext));
+                    + ":" + juce::String(node.parallelNext)
+                    + ":" + juce::String(node.groupNext));
     tree.setProperty(instancesStateKey,
                      juce::String(state.entryInstanceId) + ";" + records.joinIntoString(","), nullptr);
     tree.setProperty(nextInstanceIdStateKey, state.nextInstanceId, nullptr);
@@ -203,6 +214,24 @@ bool canAdd(const State& state)
         && state.nextInstanceId < std::numeric_limits<int>::max();
 }
 
+bool appendContinuation(State& state, const int firstId, const int continuationId)
+{
+    auto* first = findNode(state, firstId);
+    if (first == nullptr)
+        return false;
+    if (first->groupNext != 0)
+        return appendContinuation(state, first->groupNext, continuationId);
+    if (first->parallelNext != 0)
+    {
+        first->groupNext = continuationId;
+        return true;
+    }
+    if (first->serialNext != 0)
+        return appendContinuation(state, first->serialNext, continuationId);
+    first->serialNext = continuationId;
+    return true;
+}
+
 bool detachForMove(State& state, const int id)
 {
     auto* source = findNode(state, id);
@@ -210,7 +239,8 @@ bool detachForMove(State& state, const int id)
         return false;
     const auto serial = source->serialNext;
     const auto parallel = source->parallelNext;
-    const auto replacement = parallel != 0 ? parallel : serial;
+    const auto group = source->groupNext;
+    const auto replacement = parallel != 0 ? parallel : (serial != 0 ? serial : group);
     if (replacement == 0 && state.entryInstanceId == id)
         return false;
     if (parallel != 0 && serial != 0)
@@ -220,6 +250,11 @@ bool detachForMove(State& state, const int id)
             tail = findNode(state, tail->serialNext);
         tail->serialNext = serial;
     }
+    if (parallel != 0 && group != 0)
+        findNode(state, parallel)->groupNext = group;
+    else if (parallel == 0 && serial != 0 && group != 0
+             && ! appendContinuation(state, serial, group))
+        return false;
     if (state.entryInstanceId == id)
         state.entryInstanceId = replacement;
     else
@@ -239,12 +274,19 @@ bool detachForMove(State& state, const int id)
                 found = true;
                 break;
             }
+            if (node.groupNext == id)
+            {
+                node.groupNext = replacement;
+                found = true;
+                break;
+            }
         }
         if (! found)
             return false;
     }
     source->serialNext = 0;
     source->parallelNext = 0;
+    source->groupNext = 0;
     return true;
 }
 }
@@ -366,6 +408,28 @@ bool insertParallelInstance(juce::ValueTree& tree, const int targetInstanceId)
     return true;
 }
 
+bool insertInstanceAfterGroup(juce::ValueTree& tree, const int groupFirstInstanceId)
+{
+    State state;
+    if (! decode(tree, state) || ! canAdd(state))
+        return false;
+    auto* first = findNode(state, groupFirstInstanceId);
+    if (first == nullptr || (first->parallelNext == 0 && first->groupNext == 0))
+        return false;
+    if (std::any_of(state.nodes.begin(), state.nodes.end(),
+                    [groupFirstInstanceId] (const auto& node)
+                    {
+                        return node.parallelNext == groupFirstInstanceId;
+                    }))
+        return false;
+    const auto id = state.nextInstanceId++;
+    const auto previousNext = first->groupNext;
+    first->groupNext = id;
+    state.nodes.push_back({ id, previousNext, 0, 0 });
+    write(tree, state);
+    return true;
+}
+
 bool removeInstance(juce::ValueTree& tree, const int instanceId)
 {
     State state;
@@ -376,7 +440,8 @@ bool removeInstance(juce::ValueTree& tree, const int instanceId)
         return false;
     const auto serial = source->serialNext;
     const auto parallel = source->parallelNext;
-    const auto replacement = parallel != 0 ? parallel : serial;
+    const auto group = source->groupNext;
+    const auto replacement = parallel != 0 ? parallel : (serial != 0 ? serial : group);
     if (parallel != 0 && serial != 0)
     {
         auto* tail = findNode(state, parallel);
@@ -384,6 +449,11 @@ bool removeInstance(juce::ValueTree& tree, const int instanceId)
             tail = findNode(state, tail->serialNext);
         tail->serialNext = serial;
     }
+    if (parallel != 0 && group != 0)
+        findNode(state, parallel)->groupNext = group;
+    else if (parallel == 0 && serial != 0 && group != 0
+             && ! appendContinuation(state, serial, group))
+        return false;
     if (state.entryInstanceId == instanceId)
         state.entryInstanceId = replacement;
     else
@@ -397,6 +467,11 @@ bool removeInstance(juce::ValueTree& tree, const int instanceId)
             if (node.parallelNext == instanceId)
             {
                 node.parallelNext = replacement;
+                break;
+            }
+            if (node.groupNext == instanceId)
+            {
+                node.groupNext = replacement;
                 break;
             }
         }

@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <memory>
+#include <vector>
 
 bool scrollViewportWithWheel(juce::Viewport& viewport,
                              int contentHeight,
@@ -13,6 +14,12 @@ bool scrollViewportWithWheel(juce::Viewport& viewport,
 class NoTickComboBox final : public juce::ComboBox
 {
 public:
+    using ChoicePromptPresenter = std::function<void(const juce::StringArray&,
+                                                     int,
+                                                     std::vector<bool>,
+                                                     juce::Justification,
+                                                     std::function<void(int)>)>;
+
     using juce::ComboBox::ComboBox;
 
     NoTickComboBox();
@@ -28,6 +35,7 @@ public:
     void setPopupMenuTextJustification(juce::Justification justification) noexcept;
     juce::Justification getPopupMenuTextJustification() const noexcept;
     void setPromptStylePopupEnabled(bool shouldEnable) noexcept;
+    void setChoicePromptPresenter(ChoicePromptPresenter presenter);
     void setChoiceEnabled(int choiceIndex, bool shouldEnable);
     bool isPressedHighlightEnabled() const noexcept;
 
@@ -39,6 +47,7 @@ private:
     bool dragDetected = false;
     bool pressHighlight = false;
     bool promptStylePopupEnabled = false;
+    ChoicePromptPresenter choicePromptPresenter;
 };
 
 class CopyPasteTextEditor final : public juce::TextEditor
@@ -226,6 +235,7 @@ private:
     std::function<void()> longPressTrailingAction;
     juce::String longPressTrailingPromptText;
     juce::Image longPressTrailingPromptIconImage;
+    bool longPressTrailingPromptIsHostIcon = false;
     std::function<void()> longPressAdditionalPromptAction;
     juce::Image longPressAdditionalPromptIconImage;
     std::unique_ptr<PromptDismissListener> promptDismissListener;
@@ -243,6 +253,7 @@ private:
     void showActionPrompt();
     void dismissActionPrompt();
     int getActionPromptCount() const noexcept;
+    juce::Rectangle<int> getActionPromptBounds(int index) const noexcept;
     int getActionPromptHitIndex(juce::Point<int> position) const noexcept;
     void scheduleMarqueeRepaint();
     void timerCallback() override;

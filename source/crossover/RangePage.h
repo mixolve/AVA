@@ -174,14 +174,12 @@ private:
     void clearReorderDragTarget(const juce::String& group);
     bool reorderRows(const juce::String& group);
     void clearExclusiveToggleGroup(const juce::String& activeParameterId, const juce::String& exclusiveGroup);
-    void refreshSoloButtonState();
     void updateToggleLabels();
     void updateTimeModeControls();
     void parameterChanged(const juce::String& parameterID, float) override;
 
     CrossoverModuleComponent& owner;
     size_t rangeIndex = 0;
-    BoxTextButton soloButton;
     BoxTextButton moduleHeading;
     std::unique_ptr<juce::Component> pinnedTail;
     std::vector<std::unique_ptr<RowBase>> rows;

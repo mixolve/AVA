@@ -2,6 +2,8 @@
 #include "OscListWindowAttachment.h"
 
 #include "Style.h"
+#include "Controls.h"
+#include "PromptComponents.h"
 #include "../crossover/Component.h"
 #include "OscPanel.h"
 #include "../routing/State.h"
@@ -13,7 +15,6 @@ namespace
 {
 class OscParameterListContent final : public juce::Component,
                                       private juce::TableListBoxModel,
-                                      private juce::ChangeListener,
                                       private juce::Timer
 {
     class CentredHeaderLookAndFeel final : public juce::LookAndFeel_V4
@@ -48,48 +49,52 @@ class OscParameterListContent final : public juce::Component,
         }
     };
 
-    class InstanceTabsLookAndFeel final : public juce::LookAndFeel_V4
-    {
-    public:
-        int getTabButtonOverlap(int) override { return 0; }
-
-        void drawTabbedButtonBarBackground(juce::TabbedButtonBar&, juce::Graphics& graphics) override
-        {
-            graphics.fillAll(uiBlack);
-        }
-
-        void drawTabAreaBehindFrontButton(juce::TabbedButtonBar&, juce::Graphics&, int, int) override {}
-
-        void drawTabButton(juce::TabBarButton& button, juce::Graphics& graphics,
-                           bool, bool) override
-        {
-            const auto bounds = button.getLocalBounds();
-            graphics.setColour(button.isFrontTab() ? uiGreyDark : uiBlack);
-            graphics.fillRect(bounds);
-            graphics.setColour(uiGrey500);
-            graphics.drawRect(bounds, 1);
-            graphics.setColour(uiWhite);
-            graphics.setFont(makeUiFont());
-            graphics.drawFittedText(button.getButtonText(), bounds.reduced(uiGap, 0),
-                                    juce::Justification::centred, 1);
-        }
-    };
-
 public:
-    explicit OscParameterListContent(AvaAudioProcessor& processorIn)
+    OscParameterListContent(AvaAudioProcessor& processorIn, juce::LookAndFeel& ownerLookAndFeel)
         : processor(processorIn),
           inputListener(*this)
     {
         setOpaque(true);
         addMouseListener(&inputListener, true);
 
-        tabs.setColour(juce::TabbedButtonBar::tabOutlineColourId, uiGrey500);
-        tabs.setColour(juce::TabbedButtonBar::tabTextColourId, uiWhite);
-        tabs.setColour(juce::TabbedButtonBar::frontTextColourId, uiWhite);
-        tabs.setLookAndFeel(&tabsLookAndFeel);
-        tabs.setMinimumTabScaleFactor(0.6);
-        tabs.addChangeListener(this);
-        addAndMakeVisible(tabs);
+        instanceSelector.setLookAndFeel(&ownerLookAndFeel);
+        instanceSelector.setEditableText(false);
+        instanceSelector.setJustificationType(juce::Justification::centred);
+        instanceSelector.setPopupMenuTextJustification(juce::Justification::centred);
+        instanceSelector.setColour(juce::ComboBox::backgroundColourId, uiGreyDark);
+        instanceSelector.setColour(juce::ComboBox::outlineColourId, uiGreyLight);
+        instanceSelector.setColour(juce::ComboBox::textColourId, uiWhite);
+        instanceSelector.setColour(juce::ComboBox::arrowColourId, uiWhite);
+        instanceSelector.setColour(juce::ComboBox::buttonColourId, uiGreyDark);
+        instanceSelector.setWantsKeyboardFocus(false);
+        instanceSelector.setMouseClickGrabsKeyboardFocus(false);
+        instanceSelector.setPromptStylePopupEnabled(true);
+        instanceSelector.setChoicePromptPresenter(
+            [this](const juce::StringArray& choices,
+                   int selectedIndex,
+                   std::vector<bool> itemEnabledStates,
+                   juce::Justification itemJustification,
+                   std::function<void(int)> onSelect)
+            {
+                choicePromptOverlay.reset();
+                choicePromptOverlay = makeChoicePrompt(instanceSelector.getBounds(),
+                                                       choices,
+                                                       selectedIndex,
+                                                       std::move(itemEnabledStates),
+                                                       itemJustification,
+                                                       std::move(onSelect),
+                                                       {},
+                                                       [safeThis = juce::Component::SafePointer<OscParameterListContent>(this)]
+                                                       {
+                                                           if (safeThis != nullptr)
+                                                               safeThis->choicePromptOverlay.reset();
+                                                       });
+                addAndMakeVisible(*choicePromptOverlay);
+                choicePromptOverlay->setBounds(getLocalBounds());
+                choicePromptOverlay->toFront(false);
+            });
+        instanceSelector.onChange = [this] { refreshParameters(); };
+        addAndMakeVisible(instanceSelector);
 
         table.setModel(this);
         table.setRowHeight(rowHeight);
@@ -119,8 +124,8 @@ public:
     ~OscParameterListContent() override
     {
         stopTimer();
-        tabs.removeChangeListener(this);
-        tabs.setLookAndFeel(nullptr);
+        choicePromptOverlay.reset();
+        instanceSelector.setLookAndFeel(nullptr);
         removeMouseListener(&inputListener);
         table.getHeader().setLookAndFeel(nullptr);
         table.setModel(nullptr);
@@ -134,9 +139,11 @@ public:
     void resized() override
     {
         auto bounds = getLocalBounds().reduced(contentInset);
-        tabs.setBounds(bounds.removeFromTop(rowHeight));
+        instanceSelector.setBounds(bounds.removeFromTop(rowHeight));
         bounds.removeFromTop(uiGap);
         table.setBounds(bounds);
+        if (choicePromptOverlay != nullptr)
+            choicePromptOverlay->setBounds(getLocalBounds());
     }
 
     int getPreferredWindowWidth() const noexcept
@@ -169,42 +176,43 @@ private:
         refreshParameters();
     }
 
-    void changeListenerCallback(juce::ChangeBroadcaster*) override
-    {
-        refreshParameters();
-    }
-
     void refreshParameters()
     {
         const auto routing = ava::routing::readState(processor.getValueTreeState().state);
         std::vector<int> currentIds;
-        juce::StringArray currentNames;
+        juce::StringArray currentLabels;
         for (const auto& node : routing.nodes)
         {
             currentIds.push_back(node.id);
-            currentNames.add(ava::routing::getDisplayName(routing, node.id));
+            const auto handle = node.id == routing.rootInstanceId
+                ? std::shared_ptr<AvaAudioProcessor> {}
+                : processor.getRoutingInstanceHandle(node.id);
+            const auto* instance = node.id == routing.rootInstanceId ? &processor : handle.get();
+            const auto moduleId = instance == nullptr
+                ? juce::String()
+                : juce::String(AvaAudioProcessor::stateIdForModule(instance->getActiveModule()));
+            const auto moduleName = moduleId.isEmpty() ? juce::String("CROSSOVER") : moduleId.toUpperCase();
+            currentLabels.add(ava::routing::getDisplayName(routing, node.id)
+                              + " " + juce::String::charToString(0x2014) + " " + moduleName);
         }
 
-        if (currentIds != tabIds || currentNames != tabNames)
+        const auto selectorChanged = currentIds != instanceIds || currentLabels != instanceLabels;
+        if (selectorChanged)
         {
-            const auto oldIndex = tabs.getCurrentTabIndex();
-            const auto selectedId = juce::isPositiveAndBelow(oldIndex, static_cast<int>(tabIds.size()))
-                ? tabIds[static_cast<size_t>(oldIndex)] : routing.rootInstanceId;
-            tabIds = std::move(currentIds);
-            tabNames = std::move(currentNames);
-            tabs.clearTabs();
-            for (const auto& name : tabNames)
-                tabs.addTab(name, uiBlack, -1);
-            const auto selected = std::find(tabIds.begin(), tabIds.end(), selectedId);
-            tabs.setCurrentTabIndex(selected == tabIds.end()
-                                        ? 0 : static_cast<int>(std::distance(tabIds.begin(), selected)),
-                                    false);
+            const auto selectedId = instanceSelector.getSelectedId();
+            instanceIds = std::move(currentIds);
+            instanceLabels = std::move(currentLabels);
+            instanceSelector.clear(juce::dontSendNotification);
+            for (size_t index = 0; index < instanceIds.size(); ++index)
+                instanceSelector.addItem(instanceLabels[static_cast<int>(index)], instanceIds[index]);
+            const auto selected = std::find(instanceIds.begin(), instanceIds.end(), selectedId);
+            instanceSelector.setSelectedId(selected == instanceIds.end() ? routing.rootInstanceId : selectedId,
+                                           juce::dontSendNotification);
         }
 
-        const auto selected = tabs.getCurrentTabIndex();
-        if (! juce::isPositiveAndBelow(selected, static_cast<int>(tabIds.size())))
+        const auto id = instanceSelector.getSelectedId();
+        if (id == 0)
             return;
-        const auto id = tabIds[static_cast<size_t>(selected)];
         const auto handle = id == routing.rootInstanceId
             ? std::shared_ptr<AvaAudioProcessor> {}
             : processor.getRoutingInstanceHandle(id);
@@ -213,12 +221,16 @@ private:
             return;
 
         auto refreshed = instance->getVisibleOscParameters();
-        const auto prefix = makeOscAddressPrefix(tabNames[selected]);
+        const auto prefix = makeOscAddressPrefix(ava::routing::getDisplayName(routing, id));
         for (auto& parameter : refreshed)
             parameter.address = prefix + parameter.internalName;
 
         if (refreshed == parameters)
+        {
+            if (selectorChanged)
+                updateColumnWidths();
             return;
+        }
 
         parameters = std::move(refreshed);
         updateColumnWidths();
@@ -251,6 +263,8 @@ private:
             nameWidth = juce::jmax(nameWidth, measure(parameter.internalName));
             acceptedValuesWidth = juce::jmax(acceptedValuesWidth, measure(parameter.acceptedValues));
         }
+        for (const auto& label : instanceLabels)
+            nameWidth = juce::jmax(nameWidth, measure(label) - acceptedValuesWidth);
 
         auto& header = table.getHeader();
         header.setColumnWidth(nameColumn, nameWidth);
@@ -302,6 +316,11 @@ private:
 
     int getRowAt(const juce::MouseEvent& event)
     {
+        if (choicePromptOverlay != nullptr
+            && (event.eventComponent == choicePromptOverlay.get()
+                || choicePromptOverlay->isParentOf(event.eventComponent)))
+            return -1;
+
         const auto relative = event.getEventRelativeTo(&table);
 
         if (! table.getLocalBounds().contains(relative.getPosition()))
@@ -391,10 +410,10 @@ private:
     static constexpr int longPressDragTolerance = 4;
 
     AvaAudioProcessor& processor;
-    juce::TabbedButtonBar tabs { juce::TabbedButtonBar::TabsAtTop };
-    InstanceTabsLookAndFeel tabsLookAndFeel;
-    std::vector<int> tabIds;
-    juce::StringArray tabNames;
+    NoTickComboBox instanceSelector;
+    std::unique_ptr<PromptComponent> choicePromptOverlay;
+    std::vector<int> instanceIds;
+    juce::StringArray instanceLabels;
     std::vector<OscParameterInfo> parameters;
     CentredHeaderLookAndFeel headerLookAndFeel;
     juce::TableListBox table;
@@ -412,6 +431,7 @@ class OscParameterListWindow final : public juce::DocumentWindow,
 {
 public:
     OscParameterListWindow(AvaAudioProcessor& processor,
+                           juce::LookAndFeel& ownerLookAndFeel,
                            std::function<void()> closeCallbackIn)
         : DocumentWindow({}, uiBlack, 0, false),
           closeCallback(std::move(closeCallbackIn))
@@ -420,7 +440,7 @@ public:
         setTitleBarHeight(0);
         setDropShadowEnabled(false);
         setResizable(false, false);
-        auto* content = new OscParameterListContent(processor);
+        auto* content = new OscParameterListContent(processor, ownerLookAndFeel);
         setContentOwned(content, true);
         setSize(content->getPreferredWindowWidth(), 1);
         setWantsKeyboardFocus(false);
@@ -524,6 +544,7 @@ void AvaAudioProcessorEditor::showOscParameterList()
 
     auto window = std::make_unique<OscParameterListWindow>(
         audioProcessor.getOscOwner(),
+        getLookAndFeel(),
         [safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
         {
             if (safeEditor == nullptr)

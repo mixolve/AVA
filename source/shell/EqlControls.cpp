@@ -180,13 +180,13 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
                 if (label != nullptr)
                     label->setDragTargetOutlineVisible(label.get() == filterOrderLabels[static_cast<size_t>(sourceOrderPosition)].get());
         };
-        section->header->setLongPressTrailingPromptAction([this, filterIndex]
+        section->header->setLongPressTrailingPromptIconAction([this, filterIndex]
         {
             const auto parameterId = EqlModuleProcessor::getFilterBypassParamId(filterIndex);
 
             if (auto* parameter = findHostAssignableParameter(parameterId))
                 handleHostSlotAssignRequest(parameterId, "BP", parameter->getValue());
-        }, "H?");
+        }, "map-pin-share");
         section->bypassButton->onClick = [this]
         {
             updateSectionStates();

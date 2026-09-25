@@ -20,6 +20,7 @@ struct State
         int id = 0;
         int serialNext = 0;
         int parallelNext = 0;
+        int groupNext = 0;
 
         bool operator==(const Node&) const = default;
     };
@@ -39,6 +40,7 @@ State readState(const juce::ValueTree& tree);
 juce::String getDisplayName(const State& state, int instanceId);
 bool insertSerialInstance(juce::ValueTree& tree, int afterInstanceId);
 bool insertParallelInstance(juce::ValueTree& tree, int targetInstanceId);
+bool insertInstanceAfterGroup(juce::ValueTree& tree, int groupFirstInstanceId);
 bool removeInstance(juce::ValueTree& tree, int instanceId);
 bool moveInstanceSerialAfter(juce::ValueTree& tree, int instanceId, int targetInstanceId);
 bool moveInstanceParallelTo(juce::ValueTree& tree, int instanceId, int targetInstanceId);

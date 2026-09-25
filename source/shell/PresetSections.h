@@ -15,12 +15,16 @@ struct AvaAudioProcessorEditor::PresetsSection
     void setPresetNames(const juce::StringArray& names, const juce::String& preferredSelection);
 
     NoTickComboBox presetCombo;
+    std::unique_ptr<BoxTextButton> filterActionsToggleButton;
+    std::unique_ptr<BoxTextButton> actionsToggleButton;
     std::unique_ptr<BoxTextButton> addButton;
     std::unique_ptr<BoxTextButton> saveButton;
     std::unique_ptr<BoxTextButton> renameButton;
     std::unique_ptr<BoxTextButton> defaultButton;
     std::unique_ptr<BoxTextButton> deleteButton;
     bool ignorePresetCallbacks = false;
+    bool filterActionsExpanded = false;
+    bool actionsExpanded = false;
     juce::StringArray presetNames;
     juce::String selectedPresetName;
     std::function<void()> onPresetSelected;

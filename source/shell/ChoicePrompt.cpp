@@ -5,10 +5,49 @@
 
 namespace
 {
-constexpr int promptPanelHorizontalPadding = 0;
-constexpr int promptPanelVerticalPadding = uiGap;
 constexpr int promptItemHeight = 30;
 constexpr int promptItemGap = 0;
+constexpr float promptLineThickness = 1.5f;
+
+void fillOpaqueLine(juce::Graphics& graphics, float left, float top, float right, float bottom)
+{
+    const auto scale = juce::jmax(1.0f, graphics.getInternalContext().getPhysicalPixelScaleFactor());
+    const auto snap = [scale](float position)
+    {
+        return static_cast<float>(juce::roundToInt(position * scale)) / scale;
+    };
+    left = snap(left);
+    top = snap(top);
+    right = snap(right);
+    bottom = snap(bottom);
+    graphics.fillRect(juce::Rectangle<float>(left, top, right - left, bottom - top));
+}
+
+float opaqueLineThickness(juce::Graphics& graphics)
+{
+    const auto scale = juce::jmax(1.0f, graphics.getInternalContext().getPhysicalPixelScaleFactor());
+    return static_cast<float>(juce::jmax(1, juce::roundToInt(promptLineThickness * scale))) / scale;
+}
+
+class ChoiceContent final : public juce::Component
+{
+public:
+    explicit ChoiceContent(const int itemCountIn) : itemCount(itemCountIn) {}
+
+    void paintOverChildren(juce::Graphics& graphics) override
+    {
+        graphics.setColour(uiWhite);
+        const auto thickness = opaqueLineThickness(graphics);
+        for (int index = 1; index < itemCount; ++index)
+        {
+            const auto y = static_cast<float>(index * (promptItemHeight + promptItemGap));
+            fillOpaqueLine(graphics, 0.0f, y - thickness, static_cast<float>(getWidth()), y);
+        }
+    }
+
+private:
+    int itemCount = 0;
+};
 
 class FloatingChoicePrompt final : public PromptComponent
 {
@@ -30,6 +69,7 @@ public:
           selectedIndex(selectedIndexIn),
           itemEnabledStates(std::move(itemEnabledStatesIn)),
           itemJustification(itemJustificationIn),
+          choiceContent(choices.size()),
           onSelect(std::move(selectCallback)),
           onDismiss(std::move(dismissCallback)),
           onClose(std::move(closeCallback))
@@ -55,11 +95,10 @@ public:
             auto button = std::make_unique<BoxTextButton>(uiAccent);
             button->setButtonText(choices[index]);
             button->setTextJustification(itemJustification);
-            button->setBorderVisible(true);
-            button->setAlwaysAccentOutline(choices.size() > 2 && index == selectedIndex);
-            button->setFillColour(uiGreyDark);
+            button->setBorderVisible(false);
+            button->setFillColour(index == selectedIndex ? uiGreyLight : uiGreyDark);
             button->setInteractionFillColour(uiGreyLight);
-            button->setTextColourOverride(uiWhite);
+            button->setTextColourOverride(index == selectedIndex ? uiBlack : uiWhite);
             const auto isEnabled = itemEnabled(index);
             button->setEnabled(isEnabled);
             button->setAlpha(1.0f);
@@ -75,8 +114,15 @@ public:
 
     void paintOverChildren(juce::Graphics& graphics) override
     {
+        const auto bounds = choiceViewport.getBounds().toFloat();
+        const auto thickness = opaqueLineThickness(graphics);
         graphics.setColour(uiWhite);
-        graphics.drawRect(choiceViewport.getBounds(), 2);
+        fillOpaqueLine(graphics, bounds.getX(), bounds.getY(), bounds.getRight(), bounds.getY() + thickness);
+        fillOpaqueLine(graphics, bounds.getX(), bounds.getBottom() - thickness,
+                       bounds.getRight(), bounds.getBottom());
+        fillOpaqueLine(graphics, bounds.getX(), bounds.getY(), bounds.getX() + thickness, bounds.getBottom());
+        fillOpaqueLine(graphics, bounds.getRight() - thickness, bounds.getY(),
+                       bounds.getRight(), bounds.getBottom());
     }
 
     void resized() override
@@ -85,25 +131,21 @@ public:
         const auto itemCount = static_cast<int>(choices.size());
         const auto itemBlockHeight = (itemCount * promptItemHeight)
             + (juce::jmax(0, itemCount - 1) * promptItemGap);
-        const auto availableWidth = juce::jmax(0, visibleBounds.getWidth() - (promptPanelHorizontalPadding * 2));
+        const auto availableWidth = visibleBounds.getWidth();
         const auto promptWidth = juce::jmax(1, juce::jmin(availableWidth, anchorBounds.getWidth()));
-        const auto promptHeight = juce::jmin(juce::jmax(anchorBounds.getHeight(), itemBlockHeight + (promptPanelVerticalPadding * 2)),
-                                             juce::jmax(0, visibleBounds.getHeight() - (promptPanelVerticalPadding * 2)));
+        const auto promptHeight = juce::jmin(juce::jmax(anchorBounds.getHeight(), itemBlockHeight),
+                                             visibleBounds.getHeight());
         const auto alignedItemIndex = juce::isPositiveAndBelow(selectedIndex, itemCount) ? selectedIndex : 0;
-        const auto alignedItemCentreY = promptPanelVerticalPadding
-            + (alignedItemIndex * (promptItemHeight + promptItemGap))
+        const auto alignedItemCentreY = (alignedItemIndex * (promptItemHeight + promptItemGap))
             + (promptItemHeight / 2);
 
         panelBounds = juce::Rectangle<int>(promptWidth, promptHeight);
         panelBounds.setX(anchorBounds.getX());
         panelBounds.setY(anchorBounds.getCentreY() - alignedItemCentreY);
-        panelBounds = panelBounds.constrainedWithin(visibleBounds.reduced(promptPanelHorizontalPadding,
-                                                                            promptPanelVerticalPadding));
+        panelBounds = panelBounds.constrainedWithin(visibleBounds);
 
-        const auto viewportBounds = panelBounds.reduced(promptPanelHorizontalPadding,
-                                                         promptPanelVerticalPadding);
-        choiceViewport.setBounds(viewportBounds);
-        choiceContent.setSize(viewportBounds.getWidth(), juce::jmax(viewportBounds.getHeight(), itemBlockHeight));
+        choiceViewport.setBounds(panelBounds);
+        choiceContent.setSize(panelBounds.getWidth(), juce::jmax(panelBounds.getHeight(), itemBlockHeight));
 
         auto contentBounds = choiceContent.getLocalBounds();
         for (size_t index = 0; index < itemButtons.size(); ++index)
@@ -226,7 +268,7 @@ private:
     std::vector<bool> itemEnabledStates;
     juce::Justification itemJustification = juce::Justification::centred;
     juce::Viewport choiceViewport;
-    juce::Component choiceContent;
+    ChoiceContent choiceContent;
     std::vector<std::unique_ptr<BoxTextButton>> itemButtons;
     SelectCallback onSelect;
     DismissCallback onDismiss;

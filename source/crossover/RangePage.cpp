@@ -87,24 +87,9 @@ CrossoverRangePage::CrossoverRangePage(CrossoverModuleComponent& ownerIn,
                                        juce::Colour accent)
     : owner(ownerIn),
       rangeIndex(rangeIndexIn),
-      soloButton(accent),
       moduleHeading(uiGrey500)
 {
-    soloButton.setButtonText("SOLO");
-    soloButton.setTextJustification(juce::Justification::centred);
-    soloButton.setClickingTogglesState(false);
-    soloButton.setLongPressPromptActions({}, [this]
-    {
-        if (owner.config.makeCrossoverSoloParameterId != nullptr)
-            owner.assignButtonToHostSlot(owner.config.makeCrossoverSoloParameterId(rangeIndex), "SOLO", &soloButton);
-    });
-    soloButton.onClick = [this]
-    {
-        owner.toggleManualSolo(rangeIndex);
-        refreshSoloButtonState();
-    };
-    if (owner.config.showCrossoverSolo)
-        addAndMakeVisible(soloButton);
+    juce::ignoreUnused(accent);
 
     if (owner.config.showModuleHeading)
     {
@@ -112,27 +97,18 @@ CrossoverRangePage::CrossoverRangePage(CrossoverModuleComponent& ownerIn,
         moduleHeading.setTextJustification(juce::Justification::centred);
         moduleHeading.setAlwaysAccentOutline(false);
         moduleHeading.setToggleAccentVisible(false);
-        moduleHeading.setLongPressAction([this]
+        moduleHeading.setLongPressPromptActions([this]
         {
             if (owner.config.onModuleCloseRequest != nullptr)
                 owner.config.onModuleCloseRequest();
-        }, 500, "CLOSE?");
+        }, {}, "CLOSE?");
         addAndMakeVisible(moduleHeading);
-    }
-
-    if (owner.config.showCrossoverSolo)
-    {
-        const auto soloParameterId = owner.config.makeCrossoverSoloParameterId(rangeIndex);
-        soloButton.getProperties().set(juce::Identifier("oscParameterId"), soloParameterId);
-        listenedParameterIds.push_back(soloParameterId);
-        owner.valueTreeState.addParameterListener(soloParameterId, this);
     }
 
     pinnedTail = std::make_unique<juce::Component>();
     addControlSpecs(owner.config.rangeControls, *this);
     tailRowStart = rows.size();
     addControlSpecs(owner.config.rangeTailControls, *pinnedTail);
-    refreshSoloButtonState();
     updateTimeModeControls();
 }
 
@@ -146,7 +122,6 @@ void CrossoverRangePage::refreshExternalState()
 {
     const auto previousPreferredHeight = getPreferredHeight();
     const auto orderChanged = reorderRows("gain");
-    refreshSoloButtonState();
     updateToggleLabels();
     updateTimeModeControls();
 
@@ -159,8 +134,6 @@ int CrossoverRangePage::getPreferredHeight() const
     auto height = 0;
     const auto moduleHeadingIsPinned = owner.config.showModuleHeading && owner.config.pinModuleHeading;
 
-    if (owner.config.showCrossoverSolo)
-        height += rowHeight;
     if (owner.config.showModuleHeading && ! moduleHeadingIsPinned)
         height += (height > 0 ? verticalGap : 0) + rowHeight;
 
@@ -206,14 +179,8 @@ void CrossoverRangePage::layoutPinnedTail()
 void CrossoverRangePage::resized()
 {
     auto bounds = getLocalBounds();
-    if (owner.config.showCrossoverSolo)
-        soloButton.setBounds(bounds.removeFromTop(rowHeight));
-
     if (owner.config.showModuleHeading && ! owner.config.pinModuleHeading)
     {
-        if (owner.config.showCrossoverSolo && ! bounds.isEmpty())
-            bounds.removeFromTop(verticalGap);
-
         moduleHeading.setBounds(bounds.removeFromTop(rowHeight));
     }
 
@@ -227,14 +194,6 @@ void CrossoverRangePage::resized()
 void CrossoverRangePage::mouseDown(const juce::MouseEvent&)
 {
     owner.clearFocus();
-}
-
-void CrossoverRangePage::refreshSoloButtonState()
-{
-    const auto enabled = ! owner.autoSoloEnabled && owner.getActiveRangeCount() > 1;
-    soloButton.setEnabled(enabled);
-    soloButton.setAlpha(1.0f);
-    soloButton.setToggleState(enabled && owner.isRangeSoloEnabled(rangeIndex), juce::dontSendNotification);
 }
 
 void CrossoverRangePage::updateToggleLabels()
