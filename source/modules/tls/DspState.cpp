@@ -130,6 +130,7 @@ void DspCore::updateDerivedParameters()
         derived.listenMode = ListenMode::rightRight;
     else if (parameters.listenSs)
         derived.listenMode = ListenMode::sideStereo;
+    derived.listenMsGain = parameters.listenMsPlus3 ? dbToAmp(3.0) : 1.0;
 
     const auto stereoDelayMs = juce::jlimit(-100.0, 100.0, roundToParameterStep(parameters.stereoDelayMs));
     const auto leftDelayMs = juce::jlimit(-100.0, 100.0, roundToParameterStep(parameters.leftDelayMs));

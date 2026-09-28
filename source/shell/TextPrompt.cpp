@@ -39,8 +39,6 @@ public:
         textEditor.setColour(juce::TextEditor::backgroundColourId, uiGrey800);
         textEditor.setColour(juce::TextEditor::outlineColourId, uiGrey500);
         textEditor.setColour(juce::TextEditor::focusedOutlineColourId, uiAccent);
-        textEditor.setColour(juce::TextEditor::highlightColourId, uiBlack);
-        textEditor.setColour(juce::TextEditor::highlightedTextColourId, uiWhite);
         textEditor.setText(std::move(currentText), false);
         textEditor.setReturnKeyStartsNewLine(false);
         textEditor.onReturnKey = [this] { commit(); };

@@ -204,10 +204,10 @@ void BoxTextButton::mouseUp(const juce::MouseEvent& event)
             ++resolvedIndex;
         }
 
-        if (action == nullptr && longPressHostAction != nullptr)
+        if (action == nullptr && longPressSecondaryAction != nullptr)
         {
             if (selectedIndex == resolvedIndex)
-                action = longPressHostAction;
+                action = longPressSecondaryAction;
             ++resolvedIndex;
         }
 

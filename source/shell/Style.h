@@ -4,12 +4,12 @@
 
 #include <JuceHeader.h>
 
-inline constexpr int initialEditorWidth = 420;
-inline constexpr int minimumEditorWidth = initialEditorWidth;
-inline constexpr int maximumEditorWidth = initialEditorWidth;
+inline constexpr int initialEditorWidth = 340;
 inline constexpr int maximumStoredEditorWidth = 4096;
+inline constexpr int minimumEditorWidth = 340;
+inline constexpr int maximumEditorWidth = maximumStoredEditorWidth;
 inline constexpr int initialEditorHeight = 650;
-inline constexpr int minimumEditorHeight = minimumEditorWidth;
+inline constexpr int minimumEditorHeight = 420;
 inline constexpr int maximumEditorHeight = 4096;
 inline constexpr int parameterGap = uiGap;
 inline constexpr int verticalGap = uiGap;

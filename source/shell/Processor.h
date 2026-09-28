@@ -231,6 +231,7 @@ private:
     std::array<std::atomic<float>*, ava::crossover::BufferRouter::numSplits> crossoverSplitFrequencyParams {};
     std::array<std::atomic<float>*, ava::crossover::BufferRouter::numRanges> crossoverSoloParams {};
     std::array<std::atomic<float>*, 7> globalListenParams {};
+    std::atomic<float>* globalListenMsPlus3Param = nullptr;
     std::array<juce::String, hostAutomationSlotCount> hostSlotParameterIds {};
     std::array<std::atomic<juce::RangedAudioParameter*>, hostAutomationSlotCount> hostSlotTargets {};
     std::atomic<float> globalClipIndicator { 0.0f };

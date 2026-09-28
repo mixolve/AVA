@@ -88,17 +88,6 @@ void ValueBoxComponent::setOutlineColour(const juce::Colour colour)
     repaint();
 }
 
-void ValueBoxComponent::setHighlightColour(const juce::Colour colour)
-{
-    if (highlightColour == colour)
-        return;
-
-    highlightColour = colour;
-
-    if (editor != nullptr)
-        editor->setColour(juce::TextEditor::highlightColourId, highlightColour);
-}
-
 void ValueBoxComponent::setPromptActive(const bool shouldBeActive)
 {
     if (promptActive == shouldBeActive)
@@ -303,8 +292,6 @@ void ValueBoxComponent::showEditor()
     textEditor->setColour(juce::TextEditor::backgroundColourId, uiGrey800);
     textEditor->setColour(juce::TextEditor::outlineColourId, outlineColour);
     textEditor->setColour(juce::TextEditor::focusedOutlineColourId, outlineColour);
-    textEditor->setColour(juce::TextEditor::highlightColourId, highlightColour);
-    textEditor->setColour(juce::TextEditor::highlightedTextColourId, uiWhite);
     textEditor->setText(editorText, false);
     textEditor->onReturnKey = [this] { hideEditor(false); };
     textEditor->onEscapeKey = [this] { hideEditor(true); };

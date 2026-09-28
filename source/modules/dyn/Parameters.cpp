@@ -28,7 +28,7 @@ inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
     { ParameterSlot::peakHoldMs, "MAIN / PEAK-HOLD" },
     { ParameterSlot::lookahead, "MAIN / LOOKAHEAD" },
     { ParameterSlot::tensionFloor, "MAIN / TENSION-FLOOR" },
-    { ParameterSlot::tensionHysteresis, "MAIN / TENSION-HYSTERESIS" },
+    { ParameterSlot::tensionHysteresis, "MAIN / TENSTION-HYST" },
     { ParameterSlot::releaseForm, "MAIN / RELEASE-FORM" },
     { ParameterSlot::releaseCurve, "MAIN / RELEASE-CURVE" },
     { ParameterSlot::linkUpDown, "LINKING / UP-DN (DUAL-MONO)" },

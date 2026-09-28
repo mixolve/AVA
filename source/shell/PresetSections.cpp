@@ -33,6 +33,7 @@ AvaAudioProcessorEditor::PresetsSection::PresetsSection()
     filterActionsToggleButton = makeSectionButton({}, uiAccent);
     filterActionsToggleButton->setTablerIcon("arrows-down-up");
     filterActionsToggleButton->setClickingTogglesState(true);
+    filterActionsToggleButton->setToggleState(filterActionsExpanded, juce::dontSendNotification);
 
     actionsToggleButton = makeSectionButton({}, uiAccent);
     actionsToggleButton->setTablerIcon("arrows-down-up");

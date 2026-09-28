@@ -104,7 +104,6 @@ public:
 
     void setInteractionEnabled(bool shouldEnable);
     void setOutlineColour(juce::Colour colour);
-    void setHighlightColour(juce::Colour colour);
     void setPromptActive(bool shouldBeActive);
     void setCustomPromptAction(std::function<void()> action);
 
@@ -139,7 +138,6 @@ private:
     bool pressHighlight = false;
     bool promptActive = false;
     juce::Colour outlineColour = uiGrey500;
-    juce::Colour highlightColour = uiBlack;
     std::function<void()> customPromptAction;
     std::unique_ptr<juce::TextEditor> editor;
     bool marqueeRepaintPending = false;
@@ -170,8 +168,12 @@ public:
     void clearTextColourOverride();
     void setLongPressAction(std::function<void()> action, int delayMs = 500, juce::String promptText = "RESET?");
     void setLongPressPromptActions(std::function<void()> resetAction,
-                                   std::function<void()> hostAction = {},
+                                   std::function<void()> secondaryAction = {},
                                    juce::String primaryPromptText = "R?");
+    void setLongPressPrimaryPromptIcon(const char* iconName);
+    void setLongPressPrimaryPromptEnabled(bool shouldEnable);
+    void setLongPressSecondaryPromptIcon(const char* iconName);
+    void setLongPressSecondaryPromptActive(bool shouldBeActive);
     void setLongPressTrailingPromptAction(std::function<void()> action, juce::String promptText);
     void setLongPressTrailingPromptIconAction(std::function<void()> action, const char* iconName);
     void setLongPressAdditionalPromptIconAction(std::function<void()> action, const char* iconName);
@@ -230,12 +232,15 @@ private:
     bool dragHoldEligible = false;
     bool dragHoldArmed = false;
     std::function<void()> longPressResetAction;
-    std::function<void()> longPressHostAction;
+    std::function<void()> longPressSecondaryAction;
     juce::String longPressPrimaryPromptText = "R?";
+    juce::Image longPressPrimaryPromptIconImage;
+    bool longPressPrimaryPromptEnabled = true;
+    juce::Image longPressSecondaryPromptIconImage;
+    bool longPressSecondaryPromptActive = false;
     std::function<void()> longPressTrailingAction;
     juce::String longPressTrailingPromptText;
     juce::Image longPressTrailingPromptIconImage;
-    bool longPressTrailingPromptIsHostIcon = false;
     std::function<void()> longPressAdditionalPromptAction;
     juce::Image longPressAdditionalPromptIconImage;
     std::unique_ptr<PromptDismissListener> promptDismissListener;

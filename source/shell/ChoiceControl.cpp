@@ -41,6 +41,7 @@ ChoiceControl::ChoiceControl(juce::AudioProcessorValueTreeState& state,
         parameter_control_support::assignTitleToHostSlot(*this, titleButton.get(), parameterId, parameter);
         clearKeyboardFocus(*this);
     });
+    titleButton->setLongPressPrimaryPromptIcon("refresh");
 
     comboBox.setEditableText(false);
     comboBox.setJustificationType(juce::Justification::centred);
@@ -328,6 +329,7 @@ LocalChoiceControl::LocalChoiceControl(const juce::String& titleText,
     {
         setSelectedChoiceIndex(defaultChoiceIndex, true);
     });
+    titleButton->setLongPressPrimaryPromptIcon("refresh");
 
     comboBox.setEditableText(false);
     comboBox.setJustificationType(juce::Justification::centred);

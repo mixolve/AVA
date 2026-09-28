@@ -69,6 +69,7 @@ tls::dsp::DspCore::Parameters TlsModuleProcessor::readCrossoverRangeParameters(c
     parameters.listenSc = loadBool(ParameterSlot::listenSc);
     parameters.listenLl = loadBool(ParameterSlot::listenLl);
     parameters.listenRr = loadBool(ParameterSlot::listenRr);
+    parameters.listenMsPlus3 = loadBool(ParameterSlot::listenMsPlus3);
     parameters.listenSs = loadBool(ParameterSlot::listenSs);
     parameters.stereoDelayMs = loadFloat(ParameterSlot::stereoDelay);
     parameters.leftDelayMs = loadFloat(ParameterSlot::leftDelay);

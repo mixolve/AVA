@@ -58,6 +58,7 @@ public:
         bool listenSc = false;
         bool listenLl = false;
         bool listenRr = false;
+        bool listenMsPlus3 = false;
         bool listenSs = false;
         float stereoDelayMs = 0.0f;
         float leftDelayMs = 0.0f;
@@ -121,6 +122,7 @@ private:
         double orthogonalM21 = 0.0;
         double orthogonalM22 = 1.0;
         ListenMode listenMode = ListenMode::neutral;
+        double listenMsGain = 1.0;
         bool signalTransformEnabled = false;
         int leftDelaySamples = 0;
         int rightDelaySamples = 0;

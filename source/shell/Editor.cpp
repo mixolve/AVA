@@ -196,7 +196,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     hostParametersViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     hostParametersViewport.setWantsKeyboardFocus(false);
     addAndMakeVisible(hostParametersViewport);
-    routingPanel = std::make_unique<RoutingPanel>(valueTreeState);
+    routingPanel = std::make_unique<RoutingPanel>(audioProcessor);
     routingPanel->setOnOpenRoot([this]
     {
         toggleRoutingSection();
@@ -297,13 +297,18 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     verticalResizeHandle = std::make_unique<EdgeResizeHandle>(
         *this, EdgeResizeHandle::Axis::vertical, minimumEditorHeight, maximumEditorHeight, uiGrey500);
     addAndMakeVisible(*verticalResizeHandle);
+    horizontalResizeHandle = std::make_unique<EdgeResizeHandle>(
+        *this, EdgeResizeHandle::Axis::horizontal, minimumEditorWidth, maximumEditorWidth, uiGrey500);
+    addAndMakeVisible(*horizontalResizeHandle);
 
     clipButton = std::make_unique<BoxTextButton>(uiClip);
-    clipButton->setButtonText("C");
+    clipButton->setButtonText({});
+    clipButton->setTablerIcon("wave-square");
     clipButton->setTextJustification(juce::Justification::centred);
     clipButton->setClickingTogglesState(false);
     clipButton->setFillVisible(false);
     clipButton->setInterceptsMouseClicks(false, false);
+    clipButton->setTextColourOverride(uiBlack);
     addAndMakeVisible(*clipButton);
 
     hostButton = std::make_unique<BoxTextButton>(uiAccent);
@@ -358,7 +363,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     oscExpanded = false;
 
     footerTab = std::make_unique<BoxTextButton>(uiAccent);
-    footerTab->setIconOnlyText("I");
+    footerTab->setTablerIcon("atom");
     footerTab->onClick = [this]
     {
         showInfoPrompt(shell_setup_support::getMixolveInfoMarkdown());

@@ -44,6 +44,20 @@ juce::String getListInternalNameForHostTarget(AvaAudioProcessor& processor,
 
 void AvaAudioProcessorEditor::setupShellControls()
 {
+    avaPlaceholder = std::make_unique<BoxTextButton>(uiGrey500);
+    avaPlaceholder->setButtonText("AVA");
+    avaPlaceholder->setTextJustification(juce::Justification::centred);
+    avaPlaceholder->setPressFillEnabled(false);
+    avaPlaceholder->setInterceptsMouseClicks(false, false);
+    addAndMakeVisible(*avaPlaceholder);
+
+    mixolvePlaceholder = std::make_unique<BoxTextButton>(uiGrey500);
+    mixolvePlaceholder->setButtonText("MIXOLVE");
+    mixolvePlaceholder->setTextJustification(juce::Justification::centred);
+    mixolvePlaceholder->setPressFillEnabled(false);
+    mixolvePlaceholder->setInterceptsMouseClicks(false, false);
+    addAndMakeVisible(*mixolvePlaceholder);
+
     routingButton = std::make_unique<BoxTextButton>(uiAccent);
     routingButton->setButtonText({});
     routingButton->setTablerIcon("load-balancer");
@@ -73,7 +87,8 @@ void AvaAudioProcessorEditor::setupShellControls()
 
     globalBypassButton = std::make_unique<BoxTextButton>(uiAccent);
     globalBypassButton->getProperties().set(juce::Identifier("oscParameterId"), AvaAudioProcessor::paramGlobalBypassId);
-    globalBypassButton->setButtonText("BP");
+    globalBypassButton->setButtonText({});
+    globalBypassButton->setTablerIcon("plug-off");
     globalBypassButton->setTextJustification(juce::Justification::centred);
     globalBypassButton->setClickingTogglesState(true);
     globalBypassAttachment = std::make_unique<ButtonAttachment>(valueTreeState,
@@ -138,10 +153,11 @@ void AvaAudioProcessorEditor::setupShellControls()
     abSwitchButton->setTextJustification(juce::Justification::centred);
     abSwitchButton->setClickingTogglesState(false);
     abSwitchButton->setHorizontalBidirectionalArrowVisible(true);
-    abSwitchButton->setLongPressAction([this]
+    abSwitchButton->setLongPressPromptActions([this]
     {
         copyCurrentABStateToOtherSlot();
-    }, 500, "C?");
+    });
+    abSwitchButton->setLongPressPrimaryPromptIcon("copy");
     abSwitchButton->onClick = [this]
     {
         switchABState();
@@ -345,7 +361,8 @@ void AvaAudioProcessorEditor::refreshHostSlotButtons()
             {
                 clearHostSlot(slotIndex);
                 clearKeyboardFocus(*this);
-            }, {}, "D?");
+            });
+            slotButton->setLongPressPrimaryPromptIcon("trash");
         }
         else
         {

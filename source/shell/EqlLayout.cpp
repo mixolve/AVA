@@ -47,7 +47,7 @@ void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& boun
         auto orderLabelBounds = headerBounds.removeFromLeft(48);
         headerBounds.removeFromLeft(parameterGap);
 
-        auto bypassBounds = headerBounds.removeFromLeft(45);
+        auto bypassBounds = headerBounds.removeFromLeft(iconControlSize);
         headerBounds.removeFromLeft(parameterGap);
 
         if (orderLabel != nullptr)

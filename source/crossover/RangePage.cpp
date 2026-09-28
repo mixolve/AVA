@@ -101,7 +101,8 @@ CrossoverRangePage::CrossoverRangePage(CrossoverModuleComponent& ownerIn,
         {
             if (owner.config.onModuleCloseRequest != nullptr)
                 owner.config.onModuleCloseRequest();
-        }, {}, "CLOSE?");
+        });
+        moduleHeading.setLongPressPrimaryPromptIcon("x");
         addAndMakeVisible(moduleHeading);
     }
 
@@ -359,10 +360,10 @@ void CrossoverRangePage::moveReorderRow(ParameterRow& sourceRow, const int delta
         return;
 
     const auto sourceOrder = juce::roundToInt(
-        readRawParameter(owner.valueTreeState, sourceRow.orderParameterId, 0.0f));
+        readRawParameter(owner.valueTreeState, sourceRow.orderParameterId, 2.0f));
     const auto destinationOrder = sourceOrder + delta;
 
-    if (! juce::isPositiveAndBelow(destinationOrder, 4))
+    if (! juce::isPositiveAndBelow(destinationOrder - 2, 4))
         return;
 
     for (auto& row : rows)
@@ -381,7 +382,6 @@ void CrossoverRangePage::moveReorderRow(ParameterRow& sourceRow, const int delta
             if (owner.swapParameterPlainValues(sourceRow.orderParameterId,
                                                row->orderParameterId))
             {
-                reorderRows(sourceRow.reorderGroup);
                 refreshExternalState();
                 owner.refreshCurrentPageLayout();
             }
@@ -432,12 +432,12 @@ void CrossoverRangePage::applyReorderMove(ParameterRow& destinationRow)
     }
 
     const auto destinationOrder = juce::roundToInt(
-        readRawParameter(owner.valueTreeState, destinationRow.orderParameterId, 0.0f));
+        readRawParameter(owner.valueTreeState, destinationRow.orderParameterId, 2.0f));
 
     for (auto moveCount = 0; moveCount < 4; ++moveCount)
     {
         const auto sourceOrder = juce::roundToInt(
-            readRawParameter(owner.valueTreeState, sourceRow->orderParameterId, 0.0f));
+            readRawParameter(owner.valueTreeState, sourceRow->orderParameterId, 2.0f));
 
         if (sourceOrder == destinationOrder)
         {

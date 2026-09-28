@@ -70,7 +70,8 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
 
     bypassButton->getProperties().set(juce::Identifier("oscParameterId"),
                                       EqlModuleProcessor::getFilterBypassParamId(filterIndexIn));
-    bypassButton->setButtonText("BP");
+    bypassButton->setButtonText({});
+    bypassButton->setTablerIcon("plug-off");
     bypassButton->setTextJustification(juce::Justification::centred);
     bypassButton->setClickingTogglesState(true);
     bypassButton->setCancelClickOnLeave(true);

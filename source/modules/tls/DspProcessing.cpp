@@ -87,11 +87,11 @@ DspCore::StereoSample DspCore::processSample(const double leftInput,
         left = listenRight;
         right = listenRight;
       } else if (derived.listenMode == ListenMode::midCenter) {
-        left = listenMid;
-        right = listenMid;
+        left = listenMid * derived.listenMsGain;
+        right = left;
       } else if (derived.listenMode == ListenMode::sideCenter) {
-        left = listenSide;
-        right = listenSide;
+        left = listenSide * derived.listenMsGain;
+        right = left;
       } else if (derived.listenMode == ListenMode::leftLeft) {
         left = listenLeft;
         right = 0.0;
@@ -99,8 +99,8 @@ DspCore::StereoSample DspCore::processSample(const double leftInput,
         left = 0.0;
         right = listenRight;
       } else if (derived.listenMode == ListenMode::sideStereo) {
-        left = listenSide;
-        right = -listenSide;
+        left = listenSide * derived.listenMsGain;
+        right = -left;
       }
     }
   }

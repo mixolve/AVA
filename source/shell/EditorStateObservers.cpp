@@ -1,5 +1,6 @@
 #include "Editor.h"
 #include "FilterSection.h"
+#include "PresetSections.h"
 #include "SetupSupport.h"
 #include "../modules/tls/Processor.h"
 #include "../modules/dyn/Processor.h"
@@ -150,7 +151,16 @@ void AvaAudioProcessorEditor::parameterChanged(const juce::String& parameterID, 
 
 void AvaAudioProcessorEditor::resyncEditorFromProcessorState()
 {
+    const auto eqlJustLoaded = ! eqlModuleLoaded
+        && audioProcessor.getActiveModule() == AvaAudioProcessor::ActiveModule::eql;
     restoreEditorStateFromValueTree();
+    if (eqlJustLoaded && presetsSection != nullptr)
+    {
+        presetsSection->filterActionsExpanded = true;
+        presetsSection->actionsExpanded = false;
+        presetsSection->filterActionsToggleButton->setToggleState(true, juce::dontSendNotification);
+        presetsSection->actionsToggleButton->setToggleState(false, juce::dontSendNotification);
+    }
     refreshModuleStateListeners();
     ensureModuleTitle();
     updateSectionStates();

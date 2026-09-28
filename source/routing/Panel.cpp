@@ -33,12 +33,13 @@ class RoutingPanel::Content final : public juce::Component
     };
 
 public:
-    Content(juce::AudioProcessorValueTreeState& stateIn,
+    Content(AvaAudioProcessor& processorIn,
             std::function<void(int, const juce::String&)> openActionIn,
             std::function<void(int, const juce::String&, juce::Component&)> renameActionIn,
             std::function<void()> topologyChangedIn,
             std::function<void()> layoutChangedIn)
-        : state(stateIn), openAction(std::move(openActionIn)),
+        : processor(processorIn), state(processorIn.getValueTreeState()),
+          openAction(std::move(openActionIn)),
           renameAction(std::move(renameActionIn)),
           topologyChanged(std::move(topologyChangedIn)),
           layoutChanged(std::move(layoutChangedIn))
@@ -214,7 +215,10 @@ public:
     {
         const auto newState = ava::routing::readState(state.state);
         if (newState == displayedState && ! controls.empty())
+        {
+            updateBypassPrompts();
             return;
+        }
 
         displayedState = newState;
         if (moveSourceId != 0 && findNode(moveSourceId) == nullptr)
@@ -241,7 +245,10 @@ public:
                         clearMove();
                     notifyTopologyChanged();
                 }
-            }, {}, "D?");
+            }, [this, id] { toggleBypass(id); });
+            instance.name->setLongPressPrimaryPromptIcon("trash");
+            instance.name->setLongPressPrimaryPromptEnabled(displayedState.nodes.size() > 1);
+            instance.name->setLongPressSecondaryPromptIcon("plug-off");
             instance.name->onMoveArmed = [this, id]
             {
                 moveSourceId = id;
@@ -289,10 +296,46 @@ public:
             groupExitButtons.emplace(node.id, std::move(button));
         }
         updateMoveTargets();
+        updateBypassPrompts();
         resized();
     }
 
 private:
+    float getBypassValue(const int id) const
+    {
+        const auto instance = id == displayedState.rootInstanceId
+            ? std::shared_ptr<AvaAudioProcessor> {}
+            : processor.getRoutingInstanceHandle(id);
+        auto* target = id == displayedState.rootInstanceId ? &processor : instance.get();
+        if (target == nullptr)
+            return -1.0f;
+        if (auto* parameter = target->getValueTreeState().getParameter(AvaAudioProcessor::paramGlobalBypassId))
+            return parameter->getValue();
+        return -1.0f;
+    }
+
+    void toggleBypass(const int id)
+    {
+        const auto instance = id == displayedState.rootInstanceId
+            ? std::shared_ptr<AvaAudioProcessor> {}
+            : processor.getRoutingInstanceHandle(id);
+        auto* target = id == displayedState.rootInstanceId ? &processor : instance.get();
+        if (target == nullptr)
+            return;
+        if (auto* parameter = target->getValueTreeState().getParameter(AvaAudioProcessor::paramGlobalBypassId))
+            parameter->setValueNotifyingHost(parameter->getValue() >= 0.5f ? 0.0f : 1.0f);
+        updateBypassPrompts();
+    }
+
+    void updateBypassPrompts()
+    {
+        for (auto& [id, instance] : controls)
+        {
+            const auto value = getBypassValue(id);
+            instance.name->setLongPressSecondaryPromptActive(value >= 0.5f);
+        }
+    }
+
     void configureAddActions(BoxTextButton& button, const int id)
     {
         button.setLongPressTrailingPromptIconAction([this, id]
@@ -424,7 +467,7 @@ private:
 
     int laneWidth() const
     {
-        return 120;
+        return 150;
     }
 
     void layoutBranch(const int id, const int x, const int y, const int width)
@@ -544,6 +587,7 @@ private:
             topologyChanged();
     }
 
+    AvaAudioProcessor& processor;
     juce::AudioProcessorValueTreeState& state;
     std::function<void(int, const juce::String&)> openAction;
     std::function<void(int, const juce::String&, juce::Component&)> renameAction;
@@ -560,9 +604,9 @@ private:
     bool horizontal = false;
 };
 
-RoutingPanel::RoutingPanel(juce::AudioProcessorValueTreeState& state)
-    : parameters(state),
-      content(std::make_unique<Content>(state,
+RoutingPanel::RoutingPanel(AvaAudioProcessor& processor)
+    : parameters(processor.getValueTreeState()),
+      content(std::make_unique<Content>(processor,
           [this] (const int id, const juce::String& label)
           {
               openInstance(id, label);

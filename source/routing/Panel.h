@@ -5,12 +5,13 @@
 #include <functional>
 
 class BoxTextButton;
+class AvaAudioProcessor;
 
 class RoutingPanel final : public juce::Component,
                            private juce::Timer
 {
 public:
-    explicit RoutingPanel(juce::AudioProcessorValueTreeState& state);
+    explicit RoutingPanel(AvaAudioProcessor& processor);
     ~RoutingPanel() override;
 
     void setOnOpenRoot(std::function<void()> action);

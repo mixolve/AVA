@@ -259,18 +259,22 @@ void AvaAudioProcessor::processOwnBlock(juce::AudioBuffer<float>& buffer)
                                     listenSc = readGlobalListen(3),
                                     listenLl = readGlobalListen(4),
                                     listenRr = readGlobalListen(5),
-                                    listenSs = readGlobalListen(6)]
+                                    listenSs = readGlobalListen(6),
+                                    msPlus3 = globalListenMsPlus3Param != nullptr
+                                        && globalListenMsPlus3Param->load(std::memory_order_relaxed) >= 0.5f]
     {
         if (! (listenLc || listenRc || listenMc || listenSc || listenLl || listenRr || listenSs)
             || buffer.getNumChannels() < 2)
             return;
 
+        const auto msGain = msPlus3 ? juce::Decibels::decibelsToGain(3.0f) : 1.0f;
+
         for (int sampleIndex = 0; sampleIndex < buffer.getNumSamples(); ++sampleIndex)
         {
             const auto left = buffer.getSample(0, sampleIndex);
             const auto right = buffer.getSample(1, sampleIndex);
-            const auto mid = 0.5f * (left + right);
-            const auto side = 0.5f * (left - right);
+            const auto mid = 0.5f * (left + right) * msGain;
+            const auto side = 0.5f * (left - right) * msGain;
 
             if (listenLc)
                 buffer.setSample(1, sampleIndex, left);

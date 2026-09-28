@@ -23,7 +23,7 @@ struct AvaAudioProcessorEditor::PresetsSection
     std::unique_ptr<BoxTextButton> defaultButton;
     std::unique_ptr<BoxTextButton> deleteButton;
     bool ignorePresetCallbacks = false;
-    bool filterActionsExpanded = false;
+    bool filterActionsExpanded = true;
     bool actionsExpanded = false;
     juce::StringArray presetNames;
     juce::String selectedPresetName;

@@ -70,11 +70,12 @@ void AvaAudioProcessorEditor::setupPresetControls()
     {
         clearKeyboardFocus(*this);
     };
-    presetsSection->deleteButton->setLongPressAction([this]
+    presetsSection->deleteButton->setLongPressPromptActions([this]
     {
         deleteSelectedFilterPreset();
         clearKeyboardFocus(*this);
-    }, 500, "S?");
+    });
+    presetsSection->deleteButton->setLongPressPrimaryPromptIcon("trash");
     addAndMakeVisible(presetsSection->presetCombo);
     addAndMakeVisible(*presetsSection->filterActionsToggleButton);
     addAndMakeVisible(*presetsSection->actionsToggleButton);

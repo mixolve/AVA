@@ -143,12 +143,19 @@ public:
             globalListenButtons[index] = std::move(button);
         }
 
-        globalListenInactive = makeTextButton("MM");
-        globalListenInactive->setEnabled(false);
-        globalListenInactive->setClickingTogglesState(false);
-        globalListenInactive->setPressFillEnabled(false);
-        globalListenInactive->setInterceptsMouseClicks(false, false);
-        addAndMakeVisible(*globalListenInactive);
+        globalListenMsPlus3 = makeTextButton("MS+3");
+        globalListenMsPlus3->setClickingTogglesState(true);
+        const auto msPlus3ParameterId = owner.config.makeCrossoverParameterId("ms+3");
+        globalListenMsPlus3->getProperties().set(juce::Identifier("oscParameterId"), msPlus3ParameterId);
+        globalListenMsPlus3Attachment = std::make_unique<ButtonAttachment>(owner.valueTreeState,
+                                                                            msPlus3ParameterId,
+                                                                            *globalListenMsPlus3);
+        globalListenMsPlus3->setLongPressPromptActions({}, [this, msPlus3ParameterId]
+        {
+            owner.assignButtonToHostSlot(msPlus3ParameterId, "MS+3", nullptr);
+        });
+        globalListenMsPlus3->onClick = [this] { owner.clearFocus(); };
+        addAndMakeVisible(*globalListenMsPlus3);
 
         refreshExternalState();
     }
@@ -282,8 +289,8 @@ public:
 
                 if (buttonIndex >= 0 && static_cast<size_t>(buttonIndex) < globalListenButtons.size())
                     globalListenButtons[static_cast<size_t>(buttonIndex)]->setBounds(cellBounds);
-                else if (globalListenInactive != nullptr)
-                    globalListenInactive->setBounds(cellBounds);
+                else if (globalListenMsPlus3 != nullptr)
+                    globalListenMsPlus3->setBounds(cellBounds);
 
                 if (! isLast)
                     rowBounds.removeFromLeft(juce::jmin(parameterGap, rowBounds.getWidth()));
@@ -344,7 +351,8 @@ private:
     std::unique_ptr<BoxTextButton> globalListenHeading;
     std::array<std::unique_ptr<BoxTextButton>, globalListenSuffixes.size()> globalListenButtons;
     std::array<std::unique_ptr<ButtonAttachment>, globalListenSuffixes.size()> globalListenAttachments;
-    std::unique_ptr<BoxTextButton> globalListenInactive;
+    std::unique_ptr<BoxTextButton> globalListenMsPlus3;
+    std::unique_ptr<ButtonAttachment> globalListenMsPlus3Attachment;
 
 };
 

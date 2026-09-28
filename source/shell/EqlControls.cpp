@@ -166,7 +166,8 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
             }
 
             clearKeyboardFocus(*this);
-        }, {}, "D?");
+        });
+        section->header->setLongPressPrimaryPromptIcon("trash");
         section->header->onMoveArmed = [this, filterIndex]
         {
             const auto sourceOrderPosition = getFilterOrderPositionForIndex(filterIndex);
@@ -180,13 +181,15 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
                 if (label != nullptr)
                     label->setDragTargetOutlineVisible(label.get() == filterOrderLabels[static_cast<size_t>(sourceOrderPosition)].get());
         };
-        section->header->setLongPressTrailingPromptIconAction([this, filterIndex]
+        const auto assignBypassToHostSlot = [this, filterIndex]
         {
             const auto parameterId = EqlModuleProcessor::getFilterBypassParamId(filterIndex);
 
             if (auto* parameter = findHostAssignableParameter(parameterId))
                 handleHostSlotAssignRequest(parameterId, "BP", parameter->getValue());
-        }, "map-pin-share");
+        };
+        section->header->setLongPressTrailingPromptIconAction(assignBypassToHostSlot, "map-pin-share");
+        section->bypassButton->setLongPressPromptActions({}, assignBypassToHostSlot);
         section->bypassButton->onClick = [this]
         {
             updateSectionStates();
@@ -230,7 +233,8 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
     {
         clearAllFilters();
         clearKeyboardFocus(*this);
-    }, {}, "DALL?");
+    });
+    addFilterButton->setLongPressPrimaryPromptIcon("trash");
     addAndMakeVisible(*addFilterButton);
 }
 

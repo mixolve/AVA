@@ -103,14 +103,6 @@ CrossoverControlSpec toggleControl(const char* suffix,
     return spec;
 }
 
-CrossoverControlSpec inactiveControl(const char* label)
-{
-    CrossoverControlSpec spec;
-    spec.kind = ControlKind::inactive;
-    spec.label = label;
-    return spec;
-}
-
 CrossoverControlSpec readoutControl(const char* suffix,
                                const char* label,
                                const char* modeSuffix,
@@ -193,7 +185,7 @@ CrossoverModuleComponent::Config makeTlsCrossoverConfig(TlsModuleProcessor& proc
         toggleControl("sc", "SC", "", "", "listen"),
         toggleControl("ll", "LL", "", "", "listen", 1, 4),
         toggleControl("rr", "RR", "", "", "listen"),
-        inactiveControl("MM"),
+        toggleControl("ms+3", "MS+3"),
         toggleControl("ss", "SS", "", "", "listen"),
 
         headingControl("GAIN", 2),
@@ -261,7 +253,7 @@ CrossoverModuleComponent::Config makeDynCrossoverConfig(DynModuleProcessor& proc
         parameterControl("peak-hold", "PEAK-HOLD", 2, 0),
         parameterControl("lookahead", "LOOKAHEAD", 2, 0),
         parameterControl("tension-floor", "TENSION-FLOOR", 2, 0),
-        parameterControl("tension-hysteresis", "TENSION-HYSTERESIS", 2, 0),
+        parameterControl("tenstion-hyst", "TENSTION-HYST", 2, 0),
         choiceControl("release-form", "RELEASE-FORM", 0),
         parameterControl("release-curve", "RELEASE-CURVE", 2, 0, 1, "release-form"),
         headingControl("LINKING", 2),

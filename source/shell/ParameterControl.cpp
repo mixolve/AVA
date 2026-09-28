@@ -64,6 +64,7 @@ ParameterControl::ParameterControl(juce::AudioProcessorValueTreeState& state,
         parameter_control_support::assignTitleToHostSlot(*this, titleButton.get(), parameterId, parameter);
         clearKeyboardFocus(*this);
     });
+    titleButton->setLongPressPrimaryPromptIcon("refresh");
 
     slider.setSliderStyle(juce::Slider::LinearHorizontal);
     slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -117,7 +118,6 @@ ParameterControl::ParameterControl(juce::AudioProcessorValueTreeState& state,
         return parseText(text);
     };
     valueBox->setOutlineColour(uiGrey500);
-    valueBox->setHighlightColour(uiBlack);
 
     addAndMakeVisible(*titleButton);
     addChildComponent(slider);

@@ -175,12 +175,43 @@ void BoxTextButton::setLongPressAction(std::function<void()> action, const int d
 }
 
 void BoxTextButton::setLongPressPromptActions(std::function<void()> resetAction,
-                                               std::function<void()> hostAction,
+                                               std::function<void()> secondaryAction,
                                                juce::String primaryPromptText)
 {
     longPressResetAction = std::move(resetAction);
-    longPressHostAction = std::move(hostAction);
+    longPressSecondaryAction = std::move(secondaryAction);
     longPressPrimaryPromptText = std::move(primaryPromptText);
+    longPressPrimaryPromptIconImage = {};
+    longPressPrimaryPromptEnabled = true;
+    longPressSecondaryPromptIconImage = longPressSecondaryAction != nullptr
+        ? loadTablerIcon("map-pin-share", iconGlyphSize) : juce::Image {};
+    longPressSecondaryPromptActive = false;
+}
+
+void BoxTextButton::setLongPressPrimaryPromptIcon(const char* iconName)
+{
+    longPressPrimaryPromptIconImage = loadTablerIcon(iconName, iconGlyphSize);
+    repaint();
+}
+
+void BoxTextButton::setLongPressPrimaryPromptEnabled(const bool shouldEnable)
+{
+    longPressPrimaryPromptEnabled = shouldEnable;
+    repaint();
+}
+
+void BoxTextButton::setLongPressSecondaryPromptIcon(const char* iconName)
+{
+    longPressSecondaryPromptIconImage = loadTablerIcon(iconName, iconGlyphSize);
+    repaint();
+}
+
+void BoxTextButton::setLongPressSecondaryPromptActive(const bool shouldBeActive)
+{
+    if (longPressSecondaryPromptActive == shouldBeActive)
+        return;
+    longPressSecondaryPromptActive = shouldBeActive;
+    repaint();
 }
 
 void BoxTextButton::setLongPressTrailingPromptAction(std::function<void()> action, juce::String promptText)
@@ -188,7 +219,6 @@ void BoxTextButton::setLongPressTrailingPromptAction(std::function<void()> actio
     longPressTrailingAction = std::move(action);
     longPressTrailingPromptText = std::move(promptText);
     longPressTrailingPromptIconImage = {};
-    longPressTrailingPromptIsHostIcon = false;
 }
 
 void BoxTextButton::setLongPressTrailingPromptIconAction(std::function<void()> action,
@@ -197,7 +227,6 @@ void BoxTextButton::setLongPressTrailingPromptIconAction(std::function<void()> a
     longPressTrailingAction = std::move(action);
     longPressTrailingPromptText.clear();
     longPressTrailingPromptIconImage = loadTablerIcon(iconName, iconGlyphSize);
-    longPressTrailingPromptIsHostIcon = juce::String(iconName) == "map-pin-share";
 }
 
 void BoxTextButton::setLongPressAdditionalPromptIconAction(std::function<void()> action,
@@ -264,7 +293,7 @@ void BoxTextButton::showActionPrompt()
 int BoxTextButton::getActionPromptCount() const noexcept
 {
     return (longPressResetAction != nullptr ? 1 : 0)
-        + (longPressHostAction != nullptr ? 1 : 0)
+        + (longPressSecondaryAction != nullptr ? 1 : 0)
         + ((onMoveArmed != nullptr || onDragDrop != nullptr) ? 1 : 0)
         + (longPressTrailingAction != nullptr ? 1 : 0)
         + (longPressAdditionalPromptAction != nullptr ? 1 : 0);
@@ -276,44 +305,45 @@ juce::Rectangle<int> BoxTextButton::getActionPromptBounds(const int requestedInd
     if (! juce::isPositiveAndBelow(requestedIndex, actionCount))
         return {};
 
-    std::array<bool, 5> hostZones {};
+    std::array<bool, 5> iconZones {};
     auto index = 0;
-    if (longPressResetAction != nullptr) ++index;
-    if (longPressHostAction != nullptr) hostZones[static_cast<size_t>(index++)] = true;
-    if (onMoveArmed != nullptr || onDragDrop != nullptr) ++index;
+    if (longPressResetAction != nullptr)
+        iconZones[static_cast<size_t>(index++)] = longPressPrimaryPromptIconImage.isValid();
+    if (longPressSecondaryAction != nullptr)
+        iconZones[static_cast<size_t>(index++)] = longPressSecondaryPromptIconImage.isValid();
+    if (onMoveArmed != nullptr || onDragDrop != nullptr) iconZones[static_cast<size_t>(index++)] = true;
     if (longPressTrailingAction != nullptr)
-        hostZones[static_cast<size_t>(index++)] = longPressTrailingPromptIsHostIcon;
+        iconZones[static_cast<size_t>(index++)] = longPressTrailingPromptIconImage.isValid();
+    if (longPressAdditionalPromptAction != nullptr) iconZones[static_cast<size_t>(index++)] = true;
 
-    auto bounds = getLocalBounds().reduced(1);
-    const auto contentWidth = juce::jmax(0, bounds.getWidth() - (actionCount - 1));
-    const auto hostCount = static_cast<int>(std::count(hostZones.begin(), hostZones.begin() + actionCount, true));
-    const auto flexibleCount = actionCount - hostCount;
-    const auto hostWidth = hostCount > 0
-        ? juce::jmin(iconControlSize, juce::jmax(0, contentWidth - flexibleCount) / hostCount)
+    auto bounds = getLocalBounds();
+    const auto iconCount = static_cast<int>(std::count(iconZones.begin(), iconZones.begin() + actionCount, true));
+    const auto flexibleCount = actionCount - iconCount;
+    const auto allIcons = flexibleCount == 0;
+    const auto contentWidth = allIcons
+        ? juce::jmin(bounds.getWidth(), iconControlSize * iconCount)
+        : bounds.getWidth();
+    if (allIcons)
+        bounds = bounds.withSizeKeepingCentre(contentWidth, bounds.getHeight());
+    const auto iconWidth = iconCount > 0
+        ? juce::jmin(iconControlSize, juce::jmax(0, contentWidth - flexibleCount) / iconCount)
         : 0;
+    auto iconRemainder = allIcons ? contentWidth - iconWidth * iconCount : 0;
     const auto flexibleWidth = flexibleCount > 0
-        ? (contentWidth - hostWidth * hostCount) / flexibleCount
+        ? (contentWidth - iconWidth * iconCount) / flexibleCount
         : 0;
     auto flexibleRemainder = flexibleCount > 0
-        ? (contentWidth - hostWidth * hostCount) % flexibleCount
+        ? (contentWidth - iconWidth * iconCount) % flexibleCount
         : 0;
-
-    if (flexibleCount == 0)
-    {
-        const auto groupWidth = hostWidth * hostCount + actionCount - 1;
-        bounds = bounds.withSizeKeepingCentre(groupWidth, bounds.getHeight());
-    }
 
     for (int actionIndex = 0; actionIndex < actionCount; ++actionIndex)
     {
-        const auto width = hostZones[static_cast<size_t>(actionIndex)]
-            ? hostWidth
+        const auto width = iconZones[static_cast<size_t>(actionIndex)]
+            ? iconWidth + (iconRemainder-- > 0 ? 1 : 0)
             : flexibleWidth + (flexibleRemainder-- > 0 ? 1 : 0);
         auto actionBounds = bounds.removeFromLeft(width);
         if (actionIndex == requestedIndex)
             return actionBounds;
-        if (actionIndex + 1 < actionCount)
-            bounds.removeFromLeft(1);
     }
 
     return {};
@@ -324,7 +354,8 @@ int BoxTextButton::getActionPromptHitIndex(const juce::Point<int> position) cons
     const auto actionCount = getActionPromptCount();
     for (auto index = 0; index < actionCount; ++index)
         if (getActionPromptBounds(index).contains(position))
-            return index;
+            return index == 0 && longPressResetAction != nullptr && ! longPressPrimaryPromptEnabled
+                ? -1 : index;
 
     return -1;
 }
@@ -358,8 +389,7 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
     const auto whiteOutlineActive = confirmationFlashActive
         || dragTargetOutlineVisible
         || (accentActive && accentColour == uiWhite);
-    const auto fill = actionPromptActive
-        ? uiGreyDark
+    const auto fill = actionPromptActive ? uiGreyDark
         : (interactionHighlight ? interactionFillColour : fillColour);
     const auto outline = (confirmationFlashActive || dragTargetOutlineVisible)
         ? uiWhite
@@ -371,8 +401,10 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
         graphics.fillRect(getLocalBounds());
     }
 
-    if (borderVisible)
+    const auto drawOuterBorder = [&graphics, this, outline, whiteOutlineActive]
     {
+        if (! borderVisible)
+            return;
         graphics.setColour(outline);
         if (whiteOutlineActive)
         {
@@ -389,7 +421,7 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
         {
             graphics.drawRect(getLocalBounds(), 1);
         }
-    }
+    };
 
     const auto textColour = isEnabled()
         ? (interactionHighlight ? uiBlack : (hasTextColourOverride ? textColourOverride : uiWhite))
@@ -416,18 +448,18 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
         if (longPressResetAction != nullptr)
         {
             promptLabels.add(longPressPrimaryPromptText);
-            promptIcons.add(juce::Image());
+            promptIcons.add(longPressPrimaryPromptIconImage);
         }
-        if (longPressHostAction != nullptr)
+        if (longPressSecondaryAction != nullptr)
         {
-            static const auto hostPromptIcon = loadTablerIcon("map-pin-share", iconGlyphSize);
             promptLabels.add({});
-            promptIcons.add(hostPromptIcon);
+            promptIcons.add(longPressSecondaryPromptIconImage);
         }
         if (onMoveArmed != nullptr || onDragDrop != nullptr)
         {
-            promptLabels.add("M?");
-            promptIcons.add(juce::Image());
+            static const auto movePromptIcon = loadTablerIcon("transfer-vertical", iconGlyphSize);
+            promptLabels.add({});
+            promptIcons.add(movePromptIcon);
         }
         if (longPressTrailingAction != nullptr)
         {
@@ -440,25 +472,30 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
             promptIcons.add(longPressAdditionalPromptIconImage);
         }
 
+        const auto singleIconPrompt = promptLabels.size() == 1 && usesIconOnlyContent();
         for (int index = 0; index < promptLabels.size(); ++index)
         {
-            const auto isLastAction = index + 1 == promptLabels.size();
             const auto actionBounds = getActionPromptBounds(index);
-            const auto promptHighlighted = actionPromptPressedIndex == index
-                || (actionPromptPressedIndex < 0 && isMouseHovering(*this) && actionPromptHoverIndex == index);
+            const auto promptEnabled = index != 0 || longPressResetAction == nullptr || longPressPrimaryPromptEnabled;
+            const auto promptHighlighted = promptEnabled && (actionPromptPressedIndex == index
+                || (actionPromptPressedIndex < 0 && isMouseHovering(*this) && actionPromptHoverIndex == index));
+            const auto secondaryIndex = longPressResetAction != nullptr ? 1 : 0;
+            const auto promptActive = promptEnabled && longPressSecondaryAction != nullptr
+                && index == secondaryIndex && longPressSecondaryPromptActive;
 
-            if (promptHighlighted)
+            if (! singleIconPrompt || promptHighlighted || promptActive)
             {
-                graphics.setColour(uiGreyLight);
+                graphics.setColour((promptHighlighted || promptActive) ? uiGreyLight : uiGreyDark);
                 graphics.fillRect(actionBounds);
             }
 
-            graphics.setColour(promptHighlighted ? uiBlack : uiWhite);
+            graphics.setColour((promptHighlighted || promptActive) ? uiBlack : uiWhite);
             if (promptIcons[index].isValid())
             {
                 juce::DrawableImage drawable;
                 drawable.setImage(promptIcons[index]);
-                drawable.setOverlayColour(promptHighlighted ? uiBlack : uiWhite);
+                drawable.setOverlayColour(! promptEnabled ? uiGreyLight
+                                          : ((promptHighlighted || promptActive) ? uiBlack : uiWhite));
                 drawable.drawWithin(graphics,
                                     actionBounds.withSizeKeepingCentre(
                                         static_cast<int>(iconGlyphSize),
@@ -472,17 +509,19 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
                                      juce::Justification::centred))
                 scheduleMarqueeRepaint();
 
-            if (! isLastAction)
+            if (! singleIconPrompt)
             {
                 graphics.setColour(uiGrey500);
-                graphics.fillRect(actionBounds.getRight(), 1, 1, juce::jmax(0, getHeight() - 2));
+                graphics.drawRect(actionBounds, 1);
             }
         }
 
         drawBottomDivider();
+        drawOuterBorder();
         return;
     }
 
+    drawOuterBorder();
     const auto iconBounds = getLocalBounds()
         .withSizeKeepingCentre(static_cast<int>(iconGlyphSize), static_cast<int>(iconGlyphSize))
         .toFloat();

@@ -115,6 +115,7 @@ void CrossoverRangePage::ParameterRow::resized()
         return;
 
     auto bounds = getLocalBounds();
+    const auto valueWidth = getScaledParameterNameWidth(bounds.getWidth());
 
     if (orderLabel != nullptr)
     {
@@ -140,7 +141,7 @@ void CrossoverRangePage::ParameterRow::resized()
                        bounds.getWidth()
                            - parameterGap
                            - (toggleWidth + parameterGap)
-                           - getScaledParameterNameWidth(bounds.getWidth()))
+                           - valueWidth)
         : parameterTitleWidth > 0
             ? juce::jmin(parameterTitleWidth, maximumTitleWidth)
             : toggleWidth;
@@ -168,10 +169,10 @@ void CrossoverRangePage::ParameterRow::refreshOrderLabel()
     if (orderLabel == nullptr)
         return;
 
-    const auto position = fixedOrder ? 1
+    const auto position = fixedOrder ? 0
                                      : juce::roundToInt(readRawParameter(owner.valueTreeState,
                                                                          orderParameterId,
-                                                                         0.0f)) + 2;
+                                                                         2.0f)) - 1;
     orderLabel->setButtonText(juce::String::formatted("%02d", position));
 }
 

@@ -256,7 +256,7 @@ void AvaAudioProcessorEditor::updateSectionStates()
     if (clipButton != nullptr)
     {
         clipButton->setVisible(globalControlsVisible);
-        clipButton->setButtonText("C");
+        clipButton->setButtonText({});
         clipButton->setToggleState(false, juce::dontSendNotification);
     }
 

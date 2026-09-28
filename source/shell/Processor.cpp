@@ -139,6 +139,7 @@ AvaAudioProcessor::AvaAudioProcessor(const bool routingInstanceIn)
 
     for (size_t listenIndex = 0; listenIndex < globalListenParams.size(); ++listenIndex)
         globalListenParams[listenIndex] = parameters.getRawParameterValue(getCrossoverParameterId(globalListenSuffixes[listenIndex]));
+    globalListenMsPlus3Param = parameters.getRawParameterValue(getCrossoverParameterId("ms+3"));
 
     parameters.addParameterListener(paramCrossoverActiveSplitCountId, this);
 
@@ -355,8 +356,8 @@ std::vector<OscParameterInfo> AvaAudioProcessor::getVisibleOscParameters() const
     appendOscParameter(result, parameters, autoSoloId, autoSoloId);
     appendGlobalControl(oscSoloModeId, "0, 1");
 
-    constexpr std::array<const char*, 7> orderedListenSuffixes {
-        "lc", "rc", "mc", "sc", "ll", "rr", "ss"
+    constexpr std::array<const char*, 8> orderedListenSuffixes {
+        "lc", "rc", "mc", "sc", "ll", "rr", "ms+3", "ss"
     };
     for (const auto* suffix : orderedListenSuffixes)
     {
@@ -507,9 +508,9 @@ std::vector<OscParameterInfo> AvaAudioProcessor::getVisibleOscParameters() const
             case ActiveModule::tls:
                 if (const auto* module = getTlsModuleProcessor())
                 {
-                    constexpr std::array<const char*, 9> leadingParameterOrder {
+                    constexpr std::array<const char*, 10> leadingParameterOrder {
                         "lc", "rc", "mc", "sc",
-                        "ll", "rr", "ss",
+                        "ll", "rr", "ms+3", "ss",
                         "stereo.gain", "stereo.mute.icon"
                     };
                     constexpr std::array<const char*, 19> trailingParameterOrder {
@@ -567,7 +568,7 @@ std::vector<OscParameterInfo> AvaAudioProcessor::getVisibleOscParameters() const
                 {
                     constexpr std::array<const char*, 37> parameterOrder {
                         "morph", "ratio", "knee", "peak-hold", "lookahead",
-                        "tension-floor", "tension-hysteresis", "release-form", "release-curve",
+                        "tension-floor", "tenstion-hyst", "release-form", "release-curve",
                         "up-dn", "l-r", "opposite",
                         "l-up-threshold", "l-up-adaptive", "l-up-tension",
                         "l-up-release", "l-up-output",
@@ -832,6 +833,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout AvaAudioProcessor::createPar
             false,
             juce::AudioParameterBoolAttributes().withAutomatable(false).withMeta(true)));
     }
+
+    parameterLayout.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID { getCrossoverParameterId("ms+3"), 1 },
+        "LISTEN / MS+3",
+        false,
+        juce::AudioParameterBoolAttributes().withAutomatable(false).withMeta(true)));
 
     parameterLayout.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID { getCrossoverParameterId("auto-solo"), 1 },

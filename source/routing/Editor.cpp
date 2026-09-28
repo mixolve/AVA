@@ -36,6 +36,8 @@ void AvaAudioProcessorEditor::openRoutingInstance(const int instanceId)
     activeInstanceEditor = std::make_unique<AvaAudioProcessorEditor>(*activeInstanceProcessor, instanceId);
     if (auto* handle = static_cast<EdgeResizeHandle*>(activeInstanceEditor->verticalResizeHandle.get()))
         handle->setResizeOwner(*this);
+    if (auto* handle = static_cast<EdgeResizeHandle*>(activeInstanceEditor->horizontalResizeHandle.get()))
+        handle->setResizeOwner(*this);
     activeInstanceEditor->setReturnToRoutingAction(
         [safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
         {

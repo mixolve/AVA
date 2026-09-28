@@ -51,7 +51,13 @@ CopyPasteTextEditor::CopyPasteTextEditor()
 {
     setLookAndFeel(&popupLookAndFeel);
     setMouseCursor(juce::MouseCursor::NormalCursor);
+    // TextEditor reserves two pixels on the right for the caret.
+    // Match that on the left so centred text stays centred when editing.
+    setIndents(2, 0);
+    setBorder(juce::BorderSize<int>(1));
     setColour(juce::CaretComponent::caretColourId, uiWhite);
+    setColour(juce::TextEditor::highlightColourId, uiGreyLight);
+    setColour(juce::TextEditor::highlightedTextColourId, uiBlack);
 }
 
 CopyPasteTextEditor::~CopyPasteTextEditor()

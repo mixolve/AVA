@@ -169,6 +169,7 @@ private:
     int getActiveFilterCount() const noexcept;
     void resetAnalyserPanelBounds();
     void layoutGlobalControlsSection(juce::Rectangle<int>& bounds);
+    void layoutBottomControlsSection(juce::Rectangle<int>& bounds);
     void layoutFooter(juce::Rectangle<int>& bounds);
     void layoutCrossoverSection(juce::Rectangle<int>& bounds);
     void finalizeLayout() noexcept;
@@ -236,6 +237,8 @@ private:
     std::unique_ptr<LocalParameterControl> fftAnalyserLowControl;
     std::unique_ptr<BoxTextButton> globalBypassButton;
     std::unique_ptr<ButtonAttachment> globalBypassAttachment;
+    std::unique_ptr<BoxTextButton> avaPlaceholder;
+    std::unique_ptr<BoxTextButton> mixolvePlaceholder;
     std::unique_ptr<BoxTextButton> undoButton;
     std::unique_ptr<BoxTextButton> redoButton;
     std::unique_ptr<BoxTextButton> abSlotAButton;
@@ -256,6 +259,7 @@ private:
     std::unique_ptr<juce::Slider> focusedParameterControl;
     std::unique_ptr<BoxTextButton> footerTab;
     std::unique_ptr<juce::Component> verticalResizeHandle;
+    std::unique_ptr<juce::Component> horizontalResizeHandle;
     std::unique_ptr<juce::Component> fftAnalyserComponent;
     std::unique_ptr<juce::Component> textPromptOverlay;
     std::unique_ptr<juce::DocumentWindow> oscParameterListWindow;

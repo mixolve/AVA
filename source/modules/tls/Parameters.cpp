@@ -55,6 +55,7 @@ inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
     { ParameterSlot::listenSc, "LISTEN", "SC" },
     { ParameterSlot::listenLl, "LISTEN", "LL" },
     { ParameterSlot::listenRr, "LISTEN", "RR" },
+    { ParameterSlot::listenMsPlus3, "LISTEN", "MS+3" },
     { ParameterSlot::listenSs, "LISTEN", "SS" },
     { ParameterSlot::stereoDelay, "DELAY", "STEREO" },
     { ParameterSlot::leftDelay, "DELAY", "LEFT" },

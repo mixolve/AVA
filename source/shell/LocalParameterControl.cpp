@@ -47,6 +47,7 @@ LocalParameterControl::LocalParameterControl(const juce::String& titleText,
         setValue(defaultValue, true);
         clearKeyboardFocus(*this);
     });
+    titleButton->setLongPressPrimaryPromptIcon("refresh");
 
     slider.setSliderStyle(juce::Slider::LinearHorizontal);
     slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -104,7 +105,6 @@ LocalParameterControl::LocalParameterControl(const juce::String& titleText,
         return parseText(text);
     };
     valueBox->setOutlineColour(uiGrey500);
-    valueBox->setHighlightColour(uiBlack);
 
     addAndMakeVisible(*titleButton);
     addChildComponent(slider);

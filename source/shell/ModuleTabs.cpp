@@ -168,6 +168,13 @@ void AvaAudioProcessorEditor::loadModule(const AvaAudioProcessor::ActiveModule m
 
     if (module == AvaAudioProcessor::ActiveModule::eql)
     {
+        if (presetsSection != nullptr)
+        {
+            presetsSection->filterActionsExpanded = true;
+            presetsSection->actionsExpanded = false;
+            presetsSection->filterActionsToggleButton->setToggleState(true, juce::dontSendNotification);
+            presetsSection->actionsToggleButton->setToggleState(false, juce::dontSendNotification);
+        }
         filterDisplayOrder = shell_filter_order_state::makeIdentity(EqlModuleProcessor::maxFilterCount);
         enforceSingleExpandedFilterSection();
         storeFilterDisplayOrderToValueTree();
@@ -201,7 +208,8 @@ void AvaAudioProcessorEditor::ensureModuleTitle()
                 safeEditor->closeActiveModule();
                 clearKeyboardFocus(*safeEditor);
             });
-        }, {}, "CLOSE?");
+        });
+        moduleTitle->setLongPressPrimaryPromptIcon("x");
         addChildComponent(*moduleTitle);
     }
 

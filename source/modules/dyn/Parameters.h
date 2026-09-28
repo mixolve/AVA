@@ -77,7 +77,7 @@ inline constexpr auto parameterSpecs = std::to_array<ParameterSpec>({
     { "peak-hold", "Peak Hold", ParameterType::floating, 0.0f, 100.0f, 0.01f, 0.0f, "ms" },
     { "lookahead", "Lookahead", ParameterType::floating, 0.0f, 24.0f, 0.01f, 0.0f, "ms" },
     { "tension-floor", "Tension Floor", ParameterType::floating, -96.0f, 0.0f, 0.01f, -96.0f, "dB" },
-    { "tension-hysteresis", "Tension Hysteresis", ParameterType::floating, 0.0f, 100.0f, 0.01f, 0.0f, "%" },
+    { "tenstion-hyst", "TENSTION-HYST", ParameterType::floating, 0.0f, 100.0f, 0.01f, 0.0f, "%" },
     { "release-form", "Release Form", ParameterType::choice, 0.0f, 1.0f, 1.0f, 0.0f, "" },
     { "release-curve", "Release Curve", ParameterType::floating, -100.0f, 100.0f, 0.01f, 0.0f, "%" },
     { "offset", "Adaptive Offset", ParameterType::floating, 0.0f, 48.0f, 0.01f, 0.0f, "dB" },
