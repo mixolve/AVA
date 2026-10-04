@@ -50,7 +50,7 @@ public:
 
     void paint(juce::Graphics& graphics) override
     {
-        graphics.fillAll(uiBlack);
+        graphics.fillAll(uiBackground);
         graphics.setColour(uiGreyLight);
         for (const auto& [id, frame] : frames)
             graphics.drawRect(frame, 1);
@@ -713,7 +713,7 @@ void RoutingPanel::openInstance(const int instanceId, const juce::String& label)
 
 void RoutingPanel::paint(juce::Graphics& graphics)
 {
-    graphics.fillAll(uiBlack);
+    graphics.fillAll(uiBackground);
 }
 
 void RoutingPanel::resized()

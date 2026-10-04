@@ -327,7 +327,7 @@ CrossoverRangePage::ReadoutRow::ReadoutRow(CrossoverModuleComponent& ownerIn,
     value.getProperties().set(juce::Identifier("oscParameterId2"), flipParameterIdToRead);
     value.setFont(makeUiFont());
     value.setColour(juce::Label::textColourId, uiWhite);
-    value.setColour(juce::Label::backgroundColourId, uiBlack);
+    value.setColour(juce::Label::backgroundColourId, uiBackground);
     value.setColour(juce::Label::outlineColourId, uiGrey500);
     value.setJustificationType(juce::Justification::centred);
     value.setBorderSize(juce::BorderSize<int> { 1 });

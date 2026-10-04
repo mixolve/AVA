@@ -85,7 +85,7 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::drawPopupMenuBackgroundWithOptions
                                                                                  const int height,
                                                                                  const juce::PopupMenu::Options&)
 {
-    graphics.setColour(uiBlack);
+    graphics.setColour(uiBackground);
     graphics.fillRect(0, 0, width, height);
     graphics.setColour(uiWhite);
     graphics.drawRect(0, 0, width, height, 2);

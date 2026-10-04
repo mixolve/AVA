@@ -6,12 +6,62 @@
 
 struct OscParameterInfo
 {
-    juce::String internalName;
+    juce::String name;
     juce::String acceptedValues;
     juce::String address;
+    juce::String sourceId;
 
     bool operator==(const OscParameterInfo&) const = default;
 };
+
+inline juce::String getOscAddressName(const juce::String& sourceId)
+{
+    auto name = sourceId;
+    if (name == "bp")
+        name = "bypass";
+    else if (name == "b.ab")
+        name = "b";
+    else if (name.endsWith("_bp"))
+        name = name.dropLastCharacters(3) + "_bypass";
+    else if (name.endsWith(".icon"))
+        name = name.dropLastCharacters(5);
+    else if (name.endsWith(".hidden"))
+        name = name.dropLastCharacters(7);
+    return name.replaceCharacter('.', '-');
+}
+
+inline juce::String getOscDisplayName(const juce::String& sourceId)
+{
+    auto name = getOscAddressName(sourceId);
+    if (sourceId.endsWith(".hidden"))
+        return name + " (hidden, icon)";
+    if (sourceId.endsWith(".icon") || sourceId == "bp" || sourceId.endsWith("_bp"))
+        return name + " (icon)";
+    return name;
+}
+
+inline juce::String getOscSourceId(const juce::String& addressName,
+                                   const std::vector<OscParameterInfo>& parameters)
+{
+    for (const auto& parameter : parameters)
+        if (getOscAddressName(parameter.sourceId) == addressName)
+            return parameter.sourceId;
+
+    if (addressName == "bypass")
+        return "bp";
+    if (addressName == "b")
+        return "b.ab";
+    if (addressName.endsWith("_bypass"))
+        return addressName.dropLastCharacters(7) + "_bp";
+    if (addressName == "ab-switch" || addressName == "undo" || addressName == "redo"
+        || addressName.endsWith(".mute")
+        || addressName.endsWith("mute.transient") || addressName.endsWith("mute.sustain"))
+        return addressName + ".icon";
+    if (addressName == "close-module" || addressName.endsWith("_delete-all")
+        || (addressName.contains("_filter-") && addressName.endsWith("_delete")))
+        return addressName + ".hidden";
+    return addressName;
+}
 
 struct OscSettings
 {

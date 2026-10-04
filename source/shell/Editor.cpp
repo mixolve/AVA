@@ -295,10 +295,10 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     addAndMakeVisible(*focusedParameterControl);
 
     verticalResizeHandle = std::make_unique<EdgeResizeHandle>(
-        *this, EdgeResizeHandle::Axis::vertical, minimumEditorHeight, maximumEditorHeight, uiGrey500);
+        *this, EdgeResizeHandle::Axis::vertical, minimumEditorHeight, maximumEditorHeight);
     addAndMakeVisible(*verticalResizeHandle);
     horizontalResizeHandle = std::make_unique<EdgeResizeHandle>(
-        *this, EdgeResizeHandle::Axis::horizontal, minimumEditorWidth, maximumEditorWidth, uiGrey500);
+        *this, EdgeResizeHandle::Axis::horizontal, minimumEditorWidth, maximumEditorWidth);
     addAndMakeVisible(*horizontalResizeHandle);
 
     clipButton = std::make_unique<BoxTextButton>(uiClip);
@@ -308,7 +308,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     clipButton->setClickingTogglesState(false);
     clipButton->setFillVisible(false);
     clipButton->setInterceptsMouseClicks(false, false);
-    clipButton->setTextColourOverride(uiBlack);
+    clipButton->setTextColourOverride(uiBackground);
     addAndMakeVisible(*clipButton);
 
     hostButton = std::make_unique<BoxTextButton>(uiAccent);
@@ -363,7 +363,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     oscExpanded = false;
 
     footerTab = std::make_unique<BoxTextButton>(uiAccent);
-    footerTab->setTablerIcon("atom");
+    footerTab->setTablerIcon("at");
     footerTab->onClick = [this]
     {
         showInfoPrompt(shell_setup_support::getMixolveInfoMarkdown());

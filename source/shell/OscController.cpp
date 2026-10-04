@@ -248,7 +248,9 @@ void OscController::oscMessageReceived(const juce::OSCMessage& message)
         else if (parameterId == "module" && message.size() >= 1)
             applyModuleMessage(message[0]);
         else if (message.size() >= 1)
-            applyParameterMessage(parameterId, message[0]);
+            applyParameterMessage(getOscSourceId(parameterId,
+                                                targetProcessor().getVisibleOscParameters()),
+                                  message[0]);
 
         currentTarget = &processor;
         currentInstanceName.clear();
@@ -301,7 +303,15 @@ juce::RangedAudioParameter* OscController::findParameter(const juce::String& par
 
     const auto findInModule = [] (auto* module, const juce::String& id) -> juce::RangedAudioParameter*
     {
-        return module != nullptr ? module->getValueTreeState().getParameter(id) : nullptr;
+        if (module == nullptr)
+            return nullptr;
+        if (auto* parameter = module->getValueTreeState().getParameter(id))
+            return parameter;
+        for (auto* candidate : module->getValueTreeState().processor.getParameters())
+            if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*>(candidate))
+                if (getOscAddressName(parameter->paramID) == id)
+                    return parameter;
+        return nullptr;
     };
 
     size_t bandIndex = 0;
@@ -397,7 +407,7 @@ void OscController::sendParameterValue(const juce::String& parameterId,
     if (dynamic_cast<const juce::AudioParameterChoice*>(parameter) != nullptr)
         outgoingValue += 1.0f;
 
-    const auto address = makeOscAddressPrefix(currentInstanceName) + parameterId;
+    const auto address = makeOscAddressPrefix(currentInstanceName) + getOscAddressName(parameterId);
     if (sender.send(juce::OSCMessage(address, outgoingValue)))
         lastSentParameterValues[address] = normalizedValue;
 }
@@ -883,7 +893,7 @@ void OscController::sendParameters(juce::AudioProcessorValueTreeState& state,
         const auto currentValue = parameter->getValue();
         const auto oscParameterId = parameterIdPrefix + parameterId;
         const auto previous = lastSentParameterValues.find(
-            makeOscAddressPrefix(currentInstanceName) + oscParameterId);
+            makeOscAddressPrefix(currentInstanceName) + getOscAddressName(oscParameterId));
 
         if (previous != lastSentParameterValues.end()
             && std::abs(previous->second - currentValue) <= parameterChangeTolerance)

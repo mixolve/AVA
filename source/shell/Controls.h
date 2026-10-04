@@ -11,6 +11,13 @@ bool scrollViewportWithWheel(juce::Viewport& viewport,
                              const juce::MouseWheelDetails& wheel,
                              bool fineControl = false);
 
+class FourLinePlaceholder final : public juce::Component
+{
+public:
+    FourLinePlaceholder();
+    void paint(juce::Graphics& g) override;
+};
+
 class NoTickComboBox final : public juce::ComboBox
 {
 public:

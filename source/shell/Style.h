@@ -27,6 +27,7 @@ inline const auto uiWhite = juce::Colour(0xffffffff);
 inline const auto uiGreyLight = juce::Colour(0xffbbbbbb);
 inline const auto uiGreyDark = juce::Colour(0xff444444);
 inline const auto uiBlack = juce::Colour(0xff000000);
+inline const auto uiBackground = juce::Colour(0xff222222);
 inline const auto uiAccent = uiWhite;
 inline const auto uiClip = uiWhite;
 inline const auto uiPopup = uiGreyDark;

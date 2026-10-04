@@ -96,7 +96,7 @@ void AvaAudioProcessorEditor::timerCallback()
         if (showClipIndicator)
             clipButton->setTextColourOverride(uiWhite);
         else
-            clipButton->setTextColourOverride(uiBlack);
+            clipButton->setTextColourOverride(uiBackground);
     }
 
     if (auto* tlsEditor = dynamic_cast<CrossoverModuleComponent*>(tlsModuleEditor.get()))

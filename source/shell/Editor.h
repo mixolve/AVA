@@ -10,6 +10,7 @@
 #include <vector>
 
 class BoxTextButton;
+class FourLinePlaceholder;
 class ChoiceControl;
 class LocalChoiceControl;
 class LocalParameterControl;
@@ -237,8 +238,8 @@ private:
     std::unique_ptr<LocalParameterControl> fftAnalyserLowControl;
     std::unique_ptr<BoxTextButton> globalBypassButton;
     std::unique_ptr<ButtonAttachment> globalBypassAttachment;
-    std::unique_ptr<BoxTextButton> avaPlaceholder;
-    std::unique_ptr<BoxTextButton> mixolvePlaceholder;
+    std::unique_ptr<FourLinePlaceholder> topLines;
+    std::unique_ptr<FourLinePlaceholder> bottomLines;
     std::unique_ptr<BoxTextButton> undoButton;
     std::unique_ptr<BoxTextButton> redoButton;
     std::unique_ptr<BoxTextButton> abSlotAButton;

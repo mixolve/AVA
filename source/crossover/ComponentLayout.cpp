@@ -14,7 +14,7 @@ using namespace crossover_ui;
 
 void CrossoverModuleComponent::paint(juce::Graphics& graphics)
 {
-    graphics.fillAll(juce::Colours::black);
+    graphics.fillAll(uiBackground);
 }
 
 void CrossoverModuleComponent::resized()

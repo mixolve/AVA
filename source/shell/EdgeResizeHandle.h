@@ -12,11 +12,9 @@ public:
     };
 
     EdgeResizeHandle(juce::Component& ownerIn, const Axis axisIn,
-                     const int minimumSizeIn, const int maximumSizeIn,
-                     const juce::Colour borderColourIn)
+                     const int minimumSizeIn, const int maximumSizeIn)
         : owner(&ownerIn),
-          axis(axisIn), minimumSize(minimumSizeIn), maximumSize(maximumSizeIn),
-          borderColour(borderColourIn)
+          axis(axisIn), minimumSize(minimumSizeIn), maximumSize(maximumSizeIn)
     {
         setMouseCursor(axis == Axis::horizontal ? juce::MouseCursor::LeftRightResizeCursor
                                                 : juce::MouseCursor::UpDownResizeCursor);
@@ -25,17 +23,6 @@ public:
     }
 
     void setResizeOwner(juce::Component& newOwner) noexcept { owner = &newOwner; }
-
-    void paint(juce::Graphics& graphics) override
-    {
-        auto bounds = getLocalBounds();
-        graphics.setColour(borderColour);
-
-        if (axis == Axis::horizontal)
-            graphics.fillRect(bounds.removeFromRight(1));
-        else
-            graphics.fillRect(bounds.removeFromBottom(1));
-    }
 
     void mouseDown(const juce::MouseEvent& event) override
     {
@@ -66,7 +53,6 @@ private:
     Axis axis;
     const int minimumSize;
     const int maximumSize;
-    const juce::Colour borderColour;
     juce::Point<int> dragStartSize;
     juce::Point<int> dragStartScreenPosition;
 };

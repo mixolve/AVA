@@ -71,13 +71,14 @@ void appendOscParameter(std::vector<OscParameterInfo>& result,
     if (parameter == nullptr
         || std::any_of(result.begin(), result.end(), [&oscParameterId] (const auto& existing)
         {
-            return existing.internalName == oscParameterId;
+            return existing.sourceId == oscParameterId;
         }))
         return;
 
-    result.push_back({ oscParameterId,
+    result.push_back({ getOscDisplayName(oscParameterId),
                        getAcceptedOscValues(*parameter),
-                       "/ava/" + oscParameterId });
+                       "/ava/" + getOscAddressName(oscParameterId),
+                       oscParameterId });
 }
 
 void appendBandModuleParameter(std::vector<OscParameterInfo>& result,
@@ -295,9 +296,10 @@ std::vector<OscParameterInfo> AvaAudioProcessor::getVisibleOscParameters() const
     const auto appendGlobalControl = [&result] (const char* internalName,
                                                  const juce::String& acceptedValues)
     {
-        result.push_back({ internalName,
+        result.push_back({ getOscDisplayName(internalName),
                            acceptedValues,
-                           "/ava/" + juce::String(internalName) });
+                           "/ava/" + getOscAddressName(internalName),
+                           internalName });
     };
 
     appendGlobalControl(oscGlobalAbSlotAId, "1");

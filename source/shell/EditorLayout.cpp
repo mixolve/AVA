@@ -8,7 +8,7 @@
 
 void AvaAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colours::black);
+    g.fillAll(uiBackground);
 }
 
 juce::Rectangle<int> AvaAudioProcessorEditor::getInfoPromptAnchorBounds() const noexcept
@@ -120,7 +120,7 @@ void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& 
     row.removeFromRight(globalButtonGap);
     globalBypassButton->setBounds(row.removeFromRight(iconControlSize));
     row.removeFromRight(globalButtonGap);
-    avaPlaceholder->setBounds(row);
+    topLines->setBounds(row.reduced(0, 1));
 
     if (! bounds.isEmpty())
         bounds.removeFromTop(globalToFilterGap);
@@ -197,7 +197,7 @@ void AvaAudioProcessorEditor::layoutBottomControlsSection(juce::Rectangle<int>& 
     row.removeFromRight(uiGap);
     undoButton->setBounds(row.removeFromRight(iconControlSize));
     row.removeFromRight(uiGap);
-    mixolvePlaceholder->setBounds(row);
+    bottomLines->setBounds(row.reduced(0, 1));
 }
 
 void AvaAudioProcessorEditor::layoutFooter(juce::Rectangle<int>& bounds)
@@ -229,8 +229,8 @@ void AvaAudioProcessorEditor::finalizeLayout() noexcept
     if (abSwitchButton != nullptr) abSwitchButton->toFront(false);
     if (abSlotBButton != nullptr) abSlotBButton->toFront(false);
     if (globalBypassButton != nullptr) globalBypassButton->toFront(false);
-    if (avaPlaceholder != nullptr) avaPlaceholder->toFront(false);
-    if (mixolvePlaceholder != nullptr) mixolvePlaceholder->toFront(false);
+    if (topLines != nullptr) topLines->toFront(false);
+    if (bottomLines != nullptr) bottomLines->toFront(false);
     if (routingButton != nullptr) routingButton->toFront(false);
     if (oscButton != nullptr) oscButton->toFront(false);
     if (moduleAddButton != nullptr) moduleAddButton->toFront(false);
@@ -272,8 +272,8 @@ void AvaAudioProcessorEditor::resized()
         || clipButton == nullptr
         || presetsSection == nullptr
         || globalBypassButton == nullptr
-        || avaPlaceholder == nullptr
-        || mixolvePlaceholder == nullptr
+        || topLines == nullptr
+        || bottomLines == nullptr
         || routingButton == nullptr
         || oscButton == nullptr
         || oscPanel == nullptr

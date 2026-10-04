@@ -100,15 +100,15 @@ public:
         table.setRowHeight(rowHeight);
         table.setOutlineThickness(frameLineThickness);
         table.setMultipleSelectionEnabled(false);
-        table.setColour(juce::ListBox::backgroundColourId, uiBlack);
+        table.setColour(juce::ListBox::backgroundColourId, uiBackground);
         table.setColour(juce::ListBox::outlineColourId, uiGrey500);
         table.getViewport()->setScrollBarsShown(false, false, true, false);
 
         auto& header = table.getHeader();
-        header.setColour(juce::TableHeaderComponent::backgroundColourId, uiBlack);
+        header.setColour(juce::TableHeaderComponent::backgroundColourId, uiBackground);
         header.setColour(juce::TableHeaderComponent::textColourId, uiWhite);
         header.setColour(juce::TableHeaderComponent::outlineColourId, uiGrey500);
-        header.setColour(juce::TableHeaderComponent::highlightColourId, uiBlack);
+        header.setColour(juce::TableHeaderComponent::highlightColourId, uiBackground);
         header.setLookAndFeel(&headerLookAndFeel);
         header.setInterceptsMouseClicks(true, true);
         constexpr int columnFlags = juce::TableHeaderComponent::visible;
@@ -133,7 +133,7 @@ public:
 
     void paint(juce::Graphics& graphics) override
     {
-        graphics.fillAll(uiBlack);
+        graphics.fillAll(uiBackground);
     }
 
     void resized() override
@@ -223,7 +223,7 @@ private:
         auto refreshed = instance->getVisibleOscParameters();
         const auto prefix = makeOscAddressPrefix(ava::routing::getDisplayName(routing, id));
         for (auto& parameter : refreshed)
-            parameter.address = prefix + parameter.internalName;
+            parameter.address = prefix + getOscAddressName(parameter.sourceId);
 
         if (refreshed == parameters)
         {
@@ -260,7 +260,7 @@ private:
 
         for (const auto& parameter : parameters)
         {
-            nameWidth = juce::jmax(nameWidth, measure(parameter.internalName));
+            nameWidth = juce::jmax(nameWidth, measure(parameter.name));
             acceptedValuesWidth = juce::jmax(acceptedValuesWidth, measure(parameter.acceptedValues));
         }
         for (const auto& label : instanceLabels)
@@ -281,7 +281,7 @@ private:
                             bool rowIsSelected) override
     {
         juce::ignoreUnused(rowNumber, rowIsSelected);
-        graphics.fillAll(uiBlack);
+        graphics.fillAll(uiBackground);
         graphics.setColour(uiGreyLight);
         graphics.fillRect(0, height - 1, width, 1);
     }
@@ -298,7 +298,7 @@ private:
 
         const auto& parameter = parameters[static_cast<size_t>(rowNumber)];
         const auto text = rowNumber == copiedRow && columnId == nameColumn ? juce::String("copied")
-                        : columnId == nameColumn ? parameter.internalName
+                        : columnId == nameColumn ? parameter.name
                         : parameter.acceptedValues;
         graphics.setColour(uiWhite);
         graphics.setFont(makeUiFont());
@@ -433,7 +433,7 @@ public:
     OscParameterListWindow(AvaAudioProcessor& processor,
                            juce::LookAndFeel& ownerLookAndFeel,
                            std::function<void()> closeCallbackIn)
-        : DocumentWindow({}, uiBlack, 0, false),
+        : DocumentWindow({}, uiBackground, 0, false),
           closeCallback(std::move(closeCallbackIn))
     {
         setUsingNativeTitleBar(false);

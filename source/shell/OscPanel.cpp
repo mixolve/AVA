@@ -88,7 +88,7 @@ std::unique_ptr<BoxTextButton> OscPanel::makeLabel(const juce::String& text)
 
 void OscPanel::paint(juce::Graphics& graphics)
 {
-    graphics.fillAll(uiBlack);
+    graphics.fillAll(uiBackground);
 }
 
 void OscPanel::resized()

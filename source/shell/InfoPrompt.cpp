@@ -47,7 +47,7 @@ public:
 
     void paint(juce::Graphics& graphics) override
     {
-        graphics.setColour(juce::Colours::black);
+        graphics.setColour(uiBackground);
         graphics.fillAll();
     }
 

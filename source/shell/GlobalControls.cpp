@@ -8,24 +8,24 @@
 
 namespace
 {
-juce::String getListInternalNameForHostTarget(AvaAudioProcessor& processor,
-                                              const std::vector<OscParameterInfo>& visibleParameters,
-                                              const juce::String& parameterId)
+juce::String getListNameForHostTarget(AvaAudioProcessor& processor,
+                                     const std::vector<OscParameterInfo>& visibleParameters,
+                                     const juce::String& parameterId)
 {
-    const auto findInternalName = [&visibleParameters] (const juce::String& internalName)
+    const auto findName = [&visibleParameters] (const juce::String& sourceId)
     {
         const auto match = std::find_if(visibleParameters.begin(),
                                         visibleParameters.end(),
-                                        [&internalName] (const auto& parameter)
+                                        [&sourceId] (const auto& parameter)
                                         {
-                                            return parameter.internalName == internalName;
+                                            return parameter.sourceId == sourceId;
                                         });
 
-        return match != visibleParameters.end() ? match->internalName : juce::String {};
+        return match != visibleParameters.end() ? match->name : juce::String {};
     };
 
     const auto trimmedParameterId = parameterId.trim();
-    if (const auto exactName = findInternalName(trimmedParameterId); exactName.isNotEmpty())
+    if (const auto exactName = findName(trimmedParameterId); exactName.isNotEmpty())
         return exactName;
 
     if ((processor.getActiveModule() == AvaAudioProcessor::ActiveModule::eql
@@ -35,7 +35,7 @@ juce::String getListInternalNameForHostTarget(AvaAudioProcessor& processor,
         const auto bandParameterId = "band-"
             + juce::String(static_cast<int>(processor.getSelectedCrossoverRange() + 1))
             + "_" + trimmedParameterId;
-        return findInternalName(bandParameterId);
+        return findName(bandParameterId);
     }
 
     return {};
@@ -44,19 +44,11 @@ juce::String getListInternalNameForHostTarget(AvaAudioProcessor& processor,
 
 void AvaAudioProcessorEditor::setupShellControls()
 {
-    avaPlaceholder = std::make_unique<BoxTextButton>(uiGrey500);
-    avaPlaceholder->setButtonText("AVA");
-    avaPlaceholder->setTextJustification(juce::Justification::centred);
-    avaPlaceholder->setPressFillEnabled(false);
-    avaPlaceholder->setInterceptsMouseClicks(false, false);
-    addAndMakeVisible(*avaPlaceholder);
+    topLines = std::make_unique<FourLinePlaceholder>();
+    addAndMakeVisible(*topLines);
 
-    mixolvePlaceholder = std::make_unique<BoxTextButton>(uiGrey500);
-    mixolvePlaceholder->setButtonText("MIXOLVE");
-    mixolvePlaceholder->setTextJustification(juce::Justification::centred);
-    mixolvePlaceholder->setPressFillEnabled(false);
-    mixolvePlaceholder->setInterceptsMouseClicks(false, false);
-    addAndMakeVisible(*mixolvePlaceholder);
+    bottomLines = std::make_unique<FourLinePlaceholder>();
+    addAndMakeVisible(*bottomLines);
 
     routingButton = std::make_unique<BoxTextButton>(uiAccent);
     routingButton->setButtonText({});
@@ -375,9 +367,9 @@ void AvaAudioProcessorEditor::refreshHostSlotButtons()
             slotButton->setButtonText({});
         else
         {
-            auto parameterName = getListInternalNameForHostTarget(audioProcessor,
-                                                                  visibleParameters,
-                                                                  assignment.parameterId);
+            auto parameterName = getListNameForHostTarget(audioProcessor,
+                                                          visibleParameters,
+                                                          assignment.parameterId);
 
             if (parameterName.isEmpty())
                 parameterName = assignment.parameterId;
@@ -427,9 +419,9 @@ bool AvaAudioProcessorEditor::handleHostSlotAssignRequest(const juce::String& pa
     auto& assignment = hostSlotAssignments[static_cast<size_t>(targetSlot)];
     assignment.parameterId = trimmedParameterId;
     const auto visibleParameters = audioProcessor.getVisibleOscParameters();
-    assignment.parameterName = getListInternalNameForHostTarget(audioProcessor,
-                                                                visibleParameters,
-                                                                trimmedParameterId);
+    assignment.parameterName = getListNameForHostTarget(audioProcessor,
+                                                       visibleParameters,
+                                                       trimmedParameterId);
 
     if (assignment.parameterName.isEmpty())
         assignment.parameterName = trimmedParameterId;

@@ -47,6 +47,22 @@ void drawNeutralPopupItem(juce::Graphics& g,
 }
 }
 
+FourLinePlaceholder::FourLinePlaceholder()
+{
+    setInterceptsMouseClicks(false, false);
+}
+
+void FourLinePlaceholder::paint(juce::Graphics& g)
+{
+    constexpr int lineThickness = 2;
+    constexpr int lineCount = 4;
+    const auto lastLineY = juce::jmax(0, getHeight() - lineThickness);
+
+    g.setColour(uiGreyLight);
+    for (int line = 0; line < lineCount; ++line)
+        g.fillRect(0, lastLineY * line / (lineCount - 1), getWidth(), lineThickness);
+}
+
 CopyPasteTextEditor::CopyPasteTextEditor()
 {
     setLookAndFeel(&popupLookAndFeel);

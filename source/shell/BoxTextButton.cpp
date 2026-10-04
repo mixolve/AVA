@@ -408,14 +408,8 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, bool, bool)
         graphics.setColour(outline);
         if (whiteOutlineActive)
         {
-            constexpr auto accentThickness = 1.5f;
-            const auto bounds = getLocalBounds().toFloat();
-            graphics.fillRect(juce::Rectangle<float>(bounds.getX(), bounds.getY(), bounds.getWidth(), accentThickness));
-            graphics.fillRect(juce::Rectangle<float>(bounds.getX(), bounds.getBottom() - accentThickness,
-                                                     bounds.getWidth(), accentThickness));
-            graphics.fillRect(juce::Rectangle<float>(bounds.getX(), bounds.getY(), accentThickness, bounds.getHeight()));
-            graphics.fillRect(juce::Rectangle<float>(bounds.getRight() - accentThickness, bounds.getY(),
-                                                     accentThickness, bounds.getHeight()));
+            constexpr int accentThickness = 2;
+            graphics.drawRect(getLocalBounds(), accentThickness);
         }
         else
         {
