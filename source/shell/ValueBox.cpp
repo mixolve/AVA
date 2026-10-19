@@ -1,8 +1,15 @@
 #include "Controls.h"
+#include "InlineParameterSlider.h"
 #include "Editor.h"
 #include "ChoiceControl.h"
 #include "LocalParameterControl.h"
 #include "ParameterControl.h"
+
+namespace
+{
+juce::Component::SafePointer<ValueBoxComponent> activeInlineValueEditor;
+
+}
 
 bool scrollViewportWithWheel(juce::Viewport& viewport,
                              const int contentHeight,
@@ -37,28 +44,54 @@ ValueBoxComponent::ValueBoxComponent(juce::Slider& sliderToControl)
 {
     setWantsKeyboardFocus(false);
     setMouseClickGrabsKeyboardFocus(false);
-    updateMouseCursor();
+    setMouseCursor(juce::MouseCursor::NormalCursor);
+    inlineSlider = std::make_unique<InlineParameterSlider>(slider);
+    inlineSlider->canOpen = [this]
+    { return !refocusActiveInlineEditorIn(*getTopLevelComponent()); };
+    addAndMakeVisible(*inlineSlider);
+    updateSliderAvailability();
 }
 
 ValueBoxComponent::~ValueBoxComponent()
 {
+    if (activeInlineValueEditor == this)
+        activeInlineValueEditor = nullptr;
     stopGlobalEditTracking();
 }
 
-void ValueBoxComponent::scheduleMarqueeRepaint()
+bool ValueBoxComponent::refocusActiveInlineEditorIn(juce::Component& scope)
 {
-    if (marqueeRepaintPending || ! isShowing())
-        return;
+    auto* active = activeInlineValueEditor.getComponent();
+    if (active == nullptr || active->editor == nullptr
+        || (active != &scope && ! scope.isParentOf(active)))
+        return false;
 
-    marqueeRepaintPending = true;
-    juce::Timer::callAfterDelay(16, [safeThis = juce::Component::SafePointer<ValueBoxComponent>(this)]
+    juce::MessageManager::callAsync([safeActive = juce::Component::SafePointer<ValueBoxComponent>(active)]
     {
-        if (safeThis == nullptr)
-            return;
-
-        safeThis->marqueeRepaintPending = false;
-        safeThis->repaint();
+        if (safeActive != nullptr && safeActive->editor != nullptr)
+            safeActive->editor->grabKeyboardFocus();
     });
+    return true;
+}
+
+void ValueBoxComponent::cancelActiveInlineEditorIn(juce::Component& scope)
+{
+    auto* active = activeInlineValueEditor.getComponent();
+    if (active != nullptr && (active == &scope || scope.isParentOf(active)))
+        active->hideEditor(true);
+}
+
+void ValueBoxComponent::setNumericControlEnabled(bool enabled)
+{
+    numericControlEnabled = enabled;
+    updateSliderAvailability();
+    repaint();
+}
+
+void ValueBoxComponent::updateSliderAvailability()
+{
+    inlineSlider->setAvailable(numericControlEnabled && interactionEnabled && customPromptAction == nullptr
+        && !promptActive && editor == nullptr && slider.getMaximum() > slider.getMinimum());
 }
 
 void ValueBoxComponent::setInteractionEnabled(const bool shouldEnable)
@@ -67,10 +100,11 @@ void ValueBoxComponent::setInteractionEnabled(const bool shouldEnable)
         return;
 
     interactionEnabled = shouldEnable;
-    updateMouseCursor();
 
     if (! interactionEnabled && editor != nullptr)
         hideEditor(true);
+
+    updateSliderAvailability();
 
     repaint();
 }
@@ -94,6 +128,7 @@ void ValueBoxComponent::setPromptActive(const bool shouldBeActive)
         return;
 
     promptActive = shouldBeActive;
+    updateSliderAvailability();
 
     if (! shouldBeActive)
     {
@@ -107,57 +142,71 @@ void ValueBoxComponent::setPromptActive(const bool shouldBeActive)
 void ValueBoxComponent::setCustomPromptAction(std::function<void()> action)
 {
     customPromptAction = std::move(action);
-    updateMouseCursor();
-}
-
-void ValueBoxComponent::updateMouseCursor()
-{
-    setMouseCursor(juce::MouseCursor::NormalCursor);
+    updateSliderAvailability();
+    repaint();
 }
 
 void ValueBoxComponent::paint(juce::Graphics& g)
 {
-    const auto displayText = displayTextProvider != nullptr ? displayTextProvider()
-                                                            : slider.getTextFromValue(slider.getValue());
-    auto backgroundColour = uiGrey800;
-    auto borderColour = outlineColour;
-    const auto interactionHighlight = interactionEnabled
-        && (pressHighlight || isMouseHovering(*this));
+    ControlAppearance style(promptActive);
+    style.paintBackground(g,getLocalBounds());
 
-    if (promptActive)
+}
+
+void ValueBoxComponent::paintOverChildren(juce::Graphics& g)
+{
+    const auto editing=editor!=nullptr || inlineSlider->isExpanded() || inlineSlider->hasReveal();
+    const auto hover=hoverAnimation.amount(interactionEnabled && (pressHighlight || isMouseHovering(*this)));
+    ControlAppearance style(promptActive,editing?0.0f:hover,editing);
+    style.normalBorder=outlineColour;
+    style.paintFrame(g,getLocalBounds());
+    if(editor!=nullptr) return;
+    const auto text = displayTextProvider ? displayTextProvider() : slider.getTextFromValue(slider.getValue());
+    style.normalContent=getDisplayTextColour(text);
+    const auto colour=interactionEnabled?style.contentColour():uiGreyLight;
+    // One font, bounds and time for all states: revealing the controller only
+    // changes the background/contrast, never the glyph positions or marquee phase.
+    const auto textBounds = getLocalBounds().reduced(uiGap, 0).reduced(
+        inlineSlider->isVisible() ? InlineParameterSlider::petalWidth : 0, 0);
+    const auto elapsed = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    bool scrolling = numericControlEnabled && textRaster.prepare(text,getLocalBounds(),textBounds,
+        g.getInternalContext().getPhysicalPixelScaleFactor(),elapsed);
+    const auto paintText = [&](const auto& clip, juce::Colour textColour)
     {
-        backgroundColour = uiGreyLight;
-        borderColour = uiAccent;
-    }
-    else if (interactionHighlight)
+        const juce::Graphics::ScopedSaveState saved(g);
+        if (!g.reduceClipRegion(clip)) return;
+        g.setColour(textColour);
+        g.setFont(makeUiFont());
+        if(numericControlEnabled) textRaster.draw(g);
+        else scrolling=drawLoopingText(g,text,textBounds,makeUiFont(),juce::Justification::centred,elapsed) || scrolling;
+    };
+    juce::RectangleList<int> normal(getLocalBounds());
+    if (inlineSlider->isVisible() && inlineSlider->hasReveal())
     {
-        backgroundColour = uiGreyLight;
+        const auto revealBounds = inlineSlider->getRevealBounds();
+        const auto light = inlineSlider->getGripPath();
+        normal.subtract(revealBounds);
+        juce::Path dark;
+        dark.addRectangle(revealBounds);
+        dark.addPath(light);
+        dark.setUsingNonZeroWinding(false);
+        paintText(normal, colour);
+        paintText(dark, colour.interpolatedWith(uiWhite, inlineSlider->getRevealOpacity()));
+        paintText(light, colour.interpolatedWith(uiBlack, inlineSlider->getRevealOpacity()));
     }
-
-    g.setColour(backgroundColour);
-    g.fillRect(getLocalBounds());
-
-    g.setColour(borderColour);
-    g.drawRect(getLocalBounds(), 1);
-
-    g.setColour(interactionEnabled
-                    ? ((promptActive || interactionHighlight) ? uiBlack : getDisplayTextColour(displayText))
-                    : uiGrey500);
-    g.setFont(makeUiFont());
-    if (drawLoopingText(g,
-                        displayText,
-                        getLocalBounds().reduced(uiGap, 0),
-                        makeUiFont(),
-                        juce::Justification::centred))
-    {
-        scheduleMarqueeRepaint();
-    }
+    else paintText(normal, colour);
+    if (scrolling) scheduleMarqueeRepaint(*this, marqueeRepaintPending);
 }
 
 void ValueBoxComponent::resized()
 {
+    inlineSlider->setBounds(getLocalBounds());
     if (editor != nullptr)
+    {
         editor->setBounds(getLocalBounds());
+        const auto text=editor->getTextBounds({0,editor->getTotalNumChars()}).getBounds();
+        if(!text.isEmpty()) editor->setBounds(getLocalBounds().translated(0,getLocalBounds().getCentreY()-text.getCentreY()));
+    }
 }
 
 void ValueBoxComponent::mouseDown(const juce::MouseEvent& event)
@@ -168,7 +217,11 @@ void ValueBoxComponent::mouseDown(const juce::MouseEvent& event)
 
     if (editor != nullptr && ! clickIsInsideThisValueBox)
     {
-        hideEditor(false);
+        juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<ValueBoxComponent>(this)]
+        {
+            if (safeThis != nullptr && safeThis->editor != nullptr && safeThis->isShowing())
+                safeThis->editor->grabKeyboardFocus();
+        });
         return;
     }
 
@@ -185,34 +238,26 @@ void ValueBoxComponent::mouseDown(const juce::MouseEvent& event)
     repaint();
 }
 
-void ValueBoxComponent::mouseDoubleClick(const juce::MouseEvent& event)
-{
-    if (! interactionEnabled || customPromptAction != nullptr)
-        return;
-
-    if (! event.mods.isLeftButtonDown() || event.mods.isPopupMenu() || ! contains(event.getPosition()))
-        return;
-
-    showEditor();
-}
-
 void ValueBoxComponent::mouseUp(const juce::MouseEvent& event)
 {
     if (! pointerDown)
         return;
 
-    const auto shouldRunCustomAction = contains(event.getPosition())
+    const auto clicked = contains(event.getPosition())
         && ! event.mouseWasDraggedSinceMouseDown()
-        && ! event.mods.isPopupMenu()
-        && customPromptAction != nullptr;
+        && ! event.mods.isPopupMenu();
 
     pointerDown = false;
-
-    if (shouldRunCustomAction)
-        customPromptAction();
-
     pressHighlight = false;
     repaint();
+
+    if (clicked)
+    {
+        if (customPromptAction != nullptr)
+            customPromptAction();
+        else if (interactionEnabled)
+            showEditor();
+    }
 }
 
 void ValueBoxComponent::mouseExit(const juce::MouseEvent&)
@@ -244,8 +289,13 @@ void ValueBoxComponent::showEditor()
     if (editor != nullptr)
         return;
 
-    if (onBeforeShowEditor != nullptr)
-        onBeforeShowEditor();
+    if (auto* active = activeInlineValueEditor.getComponent();
+        active != nullptr && active != this && active->editor != nullptr
+        && active->getTopLevelComponent() == getTopLevelComponent())
+    {
+        refocusActiveInlineEditorIn(*getTopLevelComponent());
+        return;
+    }
 
     if (auto* owner = findParentComponentOfClass<AvaAudioProcessorEditor>())
     {
@@ -284,21 +334,23 @@ void ValueBoxComponent::showEditor()
     const auto editorText = editorTextProvider != nullptr ? editorTextProvider()
                                                           : slider.getTextFromValue(slider.getValue());
     auto textEditor = std::make_unique<CopyPasteTextEditor>();
+    if(numericControlEnabled) textEditor->setCachedComponentImage(new NumericEditorRaster(*textEditor));
     textEditor->setName(slider.getName());
     textEditor->setFont(makeUiFont());
     textEditor->setPopupMenuEnabled(true);
     textEditor->setJustification(juce::Justification::centred);
     textEditor->setColour(juce::TextEditor::textColourId, uiWhite);
-    textEditor->setColour(juce::TextEditor::backgroundColourId, uiGrey800);
+    textEditor->setColour(juce::TextEditor::backgroundColourId, uiGreyDark);
     textEditor->setColour(juce::TextEditor::outlineColourId, outlineColour);
     textEditor->setColour(juce::TextEditor::focusedOutlineColourId, outlineColour);
     textEditor->setText(editorText, false);
     textEditor->onReturnKey = [this] { hideEditor(false); };
     textEditor->onEscapeKey = [this] { hideEditor(true); };
-    textEditor->onFocusLost = [this] { hideEditor(false); };
 
     addAndMakeVisible(*textEditor);
     editor = std::move(textEditor);
+    activeInlineValueEditor = this;
+    updateSliderAvailability();
     startGlobalEditTracking();
     resized();
     editor->grabKeyboardFocus();
@@ -347,7 +399,10 @@ void ValueBoxComponent::hideEditor(const bool discard)
 
     removeChildComponent(editor.get());
     editor.reset();
+    if (activeInlineValueEditor == this)
+        activeInlineValueEditor = nullptr;
     stopGlobalEditTracking();
+    updateSliderAvailability();
     clearKeyboardFocus(*this);
     repaint();
 }

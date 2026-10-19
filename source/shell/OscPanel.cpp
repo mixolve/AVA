@@ -35,7 +35,7 @@ OscPanel::OscPanel(Actions actionsIn) : actions(std::move(actionsIn))
     statusLabel = std::make_unique<juce::Label>();
     statusLabel->setFont(makeUiFont());
     statusLabel->setColour(juce::Label::textColourId, uiWhite);
-    statusLabel->setColour(juce::Label::outlineColourId, uiGrey500);
+    statusLabel->setColour(juce::Label::outlineColourId, uiGreyLight);
     statusLabel->setBorderSize(juce::BorderSize<int> { 1 });
     statusLabel->setJustificationType(juce::Justification::centred);
     statusLabel->setInterceptsMouseClicks(false, false);
@@ -77,9 +77,9 @@ OscPanel::OscPanel(Actions actionsIn) : actions(std::move(actionsIn))
 
 std::unique_ptr<BoxTextButton> OscPanel::makeLabel(const juce::String& text)
 {
-    auto label = makeTextButton(text, uiGrey500);
+    auto label = makeTextButton(text, uiGreyLight);
     label->setClickingTogglesState(false);
-    label->setPressFillEnabled(false);
+    label->setInteractionOutlineEnabled(false);
     label->setTextJustification(juce::Justification::centredLeft);
     label->setInterceptsMouseClicks(false, false);
     addAndMakeVisible(*label);

@@ -1,5 +1,6 @@
 #include "../shell/Editor.h"
 #include "../shell/EdgeResizeHandle.h"
+#include "../shell/WindowDragHandle.h"
 
 void AvaAudioProcessorEditor::toggleRoutingSection()
 {
@@ -34,10 +35,19 @@ void AvaAudioProcessorEditor::openRoutingInstance(const int instanceId)
     activeInstanceProcessor = std::move(instance);
     activeInstanceId = instanceId;
     activeInstanceEditor = std::make_unique<AvaAudioProcessorEditor>(*activeInstanceProcessor, instanceId);
+    activeInstanceEditor->setAnimationSettings(animationSettings);
     if (auto* handle = static_cast<EdgeResizeHandle*>(activeInstanceEditor->verticalResizeHandle.get()))
         handle->setResizeOwner(*this);
     if (auto* handle = static_cast<EdgeResizeHandle*>(activeInstanceEditor->horizontalResizeHandle.get()))
         handle->setResizeOwner(*this);
+    if (auto* handle = static_cast<EdgeResizeHandle*>(activeInstanceEditor->topResizeHandle.get()))
+        handle->setResizeOwner(*this);
+    if (auto* handle = static_cast<EdgeResizeHandle*>(activeInstanceEditor->leftResizeHandle.get()))
+        handle->setResizeOwner(*this);
+    if (auto* handle = static_cast<EdgeResizeHandle*>(activeInstanceEditor->cornerResizeHandle.get()))
+        handle->setResizeOwner(*this);
+    if (auto* handle = dynamic_cast<WindowDragHandle*>(activeInstanceEditor->globalSpacer.get()))
+        handle->setMoveOwner(*this);
     activeInstanceEditor->setReturnToRoutingAction(
         [safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
         {

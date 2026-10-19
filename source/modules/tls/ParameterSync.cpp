@@ -36,6 +36,15 @@ tls::dsp::DspCore::Parameters TlsModuleProcessor::readCrossoverRangeParameters(c
     };
 
     tls::dsp::DspCore::Parameters parameters;
+    parameters.blockOrder = getBlockOrder(rangeIndex);
+    parameters.gainOrder = getGainOrder(rangeIndex);
+    for(size_t i=0;i<parameters.blockHidden.size();++i)
+        parameters.blockHidden[i]=loadBool(tls::parameters::blockHiddenSlots[i]);
+    for(size_t i=0;i<parameters.blockBypass.size();++i)
+        parameters.blockBypass[i]=loadBool(tls::parameters::blockBypassSlots[i]);
+    for(size_t i=0;i<parameters.gainBypass.size();++i)
+        parameters.gainBypass[i]=loadBool(tls::parameters::gainBypassSlots[i]);
+    parameters.combCountBypass = loadBool(ParameterSlot::combCountBypass);
     parameters.gainMid = loadFloat(ParameterSlot::gainMid);
     parameters.gainMidMute = loadBool(ParameterSlot::gainMidMute);
     parameters.gainSide = loadFloat(ParameterSlot::gainSide);
@@ -46,10 +55,6 @@ tls::dsp::DspCore::Parameters TlsModuleProcessor::readCrossoverRangeParameters(c
     parameters.gainRMute = loadBool(ParameterSlot::gainRMute);
     parameters.gainLr = loadFloat(ParameterSlot::gainLr);
     parameters.gainLrMute = loadBool(ParameterSlot::gainLrMute);
-    parameters.gainLOrder = juce::roundToInt(loadFloat(ParameterSlot::gainLOrder));
-    parameters.gainROrder = juce::roundToInt(loadFloat(ParameterSlot::gainROrder));
-    parameters.gainMidOrder = juce::roundToInt(loadFloat(ParameterSlot::gainMidOrder));
-    parameters.gainSideOrder = juce::roundToInt(loadFloat(ParameterSlot::gainSideOrder));
     parameters.halfPositive = loadBool(ParameterSlot::halfPositive);
     parameters.halfNegative = loadBool(ParameterSlot::halfNegative);
     parameters.fullPositive = loadBool(ParameterSlot::fullPositive);
@@ -77,6 +82,9 @@ tls::dsp::DspCore::Parameters TlsModuleProcessor::readCrossoverRangeParameters(c
     parameters.stereoPhase = loadFloat(ParameterSlot::stereoPhase);
     parameters.leftPhase = loadFloat(ParameterSlot::leftPhase);
     parameters.rightPhase = loadFloat(ParameterSlot::rightPhase);
+    parameters.combCount = juce::roundToInt(loadFloat(ParameterSlot::combCount));
+    parameters.combShift = loadFloat(ParameterSlot::combShift);
+    parameters.combShiftBypass = loadBool(ParameterSlot::combShiftBypass);
 
     return parameters;
 }

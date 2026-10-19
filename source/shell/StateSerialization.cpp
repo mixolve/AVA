@@ -1,11 +1,10 @@
 #include "Processor.h"
+#include "HostChangeDetails.h"
 #include "ABCompareSerialization.h"
 
 #include "../modules/tls/Processor.h"
 #include "../modules/dyn/Processor.h"
-#include "../modules/eql/ProcessorBank.h"
-#include "../modules/fft/ProcessorBank.h"
-#include "../modules/trs/Processor.h"
+#include "../modules/eql/RangeBank.h"
 #include "../routing/Runtime.h"
 
 namespace
@@ -30,34 +29,14 @@ void storeBinaryModuleState(juce::ValueTree& state,
         state.removeProperty(property, nullptr);
 }
 
-template <typename Processor>
-void storeXmlModuleState(juce::ValueTree& state,
-                         const juce::Identifier& property,
-                         Processor* processor)
-{
-    if (processor == nullptr)
-    {
-        state.removeProperty(property, nullptr);
-        return;
-    }
-
-    const auto stateXml = processor->getStateXmlString();
-
-    if (stateXml.isNotEmpty())
-        state.setProperty(property, stateXml, nullptr);
-    else
-        state.removeProperty(property, nullptr);
-}
 }
 
 void AvaAudioProcessor::removeModuleStateProperties(juce::ValueTree& state)
 {
     state.removeProperty(activeModuleStateKey, nullptr);
     state.removeProperty(eqlModuleStateKey, nullptr);
-    state.removeProperty(fftModuleStateKey, nullptr);
     state.removeProperty(tlsModuleStateKey, nullptr);
     state.removeProperty(dynModuleStateKey, nullptr);
-    state.removeProperty(trsModuleStateKey, nullptr);
 }
 
 void AvaAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
@@ -93,10 +72,8 @@ void AvaAudioProcessor::writeStateInformation(juce::MemoryBlock& destData, const
     {
         state.setProperty(activeModuleStateKey, stateIdForModule(active), nullptr);
         storeBinaryModuleState(state, eqlModuleStateKey, getEqlProcessorBank());
-        storeXmlModuleState(state, fftModuleStateKey, getFftProcessorBank());
         storeBinaryModuleState(state, tlsModuleStateKey, getTlsModuleProcessor());
         storeBinaryModuleState(state, dynModuleStateKey, getDynModuleProcessor());
-        storeXmlModuleState(state, trsModuleStateKey, getTrsModuleProcessor());
     }
 
     if (includeABCompareState)
@@ -131,27 +108,11 @@ void AvaAudioProcessor::notifyHostOfStateChange()
     if (parentStateChanged != nullptr)
         parentStateChanged();
 
-    const auto makeChangeDetails = []
-    {
-        auto details = juce::AudioProcessorListener::ChangeDetails()
-                           .withNonParameterStateChanged(true);
-
-       #if JucePlugin_Build_AU
-        // JUCE's AU wrapper does not react to nonParameterStateChanged. Audio Unit
-        // hosts only receive kAudioUnitProperty_ClassInfo when one of the legacy
-        // change flags is also set, so use the program flag to make them request
-        // and persist the current plug-in state.
-        details = details.withProgramChanged(true);
-       #endif
-
-        return details;
-    };
-
     if (auto* messageManager = juce::MessageManager::getInstanceWithoutCreating();
         messageManager != nullptr && messageManager->isThisTheMessageThread())
     {
         pendingHostStateNotification.store(false, std::memory_order_release);
-        updateHostDisplay(makeChangeDetails());
+        updateHostDisplay(makeHostStateChangeDetails());
         return;
     }
 

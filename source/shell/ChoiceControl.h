@@ -15,7 +15,6 @@ public:
                   const juce::String& parameterIdIn,
                   const juce::String& titleText,
                   std::vector<int> displayOrderIn = {});
-    ~ChoiceControl() override;
 
     int getPreferredHeight() const noexcept;
     void detach() noexcept;
@@ -28,6 +27,9 @@ public:
     void setInteractionEnabled(bool shouldEnable);
     void setOverrideText(const juce::String&);
     void clearOverrideText();
+    void setTitleAccessory(juce::Component* accessory);
+    void setTitleWidthOverride(int width) noexcept;
+    void setValueLeadingInset(int width) noexcept;
     void resized() override;
 
     std::function<void()> onValueChanged;
@@ -44,15 +46,21 @@ private:
     std::vector<int> choiceToDisplayIndex;
     bool ignoreCallbacks = false;
     juce::String overrideText;
+    juce::Component* titleAccessory = nullptr;
+    int titleWidthOverride = -1;
+    int valueLeadingInset = 0;
     bool interactionEnabled = true;
 };
 
 class LocalChoiceControl final : public juce::Component
 {
 public:
+    using ChoicePromptPresenter = NoTickComboBox::ChoicePromptPresenter;
     LocalChoiceControl(const juce::String& titleText,
                        const juce::StringArray& choices,
                        int defaultChoiceIndexIn);
+    void setChoicePromptPresenter(ChoicePromptPresenter presenter);
+    juce::Rectangle<int> getValueBounds() const noexcept;
 
     int getPreferredHeight() const noexcept;
     int getSelectedChoiceIndex() const noexcept;

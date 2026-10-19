@@ -18,8 +18,6 @@ public:
 
     bool applySettings(const OscSettings& settings);
     void applySettingsAsync(const OscSettings& settings);
-    bool isInputConnected() const noexcept { return inputConnected; }
-    bool isOutputConnected() const noexcept { return outputConnected; }
     bool isInputPortBusy() const noexcept;
 
 private:
@@ -54,6 +52,8 @@ private:
     juce::CriticalSection pendingSettingsLock;
     OscSettings pendingSettings;
     std::map<juce::String, float> lastSentParameterValues;
+    std::vector<OscParameterInfo> currentVisibleParameters;
+    std::map<juce::String, std::vector<OscParameterInfo>> lastVisibleParameters;
     std::map<juce::String, juce::String> lastSentModules;
     std::map<juce::String, int> lastSentSplitCounts;
     juce::String lastRoutingSignature;

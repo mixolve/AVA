@@ -44,20 +44,22 @@ bool decodeTopology(const juce::String& encoded, State& state)
         for (const auto& record : records)
         {
             const auto fields = juce::StringArray::fromTokens(record, ":", "");
-            if ((fields.size() != 3 && fields.size() != 4) || fields.joinIntoString(":") != record)
+            if ((fields.size() != 3 && fields.size() != 4 && fields.size() != 5) || fields.joinIntoString(":") != record)
                 return false;
             State::Node node;
             if (! parseNumber(fields[0], node.id, true)
                 || ! parseNumber(fields[1], node.serialNext, false)
                 || ! parseNumber(fields[2], node.parallelNext, false)
-                || (fields.size() == 4 && ! parseNumber(fields[3], node.groupNext, false)))
+                || (fields.size() >= 4 && ! parseNumber(fields[3], node.groupNext, false))
+                || (fields.size() == 5 && fields[4] != "1"))
                 return false;
+            node.container = fields.size() == 5;
             state.nodes.push_back(node);
         }
     }
     else
     {
-        // Earlier routing layouts stored whole rows; retain those positions on load.
+
         const auto stages = juce::StringArray::fromTokens(encoded, ",", "");
         if (stages.isEmpty() || stages.joinIntoString(",") != encoded)
             return false;
@@ -89,7 +91,7 @@ bool decodeTopology(const juce::String& encoded, State& state)
         }
     }
 
-    if (state.nodes.empty() || state.nodes.size() > maximumInstanceCount)
+    if (state.nodes.empty() || getInstanceCount(state) > maximumInstanceCount || state.nodes.size() > 2 * maximumInstanceCount)
         return false;
     std::map<int, int> incoming;
     std::set<int> parallelChildren;
@@ -114,7 +116,8 @@ bool decodeTopology(const juce::String& encoded, State& state)
         if (count != (id == state.entryInstanceId ? 0 : 1))
             return false;
     for (const auto& node : state.nodes)
-        if (node.groupNext != 0 && parallelChildren.contains(node.id))
+        if ((node.container && node.serialNext == 0)
+            || (node.groupNext != 0 && parallelChildren.contains(node.id)))
             return false;
 
     std::set<int> visited;
@@ -131,12 +134,15 @@ bool decodeTopology(const juce::String& encoded, State& state)
     return visit(state.entryInstanceId) && visited.size() == state.nodes.size();
 }
 
+void groupLooseInstances(State&);
+
 bool decode(const juce::ValueTree& tree, State& result)
 {
     const auto hasInstances = tree.hasProperty(instancesStateKey);
     const auto hasNextId = tree.hasProperty(nextInstanceIdStateKey);
     if (! hasInstances && ! hasNextId)
-        return ! tree.hasProperty(rootInstanceIdStateKey) && ! tree.hasProperty(namesStateKey);
+        return ! tree.hasProperty(rootInstanceIdStateKey) && ! tree.hasProperty(namesStateKey)
+            && ! tree.hasProperty(rootBypassStateKey);
     if (! hasInstances || ! hasNextId)
         return false;
 
@@ -145,12 +151,13 @@ bool decode(const juce::ValueTree& tree, State& result)
         || ! parseNumber(tree.getProperty(nextInstanceIdStateKey).toString(), decoded.nextInstanceId, true))
         return false;
     for (const auto& node : decoded.nodes)
-        if (decoded.nextInstanceId <= node.id)
+        if (! node.container && decoded.nextInstanceId <= node.id)
             return false;
     if (tree.hasProperty(rootInstanceIdStateKey)
         && ! parseNumber(tree.getProperty(rootInstanceIdStateKey).toString(), decoded.rootInstanceId, true))
         return false;
-    if (findNode(decoded, decoded.rootInstanceId) == nullptr)
+    if (findNode(decoded, decoded.rootInstanceId) == nullptr
+        || findNode(decoded, decoded.rootInstanceId)->container)
         return false;
 
     if (tree.hasProperty(namesStateKey))
@@ -168,7 +175,7 @@ bool decode(const juce::ValueTree& tree, State& result)
             const auto nameValue = object->getProperty("name");
             int id = 0;
             if (! idValue.isInt() || ! parseNumber(idValue.toString(), id, true)
-                || findNode(decoded, id) == nullptr || ! nameValue.isString())
+                || findNode(decoded, id) == nullptr || findNode(decoded, id)->container || ! nameValue.isString())
                 return false;
             const auto name = nameValue.toString();
             if (name.isEmpty() || name.length() > 48 || name != name.trim()
@@ -177,21 +184,115 @@ bool decode(const juce::ValueTree& tree, State& result)
                 return false;
         }
     }
+    if (tree.hasProperty(rootBypassStateKey))
+    {
+        const auto bypass = tree.getProperty(rootBypassStateKey).toString();
+        if (bypass != "0" && bypass != "1")
+            return false;
+        decoded.rootBypassed = bypass == "1";
+    }
+    groupLooseInstances(decoded);
     result = std::move(decoded);
     return true;
 }
 
-void write(juce::ValueTree& tree, const State& state)
+void replaceIncoming(State& state, const int from, const int to)
 {
+    if (state.entryInstanceId == from) state.entryInstanceId = to;
+    for (auto& node : state.nodes)
+        for (auto link : { &State::Node::serialNext, &State::Node::parallelNext, &State::Node::groupNext })
+            if (node.*link == from) node.*link = to;
+}
+
+// In an outer group, adjacent loose instances form their own inner group.
+void groupLooseInstances(State& state)
+{
+    std::vector<int> heads;
+    for (const auto& node : state.nodes)
+        if (node.parallelNext != 0 && std::none_of(state.nodes.begin(), state.nodes.end(),
+            [id = node.id](const auto& parent) { return parent.parallelNext == id; }))
+            heads.push_back(node.id);
+    for (const auto headId : heads)
+    {
+        bool mixed = false;
+        for (auto* node = findNode(state, headId); node != nullptr; node = findNode(state, node->parallelNext))
+            mixed = mixed || node->container;
+        if (! mixed) continue;
+        for (int id = headId; id != 0;)
+        {
+            const auto* first = findNode(state, id);
+            if (first->container) { id = first->parallelNext; continue; }
+            auto lastId = id;
+            int count = 1;
+            for (auto* next = findNode(state, first->parallelNext); next != nullptr && ! next->container;
+                 next = findNode(state, next->parallelNext))
+            { lastId = next->id; ++count; }
+            const auto nextId = findNode(state, lastId)->parallelNext;
+            if (count > 1)
+            {
+                const auto continuation = first->groupNext;
+                int wrapperId = std::numeric_limits<int>::max();
+                while (findNode(state, wrapperId) != nullptr) --wrapperId;
+                replaceIncoming(state, id, wrapperId);
+                findNode(state, id)->groupNext = 0;
+                findNode(state, lastId)->parallelNext = 0;
+                state.nodes.push_back({ wrapperId, id, nextId, continuation, true });
+            }
+            id = nextId;
+        }
+    }
+}
+
+bool appendContinuation(State&, int, int);
+
+void normalizeContainers(State& state)
+{
+    for (;;)
+    {
+        const auto found = std::find_if(state.nodes.begin(), state.nodes.end(),
+            [&state](const auto& node) { return node.container && (node.serialNext == 0
+                || (node.parallelNext == 0 && std::none_of(state.nodes.begin(), state.nodes.end(),
+                    [id = node.id](const auto& parent) { return parent.parallelNext == id; }))); });
+        if (found == state.nodes.end()) break;
+        const auto node = *found;
+        if (node.serialNext == 0)
+        {
+            const auto replacement = node.parallelNext != 0 ? node.parallelNext : node.groupNext;
+            if (node.parallelNext != 0) findNode(state, node.parallelNext)->groupNext = node.groupNext;
+            replaceIncoming(state, node.id, replacement);
+        }
+        else
+        {
+            if (node.groupNext != 0) appendContinuation(state, node.serialNext, node.groupNext);
+            replaceIncoming(state, node.id, node.serialNext);
+        }
+        state.nodes.erase(std::remove_if(state.nodes.begin(), state.nodes.end(),
+            [id = node.id](const auto& value) { return value.id == id; }), state.nodes.end());
+    }
+    if (const auto* root = findNode(state, state.rootInstanceId); root == nullptr || root->container)
+    {
+        auto* first = findNode(state, state.entryInstanceId);
+        while (first != nullptr && first->container) first = findNode(state, first->serialNext);
+        if (first != nullptr) state.rootInstanceId = first->id;
+    }
+}
+
+void write(juce::ValueTree& tree, State state)
+{
+    normalizeContainers(state);
     juce::StringArray records;
     for (const auto& node : state.nodes)
         records.add(juce::String(node.id) + ":" + juce::String(node.serialNext)
                     + ":" + juce::String(node.parallelNext)
-                    + ":" + juce::String(node.groupNext));
+                    + ":" + juce::String(node.groupNext) + (node.container ? ":1" : ""));
     tree.setProperty(instancesStateKey,
                      juce::String(state.entryInstanceId) + ";" + records.joinIntoString(","), nullptr);
     tree.setProperty(nextInstanceIdStateKey, state.nextInstanceId, nullptr);
     tree.setProperty(rootInstanceIdStateKey, state.rootInstanceId, nullptr);
+    if (state.rootBypassed)
+        tree.setProperty(rootBypassStateKey, true, nullptr);
+    else
+        tree.removeProperty(rootBypassStateKey, nullptr);
     if (state.names.empty())
         tree.removeProperty(namesStateKey, nullptr);
     else
@@ -210,7 +311,7 @@ void write(juce::ValueTree& tree, const State& state)
 
 bool canAdd(const State& state)
 {
-    return state.nodes.size() < maximumInstanceCount
+    return getInstanceCount(state) < maximumInstanceCount
         && state.nextInstanceId < std::numeric_limits<int>::max();
 }
 
@@ -232,28 +333,75 @@ bool appendContinuation(State& state, const int firstId, const int continuationI
     return true;
 }
 
+bool attachBefore(State& state, const int instanceId, const int targetId, const bool parallel, const bool wholeGroup = false)
+{
+    auto* source = findNode(state, instanceId);
+    auto* target = findNode(state, targetId);
+    if (source == nullptr || target == nullptr || instanceId == targetId)
+        return false;
+    auto attached = false;
+    if (state.entryInstanceId == targetId)
+    {
+        state.entryInstanceId = instanceId;
+        attached = true;
+    }
+    else
+        for (auto& node : state.nodes)
+            for (auto link : { &State::Node::serialNext, &State::Node::parallelNext, &State::Node::groupNext })
+                if (node.*link == targetId)
+                {
+                    node.*link = instanceId;
+                    attached = true;
+                    break;
+                }
+    if (! attached)
+        return false;
+    if (wholeGroup)
+    {
+        source->serialNext = targetId;
+        return true;
+    }
+    source->groupNext = target->groupNext;
+    target->groupNext = 0;
+    if (parallel)
+        source->parallelNext = targetId;
+    else
+    {
+        source->serialNext = targetId;
+        source->parallelNext = target->parallelNext;
+        target->parallelNext = 0;
+    }
+    return true;
+}
+
 bool detachForMove(State& state, const int id)
 {
     auto* source = findNode(state, id);
-    if (source == nullptr)
+    if (source == nullptr || source->container)
         return false;
     const auto serial = source->serialNext;
     const auto parallel = source->parallelNext;
     const auto group = source->groupNext;
-    const auto replacement = parallel != 0 ? parallel : (serial != 0 ? serial : group);
+    // Promote the remainder of this branch, rather than an adjacent branch.
+    const auto replacement = serial != 0 ? serial : (parallel != 0 ? parallel : group);
     if (replacement == 0 && state.entryInstanceId == id)
         return false;
-    if (parallel != 0 && serial != 0)
+    if (serial != 0 && parallel != 0)
     {
-        auto* tail = findNode(state, parallel);
-        while (tail->serialNext != 0)
-            tail = findNode(state, tail->serialNext);
-        tail->serialNext = serial;
+        auto* promoted = findNode(state, serial);
+        // A nested group's continuation cannot become a continuation of its
+        // outer siblings without changing the signal path.
+        if (promoted->groupNext != 0)
+            return false;
+        auto* siblingTail = promoted;
+        while (siblingTail->parallelNext != 0)
+            siblingTail = findNode(state, siblingTail->parallelNext);
+        siblingTail->parallelNext = parallel;
+        promoted->groupNext = group;
     }
-    if (parallel != 0 && group != 0)
+    else if (serial == 0 && parallel != 0 && group != 0)
         findNode(state, parallel)->groupNext = group;
-    else if (parallel == 0 && serial != 0 && group != 0
-             && ! appendContinuation(state, serial, group))
+    else if (serial != 0 && group != 0 && ! appendContinuation(state, serial, group))
         return false;
     if (state.entryInstanceId == id)
         state.entryInstanceId = replacement;
@@ -317,7 +465,7 @@ bool hasCurrentProcessorStates(const juce::ValueTree& tree)
         if (! item.hasType("instance") || id <= 0 || id == topology.rootInstanceId
             || ! seen.insert(id).second
             || std::none_of(topology.nodes.begin(), topology.nodes.end(),
-                            [id] (const auto& node) { return node.id == id; }))
+                            [id] (const auto& node) { return node.id == id && ! node.container; }))
             return false;
         juce::MemoryBlock binary;
         if (! binary.fromBase64Encoding(item.getProperty("state").toString())
@@ -347,12 +495,6 @@ juce::String getDisplayName(const State& state, const int instanceId)
     if (const auto custom = state.names.find(instanceId); custom != state.names.end())
         return custom->second;
 
-    const auto root = std::find_if(state.nodes.begin(), state.nodes.end(),
-                                   [&state] (const auto& node) { return node.id == state.rootInstanceId; });
-    auto rootInParallel = root != state.nodes.end() && root->parallelNext != 0;
-    for (const auto& node : state.nodes)
-        rootInParallel = rootInParallel || node.parallelNext == state.rootInstanceId;
-
     std::vector<int> ids;
     for (const auto& node : state.nodes)
         ids.push_back(node.id);
@@ -361,19 +503,100 @@ juce::String getDisplayName(const State& state, const int instanceId)
     auto number = 1;
     for (const auto id : ids)
     {
-        if (id == state.rootInstanceId && ! rootInParallel)
-        {
-            if (id == instanceId)
-                return "ROOT";
-        }
-        else
-        {
-            const auto name = "INS-" + juce::String(number++);
-            if (id == instanceId)
-                return name;
-        }
+        const auto name = "INS-" + juce::String(number++);
+        if (id == instanceId)
+            return name;
     }
     return {};
+}
+
+// Extend an existing parallel group; create a stage only for a lone instance.
+static bool attachParallelAtInstance(State& state, const int id, const int targetId, const bool before)
+{
+    auto* target = findNode(state, targetId);
+    auto* source = findNode(state, id);
+    if (target == nullptr || source == nullptr || target->container || source->container || id == targetId)
+        return false;
+    auto groupHead = targetId;
+    for (;;)
+    {
+        const auto parent = std::find_if(state.nodes.begin(), state.nodes.end(),
+            [groupHead](const auto& node) { return node.parallelNext == groupHead; });
+        if (parent == state.nodes.end()) break;
+        groupHead = parent->id;
+    }
+    auto alreadyGrouped = findNode(state, groupHead)->parallelNext != 0;
+    for (auto* member = findNode(state, groupHead); member != nullptr; member = findNode(state, member->parallelNext))
+        if (member->container) alreadyGrouped = false;
+    if (alreadyGrouped)
+    {
+        if (before) return attachBefore(state, id, targetId, true);
+        source->parallelNext = target->parallelNext;
+        target->parallelNext = id;
+        return true;
+    }
+    const auto continuation = target->serialNext;
+    const auto siblings = target->parallelNext;
+    const auto commonContinuation = target->groupNext;
+    int wrapperId = std::numeric_limits<int>::max();
+    while (findNode(state, wrapperId) != nullptr) --wrapperId;
+    replaceIncoming(state, targetId, wrapperId);
+    target->serialNext = 0;
+    target->parallelNext = before ? 0 : id;
+    target->groupNext = before ? 0 : continuation;
+    source->parallelNext = before ? targetId : 0;
+    source->groupNext = before ? continuation : 0;
+    state.nodes.push_back({ wrapperId, before ? id : targetId, siblings, commonContinuation, true });
+    return true;
+}
+
+static bool insertParallelAtInstance(juce::ValueTree& tree, const int targetId, const bool before)
+{
+    State state;
+    if (! decode(tree, state) || ! canAdd(state)) return false;
+    const auto id = state.nextInstanceId++;
+    state.nodes.push_back({ id, 0, 0, 0 });
+    if (! attachParallelAtInstance(state, id, targetId, before)) return false;
+    auto candidate = tree.createCopy();
+    write(candidate, state);
+    if (! isCurrentState(candidate)) return false;
+    write(tree, state);
+    return true;
+}
+
+static bool moveParallelAtInstance(juce::ValueTree& tree, const int id, const int targetId, const bool before)
+{
+    State state;
+    if (id == targetId || ! decode(tree, state) || ! detachForMove(state, id)
+        || ! attachParallelAtInstance(state, id, targetId, before)) return false;
+    auto candidate = tree.createCopy();
+    write(candidate, state);
+    if (! isCurrentState(candidate)) return false;
+    write(tree, state);
+    return true;
+}
+
+static bool insertInstanceBefore(juce::ValueTree& tree, const int targetId, const bool parallel)
+{
+    State state;
+    if (! decode(tree, state) || ! canAdd(state) || findNode(state, targetId) == nullptr)
+        return false;
+    const auto id = state.nextInstanceId++;
+    state.nodes.push_back({ id, 0, 0, 0 });
+    if (! attachBefore(state, id, targetId, parallel))
+        return false;
+    write(tree, state);
+    return true;
+}
+
+bool insertSerialInstanceBefore(juce::ValueTree& tree, const int targetId)
+{
+    return insertInstanceBefore(tree, targetId, false);
+}
+
+bool insertParallelInstanceBefore(juce::ValueTree& tree, const int targetId)
+{
+    return insertParallelAtInstance(tree, targetId, true);
 }
 
 bool insertSerialInstance(juce::ValueTree& tree, const int afterInstanceId)
@@ -394,18 +617,64 @@ bool insertSerialInstance(juce::ValueTree& tree, const int afterInstanceId)
 
 bool insertParallelInstance(juce::ValueTree& tree, const int targetInstanceId)
 {
+    return insertParallelAtInstance(tree, targetInstanceId, false);
+}
+
+bool insertInstanceBeforeGroup(juce::ValueTree& tree, const int firstId)
+{
     State state;
-    if (! decode(tree, state) || ! canAdd(state))
-        return false;
-    auto* target = findNode(state, targetInstanceId);
-    if (target == nullptr)
+    if (! decode(tree, state) || ! canAdd(state) || findNode(state, firstId) == nullptr)
         return false;
     const auto id = state.nextInstanceId++;
-    const auto previousNext = target->parallelNext;
-    target->parallelNext = id;
-    state.nodes.push_back({ id, 0, previousNext });
+    state.nodes.push_back({ id, 0, 0, 0 });
+    if (! attachBefore(state, id, firstId, false, true))
+        return false;
     write(tree, state);
     return true;
+}
+
+static bool moveInstanceAtGroup(juce::ValueTree& tree, const int id, int firstId, const bool before)
+{
+    State state;
+    if (! decode(tree, state) || findNode(state, firstId) == nullptr || findNode(state, id) == nullptr)
+        return false;
+    if (id == firstId)
+    {
+        const auto* first = findNode(state, firstId);
+        firstId = first->serialNext != 0 ? first->serialNext : first->parallelNext;
+        if (firstId == 0)
+            return false;
+    }
+    if (! detachForMove(state, id))
+        return false;
+    if (before)
+    {
+        if (! attachBefore(state, id, firstId, false, true))
+            return false;
+    }
+    else
+    {
+        auto* first = findNode(state, firstId);
+        auto* source = findNode(state, id);
+        source->serialNext = first->groupNext;
+        first->groupNext = id;
+    }
+    auto candidate = tree.createCopy();
+    write(candidate, state);
+    if (! isCurrentState(candidate))
+        return false;
+    write(tree, state);
+    return true;
+}
+
+bool moveInstanceBeforeGroup(juce::ValueTree& tree, const int id, const int firstId)
+{
+    return moveInstanceAtGroup(tree, id, firstId, true);
+}
+
+bool moveInstanceAfterGroup(juce::ValueTree& tree, const int id, const int firstId)
+{
+    return moveInstanceAtGroup(tree, id, firstId, false);
 }
 
 bool insertInstanceAfterGroup(juce::ValueTree& tree, const int groupFirstInstanceId)
@@ -430,13 +699,67 @@ bool insertInstanceAfterGroup(juce::ValueTree& tree, const int groupFirstInstanc
     return true;
 }
 
+// A structural branch keeps the existing group intact inside an outer parallel group.
+static bool attachParallelOutsideGroup(State& state, const int id, const int firstId, const bool before)
+{
+    auto* first = findNode(state, firstId);
+    if (first == nullptr || id == firstId
+        || std::any_of(state.nodes.begin(), state.nodes.end(),
+            [firstId](const auto& node) { return node.parallelNext == firstId; })) return false;
+    const auto continuation = first->groupNext;
+    first->groupNext = 0;
+    int wrapperId = std::numeric_limits<int>::max();
+    while (findNode(state, wrapperId) != nullptr) --wrapperId;
+    replaceIncoming(state, firstId, before ? id : wrapperId);
+    state.nodes.push_back({ wrapperId, firstId, before ? 0 : id, before ? 0 : continuation, true });
+    auto* source = findNode(state, id);
+    if (before)
+    {
+        source->parallelNext = wrapperId;
+        source->groupNext = continuation;
+    }
+    return true;
+}
+
+bool insertParallelOutsideGroup(juce::ValueTree& tree, const int firstId, const bool before)
+{
+    State state;
+    if (! decode(tree, state) || ! canAdd(state)) return false;
+    const auto id = state.nextInstanceId++;
+    state.nodes.push_back({ id, 0, 0, 0 });
+    if (! attachParallelOutsideGroup(state, id, firstId, before)) return false;
+    auto candidate = tree.createCopy();
+    write(candidate, state);
+    if (! isCurrentState(candidate)) return false;
+    write(tree, state);
+    return true;
+}
+
+bool moveParallelOutsideGroup(juce::ValueTree& tree, const int id, int firstId, const bool before)
+{
+    State state;
+    if (! decode(tree, state) || findNode(state, id) == nullptr || findNode(state, firstId) == nullptr) return false;
+    if (id == firstId)
+    {
+        const auto* first = findNode(state, firstId);
+        firstId = first->serialNext != 0 ? first->serialNext : first->parallelNext;
+        if (firstId == 0) return false;
+    }
+    if (! detachForMove(state, id) || ! attachParallelOutsideGroup(state, id, firstId, before)) return false;
+    auto candidate = tree.createCopy();
+    write(candidate, state);
+    if (! isCurrentState(candidate)) return false;
+    write(tree, state);
+    return true;
+}
+
 bool removeInstance(juce::ValueTree& tree, const int instanceId)
 {
     State state;
-    if (! decode(tree, state) || state.nodes.size() <= 1)
+    if (! decode(tree, state) || getInstanceCount(state) <= 1)
         return false;
     const auto* source = findNode(state, instanceId);
-    if (source == nullptr)
+    if (source == nullptr || source->container)
         return false;
     const auto serial = source->serialNext;
     const auto parallel = source->parallelNext;
@@ -480,43 +803,70 @@ bool removeInstance(juce::ValueTree& tree, const int instanceId)
                       state.nodes.end());
     state.names.erase(instanceId);
     if (state.rootInstanceId == instanceId)
+    {
         state.rootInstanceId = state.entryInstanceId;
+        state.rootBypassed = false;
+    }
     write(tree, state);
     return true;
+}
+
+static bool moveInstanceLink(juce::ValueTree& tree,
+                             const int instanceId,
+                             const int targetInstanceId,
+                             int State::Node::* link)
+{
+    if (instanceId == targetInstanceId)
+        return false;
+    State state;
+    if (! decode(tree, state) || ! detachForMove(state, instanceId))
+        return false;
+    auto* source = findNode(state, instanceId);
+    auto* target = findNode(state, targetInstanceId);
+    if (source == nullptr || target == nullptr)
+        return false;
+    source->*link = target->*link;
+    target->*link = instanceId;
+    auto candidate = tree.createCopy();
+    write(candidate, state);
+    if (! isCurrentState(candidate))
+        return false;
+    write(tree, state);
+    return true;
+}
+
+static bool moveInstanceBefore(juce::ValueTree& tree, const int instanceId, const int targetId, const bool parallel)
+{
+    State state;
+    if (instanceId == targetId || ! decode(tree, state) || findNode(state, targetId) == nullptr
+        || ! detachForMove(state, instanceId) || ! attachBefore(state, instanceId, targetId, parallel))
+        return false;
+    auto candidate = tree.createCopy();
+    write(candidate, state);
+    if (! isCurrentState(candidate))
+        return false;
+    write(tree, state);
+    return true;
+}
+
+bool moveInstanceSerialBefore(juce::ValueTree& tree, const int instanceId, const int targetId)
+{
+    return moveInstanceBefore(tree, instanceId, targetId, false);
+}
+
+bool moveInstanceParallelBefore(juce::ValueTree& tree, const int instanceId, const int targetId)
+{
+    return moveParallelAtInstance(tree, instanceId, targetId, true);
 }
 
 bool moveInstanceSerialAfter(juce::ValueTree& tree, const int instanceId, const int targetInstanceId)
 {
-    if (instanceId == targetInstanceId)
-        return false;
-    State state;
-    if (! decode(tree, state) || ! detachForMove(state, instanceId))
-        return false;
-    auto* source = findNode(state, instanceId);
-    auto* target = findNode(state, targetInstanceId);
-    if (source == nullptr || target == nullptr)
-        return false;
-    source->serialNext = target->serialNext;
-    target->serialNext = instanceId;
-    write(tree, state);
-    return true;
+    return moveInstanceLink(tree, instanceId, targetInstanceId, &State::Node::serialNext);
 }
 
 bool moveInstanceParallelTo(juce::ValueTree& tree, const int instanceId, const int targetInstanceId)
 {
-    if (instanceId == targetInstanceId)
-        return false;
-    State state;
-    if (! decode(tree, state) || ! detachForMove(state, instanceId))
-        return false;
-    auto* source = findNode(state, instanceId);
-    auto* target = findNode(state, targetInstanceId);
-    if (source == nullptr || target == nullptr)
-        return false;
-    source->parallelNext = target->parallelNext;
-    target->parallelNext = instanceId;
-    write(tree, state);
-    return true;
+    return moveParallelAtInstance(tree, instanceId, targetInstanceId, false);
 }
 
 bool renameInstance(juce::ValueTree& tree, const int instanceId, const juce::String& name)
@@ -525,12 +875,13 @@ bool renameInstance(juce::ValueTree& tree, const int instanceId, const juce::Str
     if (! decode(tree, state) || findNode(state, instanceId) == nullptr)
         return false;
     const auto normalized = name.trim().toUpperCase();
+    if (normalized == getDisplayName(state, instanceId))
+        return true;
     if (! isValidOscInstanceName(normalized))
         return false;
-    if (normalized == "ROOT"
-        || (normalized.startsWith("INS-")
+    if (normalized.startsWith("INS-")
             && normalized.substring(4).isNotEmpty()
-            && normalized.substring(4).containsOnly("0123456789")))
+            && normalized.substring(4).containsOnly("0123456789"))
         return false;
     for (const auto& node : state.nodes)
         if (node.id != instanceId && getDisplayName(state, node.id) == normalized)

@@ -1,6 +1,6 @@
 #include "Editor.h"
 #include "FilterSection.h"
-#include "WindowState.h"
+#include "EditorPreferences.h"
 
 void AvaAudioProcessorEditor::captureCurrentABState()
 {

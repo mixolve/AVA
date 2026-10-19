@@ -1,14 +1,12 @@
 #include "Editor.h"
 #include "Controls.h"
 #include "FilterSection.h"
-#include "PresetSections.h"
+#include "PresetSection.h"
 #include "FilterOrderState.h"
-#include "../crossover/Component.h"
+#include "../crossover/Editor.h"
 #include "../modules/dyn/Processor.h"
 #include "../modules/eql/Processor.h"
-#include "../modules/fft/Processor.h"
 #include "../modules/tls/Processor.h"
-#include "../modules/trs/Processor.h"
 
 #include <algorithm>
 #include <utility>
@@ -28,26 +26,24 @@ void AvaAudioProcessorEditor::showModulePicker()
     anchorBounds.setSize(juce::jmax(120, anchorBounds.getWidth()), anchorBounds.getHeight());
     anchorBounds.setCentre(getLocalArea(moduleAddButton.get(), moduleAddButton->getLocalBounds()).getCentre());
 
+    juce::StringArray moduleNames;
+    for (const auto module : AvaAudioProcessor::availableModules)
+        moduleNames.add(juce::String(AvaAudioProcessor::stateIdForModule(module)).toUpperCase());
+
     showChoicePrompt(anchorBounds,
-                     { "TLS", "EQL", "FFT", "DYN", "TRS" },
+                     moduleNames,
                      -1,
-                     { canLoadModule, canLoadModule, canLoadModule, canLoadModule, canLoadModule },
+                     std::vector<bool>(AvaAudioProcessor::availableModules.size(), true),
                      juce::Justification::centred,
                        [safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)] (const int selectedIndex)
                        {
-                           static constexpr std::array moduleOrder {
-                               AvaAudioProcessor::ActiveModule::tls,
-                               AvaAudioProcessor::ActiveModule::eql,
-                               AvaAudioProcessor::ActiveModule::fft,
-                               AvaAudioProcessor::ActiveModule::dyn,
-                               AvaAudioProcessor::ActiveModule::trs
-                           };
+                           const auto& moduleOrder = AvaAudioProcessor::availableModules;
 
                            if (safeEditor != nullptr && juce::isPositiveAndBelow(selectedIndex, static_cast<int>(moduleOrder.size())))
                                safeEditor->loadModule(moduleOrder[static_cast<size_t>(selectedIndex)]);
                        },
                      {},
-                     {});
+                     {},true);
 }
 
 void AvaAudioProcessorEditor::closeActiveModule()
@@ -55,10 +51,7 @@ void AvaAudioProcessorEditor::closeActiveModule()
     if (audioProcessor.getActiveModule() == AvaAudioProcessor::ActiveModule::none)
         return;
 
-    hostSlotMoveSourceIndex = -1;
-    for (const auto& field : hostSlotNameFields)
-        if (field != nullptr)
-            field->setDragTargetOutlineVisible(false);
+    cancelHostSlotMove();
 
     std::vector<juce::String> closingModuleParameterIds;
     const auto collectParameterIds = [&closingModuleParameterIds] (const auto* processor)
@@ -78,10 +71,8 @@ void AvaAudioProcessorEditor::closeActiveModule()
     switch (audioProcessor.getActiveModule())
     {
         case AvaAudioProcessor::ActiveModule::eql: collectParameterIds(audioProcessor.getEqlModuleProcessor()); break;
-        case AvaAudioProcessor::ActiveModule::fft: collectParameterIds(audioProcessor.getFftModuleProcessor()); break;
         case AvaAudioProcessor::ActiveModule::tls: collectParameterIds(audioProcessor.getTlsModuleProcessor()); break;
         case AvaAudioProcessor::ActiveModule::dyn: collectParameterIds(audioProcessor.getDynModuleProcessor()); break;
-        case AvaAudioProcessor::ActiveModule::trs: collectParameterIds(audioProcessor.getTrsModuleProcessor()); break;
         case AvaAudioProcessor::ActiveModule::none: break;
     }
 
@@ -118,12 +109,11 @@ void AvaAudioProcessorEditor::closeActiveModule()
     };
 
     hideComponent(addFilterButton.get());
-    hideComponent(sortPlaceButton.get());
-    hideComponent(sortFreqButton.get());
-    hideComponent(sortDuoButton.get());
+    hideComponent(sortFiltersButton.get());
 
     if (presetsSection != nullptr)
     {
+        hideComponent(presetsSection->actionsToggleButton.get());
         hideComponent(&presetsSection->presetCombo);
         hideComponent(presetsSection->addButton.get());
         hideComponent(presetsSection->saveButton.get());
@@ -140,7 +130,6 @@ void AvaAudioProcessorEditor::closeActiveModule()
         section->expanded = false;
         hideComponent(section->header.get());
         hideComponent(section->typeControl.get());
-        hideComponent(section->placeControl.get());
         hideComponent(section->orderControl.get());
         hideComponent(section->frequencyControl.get());
         hideComponent(section->bandwidthControl.get());
@@ -154,6 +143,8 @@ void AvaAudioProcessorEditor::closeActiveModule()
     storeEditorStateToValueTree();
     updateSectionStates();
     resized();
+    if (moduleAddButton != nullptr)
+        moduleAddButton->inheritHover(moduleAddButton->getLocalBounds().contains(moduleAddButton->getMouseXYRelative()));
     scheduleHistorySnapshot();
 }
 
@@ -168,13 +159,6 @@ void AvaAudioProcessorEditor::loadModule(const AvaAudioProcessor::ActiveModule m
 
     if (module == AvaAudioProcessor::ActiveModule::eql)
     {
-        if (presetsSection != nullptr)
-        {
-            presetsSection->filterActionsExpanded = true;
-            presetsSection->actionsExpanded = false;
-            presetsSection->filterActionsToggleButton->setToggleState(true, juce::dontSendNotification);
-            presetsSection->actionsToggleButton->setToggleState(false, juce::dontSendNotification);
-        }
         filterDisplayOrder = shell_filter_order_state::makeIdentity(EqlModuleProcessor::maxFilterCount);
         enforceSingleExpandedFilterSection();
         storeFilterDisplayOrderToValueTree();
@@ -185,6 +169,8 @@ void AvaAudioProcessorEditor::loadModule(const AvaAudioProcessor::ActiveModule m
     storeEditorStateToValueTree();
     updateSectionStates();
     resized();
+    if (moduleTitle != nullptr)
+        moduleTitle->inheritHover(moduleTitle->getLocalBounds().contains(moduleTitle->getMouseXYRelative()));
     scheduleHistorySnapshot();
 }
 
@@ -192,22 +178,18 @@ void AvaAudioProcessorEditor::ensureModuleTitle()
 {
     if (moduleTitle == nullptr)
     {
-        moduleTitle = std::make_unique<BoxTextButton>(uiGrey500);
+        moduleTitle = std::make_unique<BoxTextButton>(uiGreyLight);
         moduleTitle->getProperties().set(juce::Identifier("oscParameterId"),
                                          AvaAudioProcessor::oscCloseModuleId);
         moduleTitle->setTextJustification(juce::Justification::centred);
-        moduleTitle->setAlwaysAccentOutline(false);
-        moduleTitle->setToggleAccentVisible(false);
+        moduleTitle->setActiveFill(false);
+        moduleTitle->setToggleActiveFillEnabled(false);
         moduleTitle->setLongPressPromptActions([this]
         {
-            juce::MessageManager::callAsync([safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
-            {
-                if (safeEditor == nullptr)
-                    return;
-
-                safeEditor->closeActiveModule();
-                clearKeyboardFocus(*safeEditor);
-            });
+            // The shell owns this button across module replacement. Complete
+            // replacement in the same event, without painting the old title first.
+            closeActiveModule();
+            clearKeyboardFocus(*this);
         });
         moduleTitle->setLongPressPrimaryPromptIcon("x");
         addChildComponent(*moduleTitle);

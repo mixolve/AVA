@@ -34,5 +34,6 @@ juce::Image loadTablerIcon(const juce::String& iconName, const float pointSize)
     juce::Graphics graphics(image);
     drawable->drawWithin(graphics, image.getBounds().toFloat(),
                          juce::RectanglePlacement::centred, 1.0f);
+    image.getProperties()->set("ava-source-svg", juce::String::fromUTF8(data, dataSize));
     return image;
 }

@@ -4,24 +4,6 @@
 #include <cmath>
 #include <limits>
 
-int getEditorInsetX(const int width)
-{
-    juce::ignoreUnused(width);
-    return uiGap;
-}
-
-int getEditorInsetTop(const int height)
-{
-    juce::ignoreUnused(height);
-    return uiGap;
-}
-
-int getEditorInsetBottom(const int height)
-{
-    juce::ignoreUnused(height);
-    return uiGap;
-}
-
 bool isMouseHovering(const juce::Component& component) noexcept
 {
     const auto& desktop = juce::Desktop::getInstance();
@@ -31,8 +13,10 @@ bool isMouseHovering(const juce::Component& component) noexcept
 
     for (const auto& source : desktop.getMouseSources())
     {
-        const auto* target = source.getComponentUnderMouse();
-        if (source.isMouse() && (target == &component || (target != nullptr && component.isParentOf(target))))
+        if (! source.isMouse()) continue;
+        // JUCE's cached target is updated by a later synthetic mouse event after
+        // replacing/hiding a control. Hit-test the current tree for the first paint.
+        if (const_cast<juce::Component&>(component).reallyContains(component.getLocalPoint(nullptr, source.getScreenPosition()), true))
             return true;
     }
 
@@ -76,58 +60,78 @@ bool drawLoopingText(juce::Graphics& graphics,
                      const juce::String& text,
                      const juce::Rectangle<int>& bounds,
                      const juce::Font& font,
-                     const juce::Justification justification)
+                     const juce::Justification justification,
+                     const double elapsedSeconds,
+                     const float verticalOffset)
 {
     if (text.isEmpty() || bounds.isEmpty())
         return false;
 
+    const auto drawText = [&](const juce::String& value, juce::Rectangle<float> area,
+                              juce::Justification alignment)
+    {
+        if (verticalOffset == 0.0f)
+        {
+            graphics.drawText(value, area, alignment, false);
+            return;
+        }
+        // Cached raster glyphs snap their baseline to whole pixels. Use the
+        // same font outlines for optically centred readouts, so a fractional
+        // vertical correction survives rasterisation.
+        juce::GlyphArrangement glyphs;
+        glyphs.addCurtailedLineOfText(font, value, 0.0f, 0.0f, area.getWidth(), false);
+        glyphs.justifyGlyphs(0, glyphs.getNumGlyphs(), area.getX(), area.getY(),
+                            area.getWidth(), area.getHeight(), alignment);
+        juce::Path outlines;
+        glyphs.createPath(outlines);
+        graphics.fillPath(outlines, juce::AffineTransform::translation(0.0f, verticalOffset));
+    };
     const auto textWidth = static_cast<float>(getTextPixelWidth(font, text));
 
     if (textWidth <= static_cast<float>(bounds.getWidth()))
     {
-        graphics.drawText(text, bounds, justification, false);
+        drawText(text, bounds.toFloat(), justification);
         return false;
     }
 
     constexpr auto pixelsPerSecond = 32.0f;
-    const auto loopText = text + " : ";
+    const auto loopText = text + " :: ";
     const auto loopWidth = static_cast<float>(getTextPixelWidth(font, loopText));
-    const auto elapsedSeconds = static_cast<float>(juce::Time::getMillisecondCounterHiRes() * 0.001);
-    const auto offset = std::fmod(elapsedSeconds * pixelsPerSecond, loopWidth);
+    const auto elapsed = static_cast<float>(elapsedSeconds >= 0.0
+        ? elapsedSeconds : juce::Time::getMillisecondCounterHiRes() * 0.001);
+    const auto offset = std::fmod(elapsed * pixelsPerSecond, loopWidth);
     const auto textY = static_cast<float>(bounds.getY());
     const auto textHeight = static_cast<float>(bounds.getHeight());
     const auto firstX = static_cast<float>(bounds.getX()) - offset;
 
     graphics.saveState();
     graphics.reduceClipRegion(bounds);
-    graphics.drawText(loopText,
-                      juce::Rectangle<float>(firstX, textY, loopWidth + 1.0f, textHeight),
-                      juce::Justification::centredLeft,
-                      false);
-    graphics.drawText(loopText,
-                      juce::Rectangle<float>(firstX + loopWidth, textY, loopWidth + 1.0f, textHeight),
-                      juce::Justification::centredLeft,
-                      false);
+    drawText(loopText, {firstX, textY, loopWidth + 1.0f, textHeight}, juce::Justification::centredLeft);
+    drawText(loopText, {firstX + loopWidth, textY, loopWidth + 1.0f, textHeight}, juce::Justification::centredLeft);
     graphics.restoreState();
     return true;
 }
 
-juce::String formatFixedDecimalValue(const double value, const int decimalPlaces)
+void scheduleMarqueeRepaint(juce::Component& component, bool& pending)
 {
-    const auto places = juce::jmax(0, decimalPlaces);
-    const auto scale = std::pow(10.0, static_cast<double>(places));
-    auto roundedValue = std::round(value * scale) / scale;
+    if (pending || ! component.isShowing())
+        return;
 
-    if (std::abs(roundedValue) < (0.5 / scale))
-        roundedValue = 0.0;
+    pending = true;
+    juce::Timer::callAfterDelay(16, [safeComponent = juce::Component::SafePointer<juce::Component>(&component), &pending]
+    {
+        if (safeComponent == nullptr)
+            return;
 
-    return juce::String(roundedValue, places);
+        pending = false;
+        safeComponent->repaint();
+    });
 }
 
 juce::Colour getDisplayTextColour(const juce::String& text)
 {
     return text.equalsIgnoreCase("OFF") || text.equalsIgnoreCase("LR")
-        ? uiGrey500
+        ? uiGreyLight
         : uiWhite;
 }
 

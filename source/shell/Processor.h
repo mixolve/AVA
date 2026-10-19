@@ -7,15 +7,14 @@
 #include <memory>
 
 #include "../crossover/BufferRouter.h"
+#include "../modules/shared/ChannelRouting.h"
 #include "OscSettings.h"
+#include "HostTrackContext.h"
 
-class FftModuleProcessor;
 class EqlModuleProcessor;
-class FftProcessorBank;
 class EqlProcessorBank;
 class TlsModuleProcessor;
 class DynModuleProcessor;
-class TrsModuleProcessor;
 class OscController;
 class AvaAudioProcessorEditor;
 namespace ava::routing { class Runtime; }
@@ -42,18 +41,14 @@ public:
     inline static constexpr auto paramHostSlotPrefix = "host_slot_";
     inline static constexpr auto activeModuleStateKey = "ava.active_module";
     inline static constexpr auto eqlModuleStateKey = "ava.eql_state";
-    inline static constexpr auto fftModuleStateKey = "ava.fft_state";
     inline static constexpr auto tlsModuleStateKey = "ava.tls_state";
     inline static constexpr auto dynModuleStateKey = "ava.dyn_state";
-    inline static constexpr auto trsModuleStateKey = "ava.trs_state";
     inline static constexpr auto abCompareSnapshotAStateKey = "ava.ab_compare.a";
     inline static constexpr auto abCompareSnapshotBStateKey = "ava.ab_compare.b";
     inline static constexpr auto abCompareActiveSlotStateKey = "ava.ab_compare.active";
     inline static constexpr auto eqlModuleId = "eql";
-    inline static constexpr auto fftModuleId = "fft";
     inline static constexpr auto tlsModuleId = "tls";
     inline static constexpr auto dynModuleId = "dyn";
-    inline static constexpr auto trsModuleId = "trs";
     inline static constexpr auto editorWidthStateKey = "ava.editor.width";
     inline static constexpr auto editorHeightStateKey = "ava.editor.height";
     inline static constexpr auto editorHostParametersExpandedStateKey = "ava.editor.host_parameters_expanded";
@@ -62,17 +57,27 @@ public:
     inline static constexpr auto oscInputPortStateKey = "ava.osc.input_port";
     inline static constexpr auto oscOutputHostStateKey = "ava.osc.output_host";
     inline static constexpr auto oscOutputPortStateKey = "ava.osc.output_port";
-    inline static constexpr auto oscInstanceNameStateKey = "ava.osc.instance_name";
     static constexpr int hostAutomationSlotCount = 64;
+    static constexpr int routingChannelCount = ava::channels::count;
+    inline static constexpr auto paramProcessingInputId = "process-input";
+    inline static constexpr auto paramSoloInstanceId = "solo-ins";
+    inline static constexpr auto paramSoloChannelId = "solo-ch";
+    static juce::StringArray getProcessingInputChoices();
+    bool isProcessingInputAvailable(int choiceIndex) const;
+    std::array<int, 2> getProcessingInputChannels() const noexcept;
+    bool isInstanceSoloBypassed() const;
 
     enum class ActiveModule
     {
         none,
         tls,
         eql,
-        fft,
         dyn,
-        trs,
+    };
+    inline static constexpr std::array availableModules {
+        ActiveModule::tls,
+        ActiveModule::eql,
+        ActiveModule::dyn
     };
     explicit AvaAudioProcessor(bool routingInstance = false);
     ~AvaAudioProcessor() override;
@@ -86,6 +91,9 @@ public:
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
+    juce::VST3ClientExtensions* getVST3ClientExtensions() override;
+    void updateTrackProperties(const TrackProperties&) override;
+    HostTrackContext::Location refreshHostTrackName();
 
     const juce::String getName() const override;
 
@@ -136,16 +144,10 @@ public:
     const EqlProcessorBank* getEqlProcessorBank() const noexcept;
     void setSelectedCrossoverRange(size_t rangeIndex);
     size_t getSelectedCrossoverRange() const noexcept;
-    FftModuleProcessor* getFftModuleProcessor() noexcept;
-    const FftModuleProcessor* getFftModuleProcessor() const noexcept;
-    FftProcessorBank* getFftProcessorBank() noexcept;
-    const FftProcessorBank* getFftProcessorBank() const noexcept;
     TlsModuleProcessor* getTlsModuleProcessor() noexcept;
     const TlsModuleProcessor* getTlsModuleProcessor() const noexcept;
     DynModuleProcessor* getDynModuleProcessor() noexcept;
     const DynModuleProcessor* getDynModuleProcessor() const noexcept;
-    TrsModuleProcessor* getTrsModuleProcessor() noexcept;
-    const TrsModuleProcessor* getTrsModuleProcessor() const noexcept;
     juce::Point<int> getLastEditorSize() const noexcept;
     void setLastEditorSize(int width, int height) noexcept;
     void notifyHostOfStateChange();
@@ -173,18 +175,19 @@ private:
     {
     public:
         explicit ScopedProcessingSuspend(AvaAudioProcessor& processorIn) noexcept
-            : processor(processorIn)
+            : processor(processorIn), wasSuspended(processorIn.isSuspended())
         {
             processor.suspendProcessing(true);
         }
 
         ~ScopedProcessingSuspend()
         {
-            processor.suspendProcessing(false);
+            processor.suspendProcessing(wasSuspended);
         }
 
     private:
         AvaAudioProcessor& processor;
+        const bool wasSuspended;
     };
 
     static constexpr size_t maxSupportedChannels = 2;
@@ -202,20 +205,32 @@ private:
     void registerActiveModuleStateListeners();
     void clearActiveModuleStateListeners();
     void writeStateInformation(juce::MemoryBlock& destData, bool includeABCompareState);
-    bool restoreStateInformation(const void* data, int sizeInBytes, bool includeABCompareState);
-    bool restoreStateInformationPreservingLoadedModule(const void* data,
-                                                       int sizeInBytes,
-                                                       bool includeABCompareState,
-                                                       bool suspendProcessingForRestore);
+    bool restoreStateInformation(const void* data, int sizeInBytes, bool includeABCompareState,
+                                 bool allowUnsuspendedRestore = false);
     void parameterChanged(const juce::String& parameterID, float newValue) override;
     void valueTreePropertyChanged(juce::ValueTree& treeWhosePropertyHasChanged,
                                   const juce::Identifier& property) override;
     void handleAsyncUpdate() override;
     void ensureActiveCrossoverRangeCount(size_t rangeCount);
-    void processOwnBlock(juce::AudioBuffer<float>&);
+    void processOwnBlock(juce::AudioBuffer<float>&, const juce::AudioBuffer<float>* routingInputs);
+    void processChannelBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&);
+    unsigned processOwnChannels(juce::AudioBuffer<float>&);
+    void delayUnselectedChannels(juce::AudioBuffer<float>&, unsigned selectedMask, int latency);
+    juce::AudioBuffer<float> routingChannels;
+    juce::AudioBuffer<float> selectedInputBuffer;
+    juce::AudioBuffer<float> routingInputSnapshot;
+    juce::AudioBuffer<float> unselectedDelay;
+    int unselectedDelayPosition = 0;
+    int unselectedLatency = 0;
+    unsigned lastProcessingMask = 0;
+    std::atomic<float>* processingInputParam = nullptr;
+    std::atomic<float>* soloInstanceParam = nullptr;
+    std::atomic<float>* soloChannelParam = nullptr;
+    std::atomic<bool> acceptedInstanceBypassed { false };
 
     juce::AudioProcessorValueTreeState parameters;
     std::unique_ptr<OscController> oscController;
+    HostTrackContext hostTrackContext;
     std::unique_ptr<ava::routing::Runtime> routingRuntime;
     AvaAudioProcessor* routingOwner = nullptr;
     AvaAudioProcessorEditor* oscActionEditor = nullptr;
@@ -230,16 +245,12 @@ private:
     std::atomic<float>* crossoverActiveSplitCountParam = nullptr;
     std::array<std::atomic<float>*, ava::crossover::BufferRouter::numSplits> crossoverSplitFrequencyParams {};
     std::array<std::atomic<float>*, ava::crossover::BufferRouter::numRanges> crossoverSoloParams {};
-    std::array<std::atomic<float>*, 7> globalListenParams {};
-    std::atomic<float>* globalListenMsPlus3Param = nullptr;
     std::array<juce::String, hostAutomationSlotCount> hostSlotParameterIds {};
     std::array<std::atomic<juce::RangedAudioParameter*>, hostAutomationSlotCount> hostSlotTargets {};
     std::atomic<float> globalClipIndicator { 0.0f };
     std::unique_ptr<EqlProcessorBank> eqlProcessorBank;
-    std::unique_ptr<FftProcessorBank> fftProcessorBank;
     std::unique_ptr<TlsModuleProcessor> tlsModuleProcessor;
     std::unique_ptr<DynModuleProcessor> dynModuleProcessor;
-    std::unique_ptr<TrsModuleProcessor> trsModuleProcessor;
     std::atomic<ActiveModule> activeModule { ActiveModule::none };
     std::atomic<bool> processingPrepared { false };
     std::atomic<int> lastEditorWidth { 0 };

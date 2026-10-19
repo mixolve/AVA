@@ -1,11 +1,11 @@
 #include "Editor.h"
+#include "EditorStateSchema.h"
+#include "AnimationState.h"
 #include "FilterSection.h"
-#include "PresetSections.h"
-#include "SetupSupport.h"
+#include "PresetSection.h"
+#include "EditorSetup.h"
 #include "../modules/tls/Processor.h"
 #include "../modules/dyn/Processor.h"
-#include "../modules/fft/Processor.h"
-#include "../modules/trs/Processor.h"
 #include "../modules/eql/Processor.h"
 
 juce::RangedAudioParameter* AvaAudioProcessorEditor::findHostAssignableParameter(const juce::String& parameterId) const noexcept
@@ -29,10 +29,8 @@ juce::RangedAudioParameter* AvaAudioProcessorEditor::findHostAssignableParameter
     switch (audioProcessor.getActiveModule())
     {
         case AvaAudioProcessor::ActiveModule::eql: return findInModule(audioProcessor.getEqlModuleProcessor());
-        case AvaAudioProcessor::ActiveModule::fft: return findInModule(audioProcessor.getFftModuleProcessor());
         case AvaAudioProcessor::ActiveModule::tls: return findInModule(audioProcessor.getTlsModuleProcessor());
         case AvaAudioProcessor::ActiveModule::dyn: return findInModule(audioProcessor.getDynModuleProcessor());
-        case AvaAudioProcessor::ActiveModule::trs: return findInModule(audioProcessor.getTrsModuleProcessor());
         case AvaAudioProcessor::ActiveModule::none: break;
     }
 
@@ -57,60 +55,10 @@ void AvaAudioProcessorEditor::syncHostSlotAssignmentValue(const int slotIndex, c
 
 void AvaAudioProcessorEditor::parameterChanged(const juce::String& parameterID, float newValue)
 {
-    auto eqlPlaceFilterIndex = -1;
-
-    for (int filterIndex = 0; filterIndex < EqlModuleProcessor::maxFilterCount; ++filterIndex)
-    {
-        if (parameterID == EqlModuleProcessor::getFilterPlaceParamId(filterIndex))
-        {
-            eqlPlaceFilterIndex = filterIndex;
-            break;
-        }
-    }
-
-    if (eqlPlaceFilterIndex >= 0)
-    {
-        juce::MessageManager::callAsync([safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this),
-                                         eqlPlaceFilterIndex]
-        {
-            if (safeEditor == nullptr || ! safeEditor->eqlModuleLoaded)
-                return;
-
-            const auto displayIndex = safeEditor->getFilterOrderPositionForIndex(eqlPlaceFilterIndex);
-
-            if (! juce::isPositiveAndBelow(eqlPlaceFilterIndex,
-                                           static_cast<int>(safeEditor->filterSections.size()))
-                || displayIndex < 0)
-            {
-                return;
-            }
-
-            auto* section = safeEditor->filterSections[static_cast<size_t>(eqlPlaceFilterIndex)].get();
-            auto* processor = safeEditor->getActiveEqlProcessor();
-
-            if (section == nullptr || processor == nullptr || section->header == nullptr)
-                return;
-
-            section->header->setButtonText(processor->getFilterHeaderText(eqlPlaceFilterIndex, displayIndex));
-        });
-    }
-
-    if (parameterID == FftModuleProcessor::paramDynamicModeId)
-    {
-        juce::Component::SafePointer<AvaAudioProcessorEditor> safeEditor(this);
-        juce::MessageManager::callAsync([safeEditor]
-        {
-            if (safeEditor == nullptr)
-                return;
-
-            if (auto* processor = safeEditor->audioProcessor.getFftModuleProcessor())
-                safeEditor->refreshFftAnalyserControls(*processor);
-
-            safeEditor->updateSectionStates();
-            safeEditor->resized();
-            safeEditor->repaint();
-        });
-    }
+    if (parameterID.endsWith("_domain") || parameterID.endsWith("_mode"))
+        scheduleModuleControlsRefresh(true);
+    else if (parameterID.startsWith("filter-") && parameterID.endsWith("_phase"))
+        scheduleModuleControlsRefresh(false);
 
     if (! suppressHostSlotAutomationSync)
     {
@@ -149,24 +97,48 @@ void AvaAudioProcessorEditor::parameterChanged(const juce::String& parameterID, 
     scheduleHistorySnapshot();
 }
 
+void AvaAudioProcessorEditor::scheduleModuleControlsRefresh(const bool rebind)
+{
+    if (rebind)
+        moduleControlsRebindPending.store(true, std::memory_order_release);
+    if (moduleControlsRefreshPending.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    const auto scheduled = juce::MessageManager::callAsync(
+        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
+        {
+            if (safe == nullptr || ! safe->moduleControlsRefreshPending.exchange(false, std::memory_order_acq_rel))
+                return;
+            if (safe->moduleControlsRebindPending.exchange(false, std::memory_order_acq_rel))
+                safe->rebindActiveModuleEditors();
+            safe->updateSectionStates();
+            safe->resized();
+        });
+    if (! scheduled)
+        moduleControlsRefreshPending.store(false, std::memory_order_release);
+}
+
 void AvaAudioProcessorEditor::resyncEditorFromProcessorState()
 {
-    const auto eqlJustLoaded = ! eqlModuleLoaded
-        && audioProcessor.getActiveModule() == AvaAudioProcessor::ActiveModule::eql;
+    const juce::ScopedValueSetter<bool> restoreGuard(restoringEditorUiState, true);
+    const auto restoredInstance = static_cast<int>(valueTreeState.state.getProperty(shell_editor_ui::key("active_instance"), 0));
+    if (routingInstanceId == 0) loadAnimationSettings(*animationSettings, valueTreeState.state);
     restoreEditorStateFromValueTree();
-    if (eqlJustLoaded && presetsSection != nullptr)
-    {
-        presetsSection->filterActionsExpanded = true;
-        presetsSection->actionsExpanded = false;
-        presetsSection->filterActionsToggleButton->setToggleState(true, juce::dontSendNotification);
-        presetsSection->actionsToggleButton->setToggleState(false, juce::dontSendNotification);
-    }
     refreshModuleStateListeners();
     ensureModuleTitle();
     updateSectionStates();
-    syncFocusedParameterControl();
     resized();
     repaint();
+    if (routingInstanceId == 0)
+    {
+        if (restoredInstance != activeInstanceId)
+        {
+            closeRoutingInstance();
+            openRoutingInstance(restoredInstance);
+        }
+        else if (activeInstanceEditor != nullptr)
+            activeInstanceEditor->resyncEditorFromProcessorState();
+    }
 }
 
 void AvaAudioProcessorEditor::scheduleProcessorStateResync()
@@ -297,20 +269,12 @@ void AvaAudioProcessorEditor::refreshModuleStateListeners()
             observeModule(audioProcessor.getEqlModuleProcessor());
             break;
 
-        case AvaAudioProcessor::ActiveModule::fft:
-            observeModule(audioProcessor.getFftModuleProcessor());
-            break;
-
         case AvaAudioProcessor::ActiveModule::tls:
             observeModule(audioProcessor.getTlsModuleProcessor());
             break;
 
         case AvaAudioProcessor::ActiveModule::dyn:
             observeModule(audioProcessor.getDynModuleProcessor());
-            break;
-
-        case AvaAudioProcessor::ActiveModule::trs:
-            observeModule(audioProcessor.getTrsModuleProcessor());
             break;
 
         case AvaAudioProcessor::ActiveModule::none:
@@ -353,34 +317,6 @@ void AvaAudioProcessorEditor::detachModuleEditorBindings()
         if (section != nullptr)
             section->detach();
 
-    fftDeltaAttachment.reset();
-    fftDualMonoLinkAttachment.reset();
-
-    if (fftAttackControl != nullptr) fftAttackControl->detach();
-    if (fftReleaseControl != nullptr) fftReleaseControl->detach();
-    if (fftKneeControl != nullptr) fftKneeControl->detach();
-    if (fftRatioControl != nullptr) fftRatioControl->detach();
-    if (fftFloorControl != nullptr) fftFloorControl->detach();
-    if (fftDynamicModeControl != nullptr) fftDynamicModeControl->detach();
-    if (fftCorrelationTypeControl != nullptr) fftCorrelationTypeControl->detach();
-    if (fftDynamicDirectionControl != nullptr) fftDynamicDirectionControl->detach();
-    if (fftCorrelationSmoothingControl != nullptr) fftCorrelationSmoothingControl->detach();
-    if (fftDspFftSizeControl != nullptr) fftDspFftSizeControl->detach();
-    if (fftDspOverlapControl != nullptr) fftDspOverlapControl->detach();
-    if (fftDspSlopeControl != nullptr) fftDspSlopeControl->detach();
-    if (fftCorrelationImpactControl != nullptr) fftCorrelationImpactControl->detach();
-    if (fftDualMonoLeftThresholdControl != nullptr) fftDualMonoLeftThresholdControl->detach();
-    if (fftDualMonoLeftAdaptiveControl != nullptr) fftDualMonoLeftAdaptiveControl->detach();
-    if (fftDualMonoRightThresholdControl != nullptr) fftDualMonoRightThresholdControl->detach();
-    if (fftDualMonoRightAdaptiveControl != nullptr) fftDualMonoRightAdaptiveControl->detach();
-    if (fftAdaptiveOffsetControl != nullptr) fftAdaptiveOffsetControl->detach();
-    if (fftAdaptiveAttackControl != nullptr) fftAdaptiveAttackControl->detach();
-    if (fftAdaptiveHoldControl != nullptr) fftAdaptiveHoldControl->detach();
-    if (fftAdaptiveReleaseControl != nullptr) fftAdaptiveReleaseControl->detach();
-    if (fftDetectorLowCutControl != nullptr) fftDetectorLowCutControl->detach();
-    if (fftDetectorHighCutControl != nullptr) fftDetectorHighCutControl->detach();
-    shell_setup_support::removeOwnedChild(*this, fftAnalyserComponent);
     shell_setup_support::removeOwnedChild(*this, tlsModuleEditor);
     shell_setup_support::removeOwnedChild(*this, dynModuleEditor);
-    shell_setup_support::removeOwnedChild(*this, trsModuleEditor);
 }

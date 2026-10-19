@@ -24,11 +24,6 @@ bool isVolumeFilterType(const EqlModuleProcessor::FilterType type) noexcept
     return type == EqlModuleProcessor::FilterType::volume;
 }
 
-bool isPhasePlaceChoice(const int choiceIndex) noexcept
-{
-    return choiceIndex >= 5 && choiceIndex <= 7;
-}
-
 constexpr int brickwallBellOrder = 128;
 constexpr int brickwallShelfOrder = 128;
 constexpr int brickwallLowCutOrder = 64;

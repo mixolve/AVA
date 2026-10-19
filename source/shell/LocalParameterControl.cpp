@@ -1,6 +1,5 @@
 #include "LocalParameterControl.h"
-#include "ParameterControlSupport.h"
-
+#include "ParameterEditing.h"
 
 LocalParameterControl::LocalParameterControl(const juce::String& titleText,
                                              const int editorDecimalsIn,
@@ -19,27 +18,17 @@ LocalParameterControl::LocalParameterControl(const juce::String& titleText,
     setWantsKeyboardFocus(false);
     setMouseClickGrabsKeyboardFocus(false);
 
-    titleButton = std::make_unique<BoxTextButton>(parameter_control_support::titleFocusColour);
+    titleButton = std::make_unique<BoxTextButton>(uiAccent);
     titleButton->setButtonText(titleText);
     titleButton->setTextJustification(juce::Justification::centredLeft);
-    titleButton->setClearsParameterFocusOnMouseDown(false);
     titleButton->onClick = [this]
     {
-        if (parameter_control_support::isTitleButtonFocused(titleButton.get(), &slider))
-            return;
-
-        if (interactionEnabled)
-            parameter_control_support::focusTitleButton(titleButton.get(), &slider);
-        else
-            shell_parameter_focus::clearFocus(*this);
-
         clearKeyboardFocus(*this);
     };
     titleButton->setLongPressPromptActions([this]
     {
         if (! interactionEnabled)
         {
-            parameter_control_support::clearFocusedTitleButton(titleButton.get(), &slider);
             clearKeyboardFocus(*this);
             return;
         }
@@ -49,13 +38,7 @@ LocalParameterControl::LocalParameterControl(const juce::String& titleText,
     });
     titleButton->setLongPressPrimaryPromptIcon("refresh");
 
-    slider.setSliderStyle(juce::Slider::LinearHorizontal);
-    slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    slider.setInterceptsMouseClicks(false, false);
-    slider.setScrollWheelEnabled(false);
-    slider.setAlpha(0.0f);
-    slider.setWantsKeyboardFocus(false);
-    slider.setMouseClickGrabsKeyboardFocus(false);
+    parameter_control_support::configureHiddenSlider(slider);
 
     juce::NormalisableRange<double> range { minimum, maximum, interval };
     if (skewCentre > 0.0)
@@ -93,18 +76,11 @@ LocalParameterControl::LocalParameterControl(const juce::String& titleText,
     {
         return formatEditorValue();
     };
-    valueBox->onBeforeShowEditor = [this]
-    {
-        if (interactionEnabled)
-            parameter_control_support::focusTitleButton(titleButton.get(), &slider);
-        else
-            parameter_control_support::clearFocusedTitleButton(titleButton.get(), &slider);
-    };
     valueBox->textToValueParser = [this] (const juce::String& text)
     {
         return parseText(text);
     };
-    valueBox->setOutlineColour(uiGrey500);
+    valueBox->setOutlineColour(uiGreyLight);
 
     addAndMakeVisible(*titleButton);
     addChildComponent(slider);
@@ -116,11 +92,6 @@ int LocalParameterControl::getPreferredHeight() const noexcept
     return rowHeight;
 }
 
-LocalParameterControl::~LocalParameterControl()
-{
-    parameter_control_support::clearFocusedTitleButton(titleButton.get(), &slider);
-}
-
 double LocalParameterControl::getValue() const noexcept
 {
     return slider.getValue();
@@ -128,16 +99,7 @@ double LocalParameterControl::getValue() const noexcept
 
 void LocalParameterControl::setValue(const double value, const bool sendNotification)
 {
-    slider.setValue(value, sendNotification ? juce::sendNotificationSync
-                                            : juce::dontSendNotification);
-
-    if (valueBox != nullptr)
-        valueBox->repaint();
-
-    repaint();
-
-    if (auto* parent = getParentComponent())
-        parent->repaint();
+    parameter_control_support::applySliderValue(*this, slider, valueBox.get(), value, sendNotification);
 }
 
 void LocalParameterControl::setValueRange(const double minimum,
@@ -222,13 +184,10 @@ void LocalParameterControl::setInteractionEnabled(const bool shouldEnable)
 {
     interactionEnabled = shouldEnable;
 
-    if (! interactionEnabled)
-        parameter_control_support::clearFocusedTitleButton(titleButton.get(), &slider);
-
     if (titleButton != nullptr)
     {
         titleButton->setEnabled(shouldEnable);
-        titleButton->setPressFillEnabled(shouldEnable);
+        titleButton->setInteractionOutlineEnabled(shouldEnable);
     }
 
     if (valueBox != nullptr)
@@ -237,7 +196,7 @@ void LocalParameterControl::setInteractionEnabled(const bool shouldEnable)
 
 juce::Rectangle<int> LocalParameterControl::getValueBounds() const noexcept
 {
-    return valueBox != nullptr ? valueBox->getBounds() : juce::Rectangle<int>();
+    return parameter_control_support::getValueBoxBounds(valueBox);
 }
 
 void LocalParameterControl::resized()

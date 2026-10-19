@@ -2,10 +2,8 @@
 
 #include <cmath>
 
-void EqlModuleProcessor::resetFilters() noexcept
+void EqlModuleProcessor::resetFilterHistory() noexcept
 {
-    const juce::ScopedLock lock(filterProcessLock);
-
     for (auto& orderFilters : bellOrderFilters)
         for (auto& filter : orderFilters)
             filter.reset();
@@ -22,6 +20,13 @@ void EqlModuleProcessor::resetFilters() noexcept
 
     for (auto& filter : phaseFirFilters)
         filter.reset();
+}
+
+void EqlModuleProcessor::resetFilters() noexcept
+{
+    const juce::ScopedLock lock(filterProcessLock);
+
+    resetFilterHistory();
 
     for (auto& cachedState : cachedFilterStates)
         cachedState.valid = false;
@@ -124,6 +129,20 @@ void EqlModuleProcessor::updateFilters()
 
             storeFilterDesignState(filterArrayIndex, true, filterType, frequency, bandwidth, slope, 0.0f);
 
+            continue;
+        }
+
+        const auto phaseEnabled = filterPhaseParams[filterArrayIndex] != nullptr
+            && filterPhaseParams[filterArrayIndex]->load(std::memory_order_relaxed) >= 0.5f;
+        if (phaseEnabled)
+        {
+            if (! phaseFirFilters[filterArrayIndex].active
+                || ! filterDesignMatches(filterArrayIndex, true, filterType, frequency, cachedBandwidth, cachedSlope, gainDb))
+            {
+                updatePhaseFirFilter(phaseFirFilters[filterArrayIndex], filterType, designFrequency,
+                                     static_cast<double>(bandwidth), static_cast<double>(slope), static_cast<double>(gainDb));
+                storeFilterDesignState(filterArrayIndex, true, filterType, frequency, cachedBandwidth, cachedSlope, gainDb);
+            }
             continue;
         }
 

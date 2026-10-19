@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <vector>
+#include <type_traits>
 
 namespace ava::crossover
 {
@@ -107,11 +108,6 @@ public:
         clearAlignmentBuffers();
     }
 
-    int getLatencySamples() const noexcept
-    {
-        return targetLatencySamples;
-    }
-
     template <typename ProcessRange>
     void process(juce::AudioBuffer<float>& buffer, ProcessRange&& processRange)
     {
@@ -154,7 +150,10 @@ public:
                 juce::AudioBuffer<float> rangeView(rangeBuffers[rangeIndex].getArrayOfWritePointers(),
                                                    channelCount,
                                                    sampleCount);
-                processRange(rangeIndex, rangeView);
+                if constexpr (std::is_invocable_v<ProcessRange, size_t, juce::AudioBuffer<float>&, int>)
+                    processRange(rangeIndex, rangeView, blockStart);
+                else
+                    processRange(rangeIndex, rangeView);
             }
 
             for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex)

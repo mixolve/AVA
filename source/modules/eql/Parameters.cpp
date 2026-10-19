@@ -1,5 +1,5 @@
 #include "FilterSupport.h"
-#include "FilterParameters.h"
+#include "ParameterIds.h"
 
 #include <array>
 #include <memory>
@@ -15,7 +15,7 @@ struct ParameterOrderEntry
 
 inline constexpr auto eqlFilterOrder = std::to_array<ParameterOrderEntry>({
     { "type", "TYPE" },
-    { "place", "PLACE" },
+    { "phase", "PHASE" },
     { "order", "ORDER" },
     { "freq", "FREQ" },
     { "bw", "BW" },
@@ -44,14 +44,11 @@ void EqlModuleProcessor::appendEqlParameters(std::vector<std::unique_ptr<juce::R
                 continue;
             }
 
-            if (key == "place")
+            if (key == "phase")
             {
-                parameterLayout.push_back(std::make_unique<juce::AudioParameterChoice>(
-                    juce::ParameterID { getFilterPlaceParamId(filterIndex), 1 },
-                    name,
-                    filterPlaceChoices,
-                    0,
-                    juce::AudioParameterChoiceAttributes()));
+                parameterLayout.push_back(std::make_unique<juce::AudioParameterBool>(
+                    juce::ParameterID { getFilterPhaseParamId(filterIndex), 1 }, name, false,
+                    juce::AudioParameterBoolAttributes()));
                 continue;
             }
 

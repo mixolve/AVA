@@ -2,7 +2,7 @@
 
 static bool writeXmlToFile(const juce::XmlElement& element, const juce::File& file);
 
-static juce::File getDocumentsPresetStorageDirectory()
+static juce::File getFilterPresetsDirectory()
 {
     auto directory = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
                          .getChildFile(presetStorageVendorFolder)
@@ -12,13 +12,6 @@ static juce::File getDocumentsPresetStorageDirectory()
                          .getChildFile(presetStorageRootFolder);
     directory.createDirectory();
 
-    return directory;
-}
-
-static juce::File getFilterPresetsDirectory()
-{
-    auto directory = getDocumentsPresetStorageDirectory();
-    directory.createDirectory();
     return directory;
 }
 
@@ -53,6 +46,8 @@ static bool writeXmlToFile(const juce::XmlElement& element, const juce::File& fi
         outputStream->truncate();
         element.writeTo(*outputStream, {});
         outputStream->flush();
+        if (outputStream->getStatus().failed())
+            return false;
         return temporaryFile.overwriteTargetFileWithTemporary();
     }
 
@@ -67,34 +62,32 @@ static std::unique_ptr<juce::XmlElement> loadXmlFile(const juce::File& file)
     return juce::XmlDocument::parse(file);
 }
 
-static juce::StringArray collectPresetFileNames(const juce::XmlElement& rootElement,
-                                                 const juce::File& directory,
-                                                 const juce::String& presetElementTag)
-{
-    juce::StringArray fileNames;
-
-    for (auto* child : rootElement.getChildIterator())
-    {
-        if (! child->hasTagName(presetElementTag))
-            continue;
-
-        const auto presetName = child->getStringAttribute("name").trim();
-
-        if (presetName.isNotEmpty())
-            fileNames.addIfNotAlreadyThere(getPresetFileForName(directory, presetName).getFileName());
-    }
-
-    return fileNames;
-}
-
 static bool writePresetCollectionToDirectory(const juce::File& directory,
                                              const juce::XmlElement& rootElement,
                                              const juce::String& presetElementTag)
 {
-    directory.createDirectory();
+    juce::StringArray expectedFileNames;
 
-    const auto expectedFileNames = collectPresetFileNames(rootElement, directory, presetElementTag);
-    juce::StringArray writtenFileNames;
+    // Check all filenames before changing files: legal-name conversion can
+    // map two different preset names to the same file.
+    for (auto* child : rootElement.getChildIterator())
+    {
+        if (! child->hasTagName(presetElementTag))
+            continue;
+
+        const auto presetName = child->getStringAttribute("name").trim();
+        if (makePresetFileStem(presetName).isEmpty())
+            return false;
+
+        const auto fileName = getPresetFileForName(directory, presetName).getFileName();
+        if (containsFileNameIgnoreCase(expectedFileNames, fileName))
+            return false;
+
+        expectedFileNames.add(fileName);
+    }
+
+    if (directory.createDirectory().failed())
+        return false;
 
     for (auto* child : rootElement.getChildIterator())
     {
@@ -103,16 +96,7 @@ static bool writePresetCollectionToDirectory(const juce::File& directory,
 
         const auto presetName = child->getStringAttribute("name").trim();
 
-        if (presetName.isEmpty())
-            continue;
-
         const auto presetFile = getPresetFileForName(directory, presetName);
-        const auto presetFileName = presetFile.getFileName();
-
-        if (containsFileNameIgnoreCase(writtenFileNames, presetFileName))
-            return false;
-
-        writtenFileNames.add(presetFileName);
 
         auto presetCopy = std::make_unique<juce::XmlElement>(*child);
         presetCopy->removeAttribute(EqlModuleProcessor::filterPresetSelectedStateKey);
@@ -131,8 +115,9 @@ static bool writePresetCollectionToDirectory(const juce::File& directory,
 
     for (const auto& existingFile : existingFiles)
     {
-        if (! containsFileNameIgnoreCase(expectedFileNames, existingFile.getFileName()))
-            existingFile.deleteFile();
+        if (! containsFileNameIgnoreCase(expectedFileNames, existingFile.getFileName())
+            && ! existingFile.deleteFile())
+            return false;
     }
 
     return true;
@@ -198,13 +183,7 @@ std::unique_ptr<juce::XmlElement> createEmptyFilterPresetsXml()
 
 bool writeFilterPresetsXml(const juce::XmlElement& rootElement)
 {
-    const auto filterPresetsDirectory = getFilterPresetsDirectory();
-
-    if (! writePresetCollectionToDirectory(filterPresetsDirectory, rootElement, presetTag))
-        return false;
-
-
-    return true;
+    return writePresetCollectionToDirectory(getFilterPresetsDirectory(), rootElement, presetTag);
 }
 
 std::unique_ptr<juce::XmlElement> createSerializableStateXml(EqlModuleProcessor& processor)

@@ -1,6 +1,6 @@
 #include "Editor.h"
 #include "FilterSection.h"
-#include "PresetSections.h"
+#include "PresetSection.h"
 #include "../modules/eql/Processor.h"
 
 namespace
@@ -97,7 +97,7 @@ void AvaAudioProcessorEditor::refreshFilterPresetList(const juce::String& prefer
     presetsSection->renameButton->setAlpha(1.0f);
     presetsSection->defaultButton->setEnabled(hasPresetSelection);
     presetsSection->defaultButton->setAlpha(1.0f);
-    presetsSection->defaultButton->setAlwaysAccentOutline(selectedPresetIsDefault);
+    presetsSection->defaultButton->setActiveFill(selectedPresetIsDefault);
 }
 
 void AvaAudioProcessorEditor::reloadFilterPresetFromProcessor()

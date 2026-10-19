@@ -1,94 +1,22 @@
+#include "ChoiceControl.h"
 #include "Editor.h"
+#include "EditorStateSchema.h"
+#include "SvgExport.h"
+#include "AnimationState.h"
 #include "EdgeResizeHandle.h"
 #include "LookAndFeel.h"
 #include "FilterSection.h"
-#include "PresetSections.h"
-#include "SetupSupport.h"
+#include "PresetSection.h"
+#include "EditorSetup.h"
 #include "../routing/Panel.h"
 #include "../routing/State.h"
 #include "OscPanel.h"
-#include "../modules/fft/Processor.h"
 #include "../modules/eql/Processor.h"
 
 #include <algorithm>
 
 namespace
 {
-constexpr double fineControlScale = 0.1;
-
-double getFineControlScale(const bool fineControl) noexcept
-{
-    return fineControl ? fineControlScale : 1.0;
-}
-
-bool applyWheelToSliderValue(juce::Slider& slider, const juce::MouseWheelDetails& wheel, const bool fineControl)
-{
-    const auto dominantDelta = std::abs(wheel.deltaY) >= std::abs(wheel.deltaX) ? wheel.deltaY
-                                                                                : -wheel.deltaX;
-
-    if (std::abs(dominantDelta) < 1.0e-6f)
-        return false;
-
-    const auto directionalDelta = wheel.isReversed ? -dominantDelta : dominantDelta;
-    const auto direction = directionalDelta < 0.0f ? -1.0 : 1.0;
-    const auto fineScale = getFineControlScale(fineControl);
-    const auto minimum = static_cast<double>(slider.getMinimum());
-    const auto maximum = static_cast<double>(slider.getMaximum());
-    const auto currentValue = static_cast<double>(slider.getValue());
-
-    if (minimum > 0.0 && maximum / minimum >= 100.0)
-    {
-        const auto smoothOctaves = static_cast<double>(directionalDelta) * 0.75 * fineScale;
-        const auto minimumSmoothOctaves = (1.0 / 96.0) * fineScale;
-        const auto octaveDelta = wheel.isSmooth
-            ? direction * juce::jmax(std::abs(smoothOctaves), minimumSmoothOctaves)
-            : (direction / 12.0) * fineScale;
-        const auto clampedOctaveDelta = juce::jlimit(-0.25, 0.25, octaveDelta);
-        const auto nextValue = currentValue * std::pow(2.0, clampedOctaveDelta);
-
-        slider.setValue(juce::jlimit(minimum, maximum, nextValue), juce::sendNotificationSync);
-        return true;
-    }
-
-    const auto& range = slider.getNormalisableRange();
-    const auto currentNormalised = static_cast<double>(range.convertTo0to1(currentValue));
-    const auto smoothStep = static_cast<double>(directionalDelta) * 0.025 * fineScale;
-    const auto minimumSmoothStep = 0.0025 * fineScale;
-    const auto normalisedStep = wheel.isSmooth
-        ? direction * juce::jmax(std::abs(smoothStep), minimumSmoothStep)
-        : direction * 0.025 * fineScale;
-    const auto nextNormalised = juce::jlimit(0.0, 1.0, currentNormalised + normalisedStep);
-
-    slider.setValue(range.convertFrom0to1(nextNormalised), juce::sendNotificationSync);
-    return true;
-}
-
-bool applyWheelToNormalisedSliderValue(juce::Slider& slider, const juce::MouseWheelDetails& wheel, const bool fineControl)
-{
-    const auto dominantDelta = std::abs(wheel.deltaY) >= std::abs(wheel.deltaX) ? wheel.deltaY
-                                                                                : -wheel.deltaX;
-
-    if (std::abs(dominantDelta) < 1.0e-6f)
-        return false;
-
-    const auto directionalDelta = wheel.isReversed ? -dominantDelta : dominantDelta;
-    const auto direction = directionalDelta < 0.0f ? -1.0 : 1.0;
-    const auto fineScale = getFineControlScale(fineControl);
-    const auto minimumSmoothStep = 0.005 * fineScale;
-    const auto normalisedStep = wheel.isSmooth
-        ? direction * juce::jmax(std::abs(static_cast<double>(directionalDelta) * 0.02 * fineScale), minimumSmoothStep)
-        : direction * 0.025 * fineScale;
-    const auto nextValue = juce::jlimit(0.0,
-                                        1.0,
-                                        static_cast<double>(slider.getValue()) + normalisedStep);
-
-    if (std::abs(nextValue - static_cast<double>(slider.getValue())) <= 1.0e-9)
-        return false;
-
-    slider.setValue(nextValue, juce::sendNotificationSync);
-    return true;
-}
-
 juce::MemoryBlock makeNoModuleSnapshotFrom(const juce::MemoryBlock& sourceSnapshot)
 {
     juce::MemoryBlock noModuleSnapshot;
@@ -107,72 +35,23 @@ juce::MemoryBlock makeNoModuleSnapshotFrom(const juce::MemoryBlock& sourceSnapsh
     return noModuleSnapshot;
 }
 
-class FocusedParameterSlider final : public juce::Slider
+}
+
+void AvaAudioProcessorEditor::requestSvgExport()
 {
-public:
-    FocusedParameterSlider()
-        : juce::Slider(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox)
-    {
-    }
+    auto* editor = this;
+    while (auto* parent = editor->findParentComponentOfClass<AvaAudioProcessorEditor>())
+        editor = parent;
+    svg_export::chooseFile(*editor);
+}
 
-    void paint(juce::Graphics& graphics) override
-    {
-        const auto bounds = getLocalBounds();
-        const auto normalisedValue = static_cast<float>(juce::jlimit(0.0, 1.0, getValue()));
-        const auto fillWidth = juce::roundToInt(static_cast<float>(bounds.getWidth()) * normalisedValue);
-
-        graphics.setColour(findColour(juce::Slider::backgroundColourId));
-        graphics.fillRect(bounds);
-
-        if (isEnabled() && fillWidth > 0)
-        {
-            graphics.setColour(findColour(juce::Slider::trackColourId));
-            graphics.fillRect(bounds.withWidth(fillWidth));
-        }
-
-        graphics.setColour(uiGrey500);
-        graphics.drawRect(bounds, 1);
-    }
-
-    void mouseDown(const juce::MouseEvent&) override
-    {
-        dragValue = getValue();
-        lastDragHorizontalDelta = 0.0;
-        lastDragVerticalDelta = 0.0;
-    }
-
-    void mouseDrag(const juce::MouseEvent& event) override
-    {
-        const auto width = juce::jmax(1, getWidth());
-        const auto horizontalDelta = static_cast<double>(event.getDistanceFromDragStartX());
-        const auto verticalDelta = -static_cast<double>(event.getDistanceFromDragStartY());
-        const auto stepHorizontalDelta = horizontalDelta - lastDragHorizontalDelta;
-        const auto stepVerticalDelta = verticalDelta - lastDragVerticalDelta;
-        const auto delta = ((stepHorizontalDelta + stepVerticalDelta) / static_cast<double>(width))
-            * getFineControlScale(event.mods.isShiftDown());
-
-        lastDragHorizontalDelta = horizontalDelta;
-        lastDragVerticalDelta = verticalDelta;
-        dragValue = juce::jlimit(0.0, 1.0, dragValue + delta);
-        setValue(dragValue, juce::sendNotificationSync);
-    }
-
-    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
-    {
-        if (onWheel != nullptr && onWheel(event, wheel))
-            return;
-
-        applyWheelToSliderValue(*this, wheel, event.mods.isShiftDown());
-    }
-
-    std::function<bool(const juce::MouseEvent&, const juce::MouseWheelDetails&)> onWheel;
-
-private:
-    double dragValue = 0.0;
-    double lastDragHorizontalDelta = 0.0;
-    double lastDragVerticalDelta = 0.0;
-};
-
+bool AvaAudioProcessorEditor::isSvgExportGesture(const juce::ModifierKeys& modifiers)
+{
+    return modifiers.isCtrlDown() && modifiers.isAltDown() && modifiers.isShiftDown()
+#if JUCE_MAC
+        && !modifiers.isCommandDown()
+#endif
+        ;
 }
 
 AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToEdit,
@@ -183,8 +62,15 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
       lookAndFeel(std::make_unique<AvaLookAndFeel>()),
       routingInstanceId(routingInstanceIdIn)
 {
+    setName("editor");
+#if JUCE_MAC
+    svgExportKeyboardMonitor = svg_export::installKeyboardShortcut(*this);
+#endif
+    const auto restoredInstanceId = static_cast<int>(valueTreeState.state.getProperty(shell_editor_ui::key("active_instance"), 0));
+    loadAnimationSettings(*animationSettings, valueTreeState.state);
+    const auto location = audioProcessor.refreshHostTrackName();
+    animationSettings->setHostName(location.text, location.onItem, location.itemName);
     audioProcessor.setOscActionEditor(this);
-    shell_parameter_focus::clearFocus(*this);
 
     setLookAndFeel(lookAndFeel.get());
     setOpaque(true);
@@ -192,6 +78,9 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     setWantsKeyboardFocus(true);
     setMouseClickGrabsKeyboardFocus(false);
     hostParametersViewport.setViewedComponent(&hostParametersContent, false);
+    hostParametersViewport.setName("host-viewport");
+    hostParametersContent.setName("host-content");
+    if (auto* holder = hostParametersContent.getParentComponent()) holder->setName("host-scroll");
     hostParametersViewport.setScrollBarsShown(false, true);
     hostParametersViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     hostParametersViewport.setWantsKeyboardFocus(false);
@@ -226,7 +115,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
                        {
                            return ava::routing::renameInstance(valueTreeState.state, id, newName);
                        },
-                       getLocalArea(&anchor, anchor.getLocalBounds()));
+                       getLocalArea(&anchor, anchor.getLocalBounds()), {}, {}, true);
     });
     routingPanel->setVisible(false);
     addAndMakeVisible(*routingPanel);
@@ -251,48 +140,13 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     oscPanel->setVisible(false);
     addAndMakeVisible(*oscPanel);
     filterViewport.setViewedComponent(&filterContent, false);
+    filterViewport.setName("filter-viewport");
+    filterContent.setName("filter-content");
+    if (auto* holder = filterContent.getParentComponent()) holder->setName("filter-scroll");
     filterViewport.setScrollBarsShown(false, false);
     filterViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     filterViewport.setWantsKeyboardFocus(false);
     addAndMakeVisible(filterViewport);
-
-    auto focusedSlider = std::make_unique<FocusedParameterSlider>();
-    focusedSlider->onWheel = [this] (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
-    {
-        if (focusedParameterTargetSlider == nullptr)
-            return false;
-
-        return focusedParameterControl != nullptr
-            && applyWheelToNormalisedSliderValue(*focusedParameterControl, wheel, event.mods.isShiftDown());
-    };
-    focusedParameterControl = std::move(focusedSlider);
-    focusedParameterControl->setSliderStyle(juce::Slider::LinearHorizontal);
-    focusedParameterControl->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    focusedParameterControl->setSliderSnapsToMousePosition(false);
-    focusedParameterControl->setVelocityBasedMode(false);
-    focusedParameterControl->setScrollWheelEnabled(true);
-    focusedParameterControl->setColour(juce::Slider::backgroundColourId, uiGrey800);
-    focusedParameterControl->setColour(juce::Slider::trackColourId, uiWhite);
-    focusedParameterControl->setColour(juce::Slider::thumbColourId, uiWhite);
-    focusedParameterControl->setColour(juce::Slider::rotarySliderFillColourId, uiWhite);
-    focusedParameterControl->setColour(juce::Slider::rotarySliderOutlineColourId, uiGrey500);
-    focusedParameterControl->setRange(0.0, 1.0, 0.0);
-    focusedParameterControl->setValue(0.5, juce::dontSendNotification);
-    focusedParameterControl->setEnabled(false);
-    focusedParameterControl->setAlpha(1.0f);
-    focusedParameterControl->onValueChange = [this]
-    {
-        if (suppressFocusedParameterControlChangeHandlers || focusedParameterControl == nullptr || focusedParameterTargetSlider == nullptr)
-            return;
-
-        focusedParameterTargetSlider->setValue(getFocusedParameterTargetValueForControl(),
-                                               juce::sendNotificationSync);
-
-        const juce::ScopedValueSetter<bool> scopedIgnore(suppressFocusedParameterControlChangeHandlers, true);
-        focusedParameterControl->setValue(getFocusedParameterControlValueForTarget(),
-                                          juce::dontSendNotification);
-    };
-    addAndMakeVisible(*focusedParameterControl);
 
     verticalResizeHandle = std::make_unique<EdgeResizeHandle>(
         *this, EdgeResizeHandle::Axis::vertical, minimumEditorHeight, maximumEditorHeight);
@@ -300,8 +154,17 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     horizontalResizeHandle = std::make_unique<EdgeResizeHandle>(
         *this, EdgeResizeHandle::Axis::horizontal, minimumEditorWidth, maximumEditorWidth);
     addAndMakeVisible(*horizontalResizeHandle);
+    topResizeHandle = std::make_unique<EdgeResizeHandle>(
+        *this, EdgeResizeHandle::Axis::vertical, minimumEditorHeight, maximumEditorHeight, true);
+    addAndMakeVisible(*topResizeHandle);
+    leftResizeHandle = std::make_unique<EdgeResizeHandle>(
+        *this, EdgeResizeHandle::Axis::horizontal, minimumEditorWidth, maximumEditorWidth, true);
+    addAndMakeVisible(*leftResizeHandle);
+    cornerResizeHandle = std::make_unique<EdgeResizeHandle>(
+        *this, EdgeResizeHandle::Axis::both, minimumEditorWidth, maximumEditorWidth);
+    addAndMakeVisible(*cornerResizeHandle);
 
-    clipButton = std::make_unique<BoxTextButton>(uiClip);
+    clipButton = std::make_unique<BoxTextButton>(uiAccent);
     clipButton->setButtonText({});
     clipButton->setTablerIcon("wave-square");
     clipButton->setTextJustification(juce::Justification::centred);
@@ -312,11 +175,12 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     addAndMakeVisible(*clipButton);
 
     hostButton = std::make_unique<BoxTextButton>(uiAccent);
+    hostButton->setName("host");
     hostButton->setButtonText({});
     hostButton->setTablerIcon("map-pin-share");
     hostButton->setTextJustification(juce::Justification::centred);
     hostButton->setClickingTogglesState(true);
-    hostButton->setToggleAccentVisible(true);
+    hostButton->setToggleActiveFillEnabled(true);
     hostButton->onClick = [this]
     {
         toggleHostParametersSection();
@@ -324,7 +188,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     };
     addAndMakeVisible(*hostButton);
 
-    moduleAddButton = std::make_unique<BoxTextButton>(uiClip);
+    moduleAddButton = std::make_unique<BoxTextButton>(uiAccent);
     moduleAddButton->getProperties().set(juce::Identifier("oscParameterId"), AvaAudioProcessor::oscAddModuleId);
     moduleAddButton->setButtonText("ADD-MODULE");
     moduleAddButton->setTextJustification(juce::Justification::centred);
@@ -336,15 +200,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     addAndMakeVisible(*moduleAddButton);
 
     setLoadedModuleFlags(audioProcessor.getActiveModule());
-
-    if (auto* fftProcessor = audioProcessor.getFftModuleProcessor())
-    {
-        auto& fftState = fftProcessor->getValueTreeState();
-
-        setupFftControls(fftState, *fftProcessor);
-        fftAnalyserComponent = shell_setup_support::createFftAnalyserComponent(*fftProcessor);
-        addAndMakeVisible(*fftAnalyserComponent);
-    }
 
     setupShellControls();
 
@@ -358,11 +213,9 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
         setupEqlControls(initialEqlProcessor->getValueTreeState());
 
     restoreEditorStateFromValueTree();
-    routingExpanded = ! audioProcessor.isRoutingInstance();
-    hostParametersExpanded = false;
-    oscExpanded = false;
 
     footerTab = std::make_unique<BoxTextButton>(uiAccent);
+    footerTab->setName("info");
     footerTab->setTablerIcon("at");
     footerTab->onClick = [this]
     {
@@ -383,9 +236,9 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     setSize(restoredEditorSize.x, restoredEditorSize.y);
     audioProcessor.setLastEditorSize(restoredEditorSize.x, restoredEditorSize.y);
 
+    restoreEditorUiState();
+    restoringEditorUiState = false;
     suppressEditorSizeStateSave = false;
-    syncFocusedParameterControl();
-    refreshFftAnalyserResponse();
 
     audioProcessor.getStateInformationForABCompareSnapshot(committedHistorySnapshot);
 
@@ -399,4 +252,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
         audioProcessor.setABCompareActiveSlot(0);
 
     updateUndoRedoButtons();
+    if (routingInstanceId == 0)
+        openRoutingInstance(restoredInstanceId);
 }

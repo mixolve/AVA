@@ -1,6 +1,6 @@
 #include "Editor.h"
 #include "FilterSection.h"
-#include "WindowState.h"
+#include "EditorPreferences.h"
 
 void AvaAudioProcessorEditor::scheduleHistorySnapshot()
 {
@@ -124,7 +124,6 @@ bool AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snap
     filterViewport.setViewPosition(0, juce::jlimit(0, filterMaxOffset, preservedUiState.filterScrollY));
 
     audioProcessor.getStateInformationForABCompareSnapshot(committedHistorySnapshot);
-    updateUndoRedoButtons();
     return true;
 }
 

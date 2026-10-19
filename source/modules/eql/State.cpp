@@ -1,7 +1,7 @@
 #include "Processor.h"
 #include "PresetStorage.h"
-#include "State.h"
-#include "../shared/StateUtilities.h"
+#include "StateValidation.h"
+#include "../shared/StateValidation.h"
 
 namespace eql_state
 {

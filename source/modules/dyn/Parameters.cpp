@@ -1,7 +1,9 @@
 #include "Parameters.h"
 
 #include "../../crossover/ParameterIds.h"
-#include "DspCore.h"
+#include "SampleProcessor.h"
+#include "../shared/ParameterFormatting.h"
+#include "../shared/ParameterLayout.h"
 
 #include <array>
 #include <cmath>
@@ -22,43 +24,77 @@ struct ParameterOrderEntry
 };
 
 inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
-    { ParameterSlot::morph, "MAIN / MORPH" },
-    { ParameterSlot::ratio, "MAIN / RATIO" },
-    { ParameterSlot::knee, "MAIN / KNEE" },
-    { ParameterSlot::peakHoldMs, "MAIN / PEAK-HOLD" },
-    { ParameterSlot::lookahead, "MAIN / LOOKAHEAD" },
-    { ParameterSlot::tensionFloor, "MAIN / TENSION-FLOOR" },
-    { ParameterSlot::tensionHysteresis, "MAIN / TENSTION-HYST" },
-    { ParameterSlot::releaseForm, "MAIN / RELEASE-FORM" },
-    { ParameterSlot::releaseCurve, "MAIN / RELEASE-CURVE" },
-    { ParameterSlot::linkUpDown, "LINKING / UP-DN (DUAL-MONO)" },
-    { ParameterSlot::linkLeftRight, "LINKING / L-R (STEREO)" },
-    { ParameterSlot::linkOpposite, "LINKING / OPPOSITE" },
-    { ParameterSlot::leftUpThreshold, "PROCESSOR / L-UP-THRESHOLD" },
-    { ParameterSlot::leftUpAdaptive, "PROCESSOR / L-UP-ADAPTIVE" },
-    { ParameterSlot::leftUpTension, "PROCESSOR / L-UP-TENSION" },
-    { ParameterSlot::leftUpRelease, "PROCESSOR / L-UP-RELEASE" },
-    { ParameterSlot::leftUpOutput, "PROCESSOR / L-UP-OUTPUT" },
-    { ParameterSlot::leftDownThreshold, "PROCESSOR / L-DN-THRESHOLD" },
-    { ParameterSlot::leftDownAdaptive, "PROCESSOR / L-DN-ADAPTIVE" },
-    { ParameterSlot::leftDownTension, "PROCESSOR / L-DN-TENSION" },
-    { ParameterSlot::leftDownRelease, "PROCESSOR / L-DN-RELEASE" },
-    { ParameterSlot::leftDownOutput, "PROCESSOR / L-DN-OUTPUT" },
-    { ParameterSlot::rightUpThreshold, "PROCESSOR / R-UP-THRESHOLD" },
-    { ParameterSlot::rightUpAdaptive, "PROCESSOR / R-UP-ADAPTIVE" },
-    { ParameterSlot::rightUpTension, "PROCESSOR / R-UP-TENSION" },
-    { ParameterSlot::rightUpRelease, "PROCESSOR / R-UP-RELEASE" },
-    { ParameterSlot::rightUpOutput, "PROCESSOR / R-UP-OUTPUT" },
-    { ParameterSlot::rightDownThreshold, "PROCESSOR / R-DN-THRESHOLD" },
-    { ParameterSlot::rightDownAdaptive, "PROCESSOR / R-DN-ADAPTIVE" },
-    { ParameterSlot::rightDownTension, "PROCESSOR / R-DN-TENSION" },
-    { ParameterSlot::rightDownRelease, "PROCESSOR / R-DN-RELEASE" },
-    { ParameterSlot::rightDownOutput, "PROCESSOR / R-DN-OUTPUT" },
-    { ParameterSlot::adaptiveOffset, "ADAPTIVE / OFFSET" },
-    { ParameterSlot::adaptiveAttack, "ADAPTIVE / ATTACK" },
-    { ParameterSlot::adaptiveHold, "ADAPTIVE / HOLD" },
-    { ParameterSlot::adaptiveRelease, "ADAPTIVE / RELEASE" },
-    { ParameterSlot::delta, "DELTA" },
+    { ParameterSlot::domain, "DOMAIN" },
+    { ParameterSlot::mode, "MODE" },
+    { ParameterSlot::corrPeakCrest, "CORR / PEAK-CREST" },
+    { ParameterSlot::corrThreshold, "CORR / THRESHOLD" },
+    { ParameterSlot::corrThresholdHysteresis, "CORR / THRESH-HYST" },
+    { ParameterSlot::corrKnee, "CORR / COMP-KNEE" },
+    { ParameterSlot::corrSlope, "CORR / SLOPE" },
+    { ParameterSlot::corrOffset, "CORR / ADAP-OFFSET" },
+    { ParameterSlot::corrSmoothing, "CORR / SMOOTHING" },
+    { ParameterSlot::corrImpact, "CORR / IMPACT" },
+    { ParameterSlot::corrTensionFloor, "CORR / TENSION-FLOOR" },
+    { ParameterSlot::transientGain, "TRANS/SUST / TRANS-GAIN" },
+    { ParameterSlot::sustainGain, "TRANS/SUST / SUST-GAIN" },
+    { ParameterSlot::transientMute, "TRANS/SUST / TRANS-MUTE" },
+    { ParameterSlot::sustainMute, "TRANS/SUST / SUST-MUTE" },
+    { ParameterSlot::retrigger, "TRANS/SUST / RETRIGGER" },
+    { ParameterSlot::oneShot, "TRANS/SUST / ONE-SHOT" },
+    { ParameterSlot::fftSize, "SPECTRAL / WIN-SIZE" },
+    { ParameterSlot::fftOverlap, "SPECTRAL / OVERLAP" },
+    { ParameterSlot::spectralSlope, "SPECTRAL / SLOPE" },
+    { ParameterSlot::morph, "PROCESSOR / MORPH" },
+    { ParameterSlot::ratio, "PROCESSOR / RATIO" },
+    { ParameterSlot::progression, "PROCESSOR / PROGRESSION" },
+    { ParameterSlot::progressionSpan, "PROCESSOR / PROG-SPAN" },
+    { ParameterSlot::corrProgressionSpan, "CORR / PROG-SPAN" },
+    { ParameterSlot::compKnee, "PROCESSOR / COMP-KNEE" },
+    { ParameterSlot::lookahead, "PROCESSOR / LOOKAHEAD" },
+    { ParameterSlot::tensionFloor, "PROCESSOR / TENSION-FLOOR" },
+    { ParameterSlot::tensionHysteresis, "PROCESSOR / TENSION-HYST" },
+    { ParameterSlot::autoRelease, "PROCESSOR / AUTO-REL" },
+    { ParameterSlot::releaseMemory, "PROCESSOR / REL-MEMORY" },
+    { ParameterSlot::releaseDepth, "PROCESSOR / REL-DEPTH" },
+    { ParameterSlot::releaseCurve, "PROCESSOR / RELEASE-CURVE" },
+    { ParameterSlot::threshold, "PROCESSOR / THRESHOLD" },
+    { ParameterSlot::thresholdHysteresis, "PROCESSOR / THRESH-HYST" },
+    { ParameterSlot::adaptive, "PROCESSOR / THRESHOLD-ADAP" },
+    { ParameterSlot::tension, "PROCESSOR / TENSION" },
+    { ParameterSlot::processorReleasePeak, "PROCESSOR / RELEASE-PEAK" },
+    { ParameterSlot::processorReleaseRms, "PROCESSOR / RELEASE-RMS" },
+    { ParameterSlot::makeUp, "PROCESSOR / MAKE-UP" },
+    { ParameterSlot::adaptiveOffset, "ADAPTIVE / ADAP-OFFSET" },
+    { ParameterSlot::adaptiveAttack, "ADAPTIVE / ADAP-ATTACK" },
+    { ParameterSlot::adaptiveHold, "ADAPTIVE / ADAP-HOLD" },
+    { ParameterSlot::adaptiveRelease, "ADAPTIVE / ADAP-RELEASE" },
+    { ParameterSlot::delta, "PROCESSOR / DELTA" },
+    { ParameterSlot::processorHold, "PROCESSOR / HOLD" },
+    { ParameterSlot::processorAttack, "PROCESSOR / ATTACK" },
+    { ParameterSlot::attackCurve, "PROCESSOR / ATTACK-CURVE" },
+    { ParameterSlot::processorDelay, "PROCESSOR / DELAY" },
+    { ParameterSlot::inputGain, "PROCESSOR / INPUT" },
+    { ParameterSlot::adaptiveTime, "ADAPTIVE / ADAP-TIME" },
+    { ParameterSlot::mix, "PROCESSOR / MIX" },
+    { ParameterSlot::output, "PROCESSOR / OUTPUT" },
+    { ParameterSlot::range, "PROCESSOR / RANGE" },
+    { ParameterSlot::sidechainChannel, "SIDE CHAIN / SC-CHANNEL" },
+    { ParameterSlot::sidechainListen, "SIDE CHAIN / SC-LISTEN" },
+    { ParameterSlot::peakRms, "PROCESSOR / PEAK/RMS" },
+    { ParameterSlot::peakCrest, "PROCESSOR / PEAK-CREST" },
+    { ParameterSlot::rmsTime, "PROCESSOR / RMS-TIME" },
+    { ParameterSlot::releaseType, "PROCESSOR / RELEASE-TYPE" },
+    { ParameterSlot::rangeCurve, "PROCESSOR / RANGE-CURVE" },
+    { ParameterSlot::attackMode, "PROCESSOR / ATTACK MODE" },
+    { ParameterSlot::attackNote, "PROCESSOR / ATTACK NOTE" },
+    { ParameterSlot::holdMode, "PROCESSOR / HOLD MODE" },
+    { ParameterSlot::holdNote, "PROCESSOR / HOLD NOTE" },
+    { ParameterSlot::releasePeakMode, "PROCESSOR / RELEASE-PEAK MODE" },
+    { ParameterSlot::releasePeakNote, "PROCESSOR / RELEASE-PEAK NOTE" },
+    { ParameterSlot::releaseRmsMode, "PROCESSOR / RELEASE-RMS MODE" },
+    { ParameterSlot::releaseRmsNote, "PROCESSOR / RELEASE-RMS NOTE" },
+    { ParameterSlot::feedback, "PROCESSOR / FWD/FB" },
+    { ParameterSlot::clipKnee, "PROCESSOR / CLIP-KNEE" },
 });
 
 static_assert(parameterOrder.size() == numParameterSlots);
@@ -71,19 +107,9 @@ juce::String makeRangeHostName(const size_t rangeIndex, const juce::String& para
         + " / " + parameterName;
 }
 
-double roundToDisplayStep(const double value) noexcept
-{
-    auto rounded = std::floor((value * 100.0) + 0.5) * 0.01;
-
-    if (std::abs(rounded) < 0.05)
-        rounded = 0.0;
-
-    return rounded;
-}
-
 juce::String formatParameterValue(const float value)
 {
-    return juce::String::formatted("%.2f", roundToDisplayStep(value));
+    return ava::modules::parameters::formatFixedDecimalValue(value, 2);
 }
 
 }
@@ -91,63 +117,9 @@ juce::String formatParameterValue(const float value)
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 {
     using Layout = juce::AudioProcessorValueTreeState::ParameterLayout;
-    using Parameter = std::unique_ptr<juce::RangedAudioParameter>;
-
-    auto floatParam = [] (const juce::String& id,
-                          const juce::String& name,
-                          const float min,
-                          const float max,
-                          const float step,
-                          const float defaultValue,
-                          const juce::String& label,
-                          const bool isAutomatable,
-                          const bool isRatio,
-                          const bool isMeta = false) -> Parameter
-    {
-        auto range = juce::NormalisableRange<float> { min, max, step };
-        auto attributes = juce::AudioParameterFloatAttributes()
-                              .withLabel(label)
-                              .withAutomatable(isAutomatable)
-                              .withMeta(isMeta)
-                              .withStringFromValueFunction([isRatio] (float value, int)
-                              {
-                                  return isRatio ? formatParameterValue(value) + ":1"
-                                                 : formatParameterValue(value);
-                              })
-                              .withValueFromStringFunction([] (const juce::String& text)
-                              {
-                                  return text.trim().getFloatValue();
-                              });
-        return std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { id, 1 }, name, range, defaultValue, attributes);
-    };
-
-    auto boolParam = [] (const juce::String& id,
-                         const juce::String& name,
-                         const bool defaultValue,
-                         const bool isAutomatable,
-                         const bool isMeta = false) -> Parameter
-    {
-        auto attributes = juce::AudioParameterBoolAttributes()
-                              .withAutomatable(isAutomatable)
-                              .withMeta(isMeta);
-        return std::make_unique<juce::AudioParameterBool>(juce::ParameterID { id, 1 }, name, defaultValue, attributes);
-    };
-
-    auto choiceParam = [] (const juce::String& id,
-                           const juce::String& name,
-                           const int defaultValue,
-                           const bool isAutomatable,
-                           const bool isMeta = false) -> Parameter
-    {
-        auto attributes = juce::AudioParameterChoiceAttributes()
-                              .withAutomatable(isAutomatable)
-                              .withMeta(isMeta);
-        return std::make_unique<juce::AudioParameterChoice>(juce::ParameterID { id, 1 },
-                                                            name,
-                                                            juce::StringArray { "LIN", "LOG" },
-                                                            defaultValue,
-                                                            attributes);
-    };
+    using ava::modules::parameters::makeBoolParameter;
+    using ava::modules::parameters::makeChoiceParameter;
+    using ava::modules::parameters::makeFloatParameter;
 
     Layout layout;
 
@@ -164,22 +136,65 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
             const auto parameterName = makeRangeHostName(rangeIndex, entry.label);
 
             if (spec.type == ParameterType::boolean)
-                group->addChild(boolParam(parameterId, parameterName, spec.defaultValue >= 0.5f, false));
+                group->addChild(makeBoolParameter(parameterId, parameterName, spec.defaultValue >= 0.5f));
             else if (spec.type == ParameterType::choice)
-                group->addChild(choiceParam(parameterId,
-                                            parameterName,
-                                            juce::roundToInt(spec.defaultValue),
-                                            false));
+                group->addChild(makeChoiceParameter(parameterId, parameterName,
+                                                     entry.slot == ParameterSlot::mode ? juce::StringArray { "COMP/CLIP / FREQ", "TRANS/SUST / CORR" }
+                                                         : entry.slot == ParameterSlot::sidechainChannel ? ava::channels::choices()
+                                                         : entry.slot == ParameterSlot::domain ? juce::StringArray { "TIME", "SPECTRAL" }
+                                                         : entry.slot == ParameterSlot::fftSize ? juce::StringArray { "1024", "2048", "4096", "8192", "16384" }
+                                                         : entry.slot == ParameterSlot::fftOverlap ? juce::StringArray { "8", "16", "32" }
+                                                         : juce::String(spec.suffix).endsWith("-mode") ? juce::StringArray { "MS", "NOTE" }
+                                                         : getTimeNoteChoices(),
+                                                     juce::roundToInt(spec.defaultValue)));
             else
-                group->addChild(floatParam(parameterId,
-                                           parameterName,
-                                           spec.min,
-                                           spec.max,
-                                           spec.step,
-                                           spec.defaultValue,
-                                           spec.label,
-                                           false,
-                                           entry.slot == ParameterSlot::ratio));
+                group->addChild(makeFloatParameter(
+                    parameterId, parameterName,
+                    { spec.min, spec.max, spec.step }, spec.defaultValue,
+                    [isMorph = entry.slot == ParameterSlot::morph,
+                     isImpact = entry.slot == ParameterSlot::corrImpact,
+                     isCorrSlope = entry.slot == ParameterSlot::corrSlope,
+                     isMix = entry.slot == ParameterSlot::mix,
+                     isPeakRms = entry.slot == ParameterSlot::peakRms,
+                     isRangeCurve = entry.slot == ParameterSlot::rangeCurve,
+                     isKnee = entry.slot == ParameterSlot::compKnee || entry.slot == ParameterSlot::clipKnee || entry.slot == ParameterSlot::corrKnee,
+                     isReleaseType = entry.slot == ParameterSlot::releaseType,
+                     isFeedback = entry.slot == ParameterSlot::feedback,
+                     isRatio = entry.slot == ParameterSlot::ratio,
+                     isCurve = entry.slot == ParameterSlot::releaseCurve || entry.slot == ParameterSlot::attackCurve] (float value, int)
+                    {
+                        if (isPeakRms && value <= 0.0f) return juce::String("PEAK");
+                        if (isPeakRms && value >= 100.0f) return juce::String("RMS");
+                        if (isCorrSlope) return ava::modules::parameters::formatFixedDecimalValue(value, 2);
+                        if (isImpact && value <= -99.995f) return juce::String("LEFT");
+                        if (isImpact && std::abs(value) < 0.005f) return juce::String("BOTH");
+                        if (isImpact && value >= 99.995f) return juce::String("RIGHT");
+                        if (isRangeCurve && value == 0.0f) return juce::String("HARD");
+                        if (isRangeCurve && value == 100.0f) return juce::String("SOFT");
+
+                        if (isKnee && value == 0.0f) return juce::String("HARD");
+
+                        if (isMorph && value == 0.0f)
+                            return juce::String("CLIPPER");
+                        if (isMorph && value == 100.0f)
+                            return juce::String("COMPRESSOR");
+
+                        if (isFeedback && value == 0.0f) return juce::String("FWD");
+                        if (isFeedback && value == 100.0f) return juce::String("FB");
+
+                        if (isReleaseType && value == 0.0f) return juce::String("TO-ZERO");
+                        if (isReleaseType && value == 100.0f) return juce::String("TO-SIGNAL");
+
+                        if (isMix && value == 0.0f)
+                            return juce::String("DRY");
+                        if (isMix && value == 100.0f)
+                            return juce::String("WET");
+
+                        if (isCurve && std::abs(value) < 0.005f)
+                            return juce::String("LIN");
+
+                        return isRatio ? formatParameterValue(value) + ":1" : formatParameterValue(value);
+                    }, spec.label));
         }
 
         layout.add(std::move(group));

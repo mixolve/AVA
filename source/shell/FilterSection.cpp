@@ -9,10 +9,7 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
                                                   EqlModuleProcessor::getFilterTypeParamId(filterIndexIn),
                                                   "TYPE",
                                                   std::vector<int> { 0, 1, 2, 3, 4, 5, 6 })),
-      placeControl(std::make_unique<ChoiceControl>(state,
-                                                  EqlModuleProcessor::getFilterPlaceParamId(filterIndexIn),
-                                                  "PLACE",
-                                                  std::vector<int> { 0, 1, 2, 3, 4, 5, 6, 7 })),
+      phaseButton(std::make_unique<BoxTextButton>(uiAccent)),
       orderControl(std::make_unique<ChoiceControl>(state,
                                                    EqlModuleProcessor::getFilterOrderParamId(filterIndexIn),
                                                    "ORDER",
@@ -35,8 +32,8 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
     if (auto* parameter = state.getParameter(EqlModuleProcessor::getFilterTypeParamId(filterIndexIn)))
         typeParameter = dynamic_cast<juce::AudioParameterChoice*>(parameter);
 
-    if (auto* parameter = state.getParameter(EqlModuleProcessor::getFilterPlaceParamId(filterIndexIn)))
-        placeParameter = dynamic_cast<juce::AudioParameterChoice*>(parameter);
+    if (auto* parameter = state.getParameter(EqlModuleProcessor::getFilterPhaseParamId(filterIndexIn)))
+        phaseParameter = dynamic_cast<juce::AudioParameterBool*>(parameter);
 
     if (auto* parameter = state.getParameter(EqlModuleProcessor::getFilterOrderParamId(filterIndexIn)))
         orderParameter = dynamic_cast<juce::AudioParameterChoice*>(parameter);
@@ -50,11 +47,15 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
     if (auto* parameter = state.getParameter(EqlModuleProcessor::getFilterGainParamId(filterIndexIn)))
         gainParameter = dynamic_cast<juce::AudioParameterFloat*>(parameter);
 
+    phaseButton->setTablerIcon("phase");
+    phaseButton->setClickingTogglesState(true);
+    phaseButton->getProperties().set(juce::Identifier("oscParameterId"), EqlModuleProcessor::getFilterPhaseParamId(filterIndex));
+    typeControl->setTitleAccessory(phaseButton.get());
     header->setButtonText({});
     {
         juce::StringArray fallbackParameterIds;
         fallbackParameterIds.add(EqlModuleProcessor::getFilterTypeParamId(filterIndexIn));
-        fallbackParameterIds.add(EqlModuleProcessor::getFilterPlaceParamId(filterIndexIn));
+        fallbackParameterIds.add(EqlModuleProcessor::getFilterPhaseParamId(filterIndexIn));
         fallbackParameterIds.add(EqlModuleProcessor::getFilterOrderParamId(filterIndexIn));
         fallbackParameterIds.add(EqlModuleProcessor::getFilterFrequencyParamId(filterIndexIn));
         fallbackParameterIds.add(EqlModuleProcessor::getFilterBandwidthParamId(filterIndexIn));
@@ -64,9 +65,8 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
     }
     header->setTextJustification(juce::Justification::centred);
     header->setClickingTogglesState(false);
-    header->setToggleAccentVisible(true);
+    header->setToggleActiveFillEnabled(false);
     header->setCancelClickOnLeave(true);
-
 
     bypassButton->getProperties().set(juce::Identifier("oscParameterId"),
                                       EqlModuleProcessor::getFilterBypassParamId(filterIndexIn));
@@ -79,6 +79,8 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
         state,
         EqlModuleProcessor::getFilterBypassParamId(filterIndexIn),
         *bypassButton);
+    phaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        state, EqlModuleProcessor::getFilterPhaseParamId(filterIndex), *phaseButton);
     refreshTypeDependentControls();
 }
 
@@ -87,8 +89,7 @@ void AvaAudioProcessorEditor::FilterSection::detach() noexcept
     if (typeControl != nullptr)
         typeControl->detach();
 
-    if (placeControl != nullptr)
-        placeControl->detach();
+    phaseAttachment.reset();
 
     if (orderControl != nullptr)
         orderControl->detach();
@@ -104,7 +105,7 @@ void AvaAudioProcessorEditor::FilterSection::detach() noexcept
 
     bypassAttachment.reset();
     typeParameter = nullptr;
-    placeParameter = nullptr;
+    phaseParameter = nullptr;
     orderParameter = nullptr;
     frequencyParameter = nullptr;
     bandwidthParameter = nullptr;
@@ -114,14 +115,14 @@ void AvaAudioProcessorEditor::FilterSection::detach() noexcept
 void AvaAudioProcessorEditor::FilterSection::rebind(juce::AudioProcessorValueTreeState& state)
 {
     typeControl->rebind(state);
-    placeControl->rebind(state);
+
     orderControl->rebind(state);
     frequencyControl->rebind(state);
     bandwidthControl->rebind(state);
     gainControl->rebind(state);
 
     typeParameter = dynamic_cast<juce::AudioParameterChoice*>(state.getParameter(EqlModuleProcessor::getFilterTypeParamId(filterIndex)));
-    placeParameter = dynamic_cast<juce::AudioParameterChoice*>(state.getParameter(EqlModuleProcessor::getFilterPlaceParamId(filterIndex)));
+    phaseParameter = dynamic_cast<juce::AudioParameterBool*>(state.getParameter(EqlModuleProcessor::getFilterPhaseParamId(filterIndex)));
     orderParameter = dynamic_cast<juce::AudioParameterChoice*>(state.getParameter(EqlModuleProcessor::getFilterOrderParamId(filterIndex)));
     frequencyParameter = dynamic_cast<juce::AudioParameterFloat*>(state.getParameter(EqlModuleProcessor::getFilterFrequencyParamId(filterIndex)));
     bandwidthParameter = dynamic_cast<juce::AudioParameterFloat*>(state.getParameter(EqlModuleProcessor::getFilterBandwidthParamId(filterIndex)));
@@ -132,6 +133,8 @@ void AvaAudioProcessorEditor::FilterSection::rebind(juce::AudioProcessorValueTre
         EqlModuleProcessor::getFilterBypassParamId(filterIndex),
         *bypassButton);
 
+    phaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        state, EqlModuleProcessor::getFilterPhaseParamId(filterIndex), *phaseButton);
     refreshTypeDependentControls();
 }
 
@@ -143,50 +146,15 @@ AvaAudioProcessorEditor::FilterSection::FilterType AvaAudioProcessorEditor::Filt
     return EqlModuleProcessor::filterTypeFromChoiceIndex(typeParameter->getIndex());
 }
 
-int AvaAudioProcessorEditor::FilterSection::getPlace() const noexcept
+bool AvaAudioProcessorEditor::FilterSection::isPhaseEnabled() const noexcept
 {
-    return placeParameter != nullptr ? placeParameter->getIndex()
-                                    : 0;
+    return phaseParameter != nullptr && phaseParameter->get();
 }
 
 double AvaAudioProcessorEditor::FilterSection::getFrequency() const noexcept
 {
     return frequencyParameter != nullptr ? static_cast<double>(frequencyParameter->get())
                                          : 0.0;
-}
-
-bool AvaAudioProcessorEditor::FilterSection::isBandwidthInactiveAtCurrentOrder() const noexcept
-{
-    const auto filterType = getFilterType();
-    if (filterType == FilterType::volume)
-        return true;
-
-    if (filterType == FilterType::bell)
-        return orderParameter != nullptr && orderParameter->getIndex() == 0;
-
-    const auto slope = orderParameter != nullptr
-        ? EqlModuleProcessor::getSlopeDbPerOctForOrderChoice(orderParameter->getIndex())
-        : EqlModuleProcessor::fixedSlopeDbPerOct;
-
-    if (filterType == FilterType::tilt)
-        return true;
-
-    return filterType != FilterType::bell
-        && (slope <= 6.05f || slope > 96.0f);
-}
-
-bool AvaAudioProcessorEditor::FilterSection::isOrderInactive() const noexcept
-{
-    const auto filterType = getFilterType();
-    return filterType == FilterType::tilt
-        || filterType == FilterType::volume;
-}
-
-bool AvaAudioProcessorEditor::FilterSection::isGainInactive() const noexcept
-{
-    const auto filterType = getFilterType();
-    return filterType == FilterType::lowCut
-        || filterType == FilterType::highCut;
 }
 
 void AvaAudioProcessorEditor::FilterSection::updateFrequencyRangeForType()
@@ -208,7 +176,7 @@ void AvaAudioProcessorEditor::FilterSection::setGainDisplaysDegrees(const bool s
     if (gainControl == nullptr)
         return;
 
-    static constexpr auto degreesPerDb = 7.5;
+    static constexpr auto degreesPerDb = filterPhaseDegreesPerDb;
     gainControl->setValueRange(shouldDisplayDegrees ? -180.0 / degreesPerDb : -48.0,
                                shouldDisplayDegrees ? 180.0 / degreesPerDb : 48.0,
                                0.01);
@@ -251,25 +219,19 @@ void AvaAudioProcessorEditor::FilterSection::setGainDisplaysDegrees(const bool s
     }
 }
 
-void AvaAudioProcessorEditor::FilterSection::updatePlaceChoicesForType(const bool normalizeSelection)
+void AvaAudioProcessorEditor::FilterSection::updatePhaseForType(const bool normalizeSelection)
 {
-    if (placeControl == nullptr)
-        return;
-
-    const auto phasePlaceAllowed = ! isCutFilterType(getFilterType())
-        && ! isVolumeFilterType(getFilterType());
-    placeControl->setChoiceEnabled(5, phasePlaceAllowed);
-    placeControl->setChoiceEnabled(6, phasePlaceAllowed);
-    placeControl->setChoiceEnabled(7, phasePlaceAllowed);
-
-    if (normalizeSelection && ! phasePlaceAllowed && isPhasePlaceChoice(getPlace()))
-        placeControl->setSelectedChoiceIndex(0, true);
+    const auto allowed = getFilterControlAvailability(getFilterType(),
+        orderParameter != nullptr ? orderParameter->getIndex() : 2).phase;
+    phaseButton->setEnabled(allowed);
+    if (normalizeSelection && !allowed && isPhaseEnabled() && phaseParameter != nullptr)
+        phaseParameter->setValueNotifyingHost(0.0f);
 }
 
-void AvaAudioProcessorEditor::FilterSection::refreshTypeDependentControls(const bool normalizePlaceSelection)
+void AvaAudioProcessorEditor::FilterSection::refreshTypeDependentControls(const bool normalizePhaseSelection)
 {
     const auto filterType = getFilterType();
     orderControl->setChoices(getOrderDisplayChoicesForType(filterType));
     orderControl->setChoiceEnabled(0, filterType != FilterType::bell);
-    updatePlaceChoicesForType(normalizePlaceSelection);
+    updatePhaseForType(normalizePhaseSelection);
 }

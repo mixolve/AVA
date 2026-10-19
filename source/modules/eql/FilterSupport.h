@@ -2,6 +2,7 @@
 
 #include "Processor.h"
 
+inline constexpr double filterPhaseDegreesPerDb = 7.5;
 
 inline constexpr auto minimumBiquadQ = 0.025f;
 inline constexpr auto maximumBiquadQ = 40.0f;
@@ -19,7 +20,25 @@ inline constexpr auto defaultFilterSlopeDbPerOct = EqlModuleProcessor::fixedSlop
 inline constexpr auto nyquistSafetyFactor = 0.98;
 inline constexpr auto flatTiltStageCount = 16;
 inline const juce::StringArray filterTypeChoices { "LCT", "LSH", "BEL", "FTL", "HSH", "HCT", "VOL" };
-inline const juce::StringArray filterPlaceChoices { "LR", "LL", "RR", "MM", "SS", "PHS", "PHL", "PHR" };
+
+struct FilterControlAvailability
+{
+    bool phase = true;
+    bool order = true;
+    bool frequency = true;
+    bool bandwidth = true;
+    bool gain = true;
+};
+
+inline FilterControlAvailability getFilterControlAvailability(const EqlModuleProcessor::FilterType type,
+                                                              const int orderChoice) noexcept
+{
+    using Type = EqlModuleProcessor::FilterType;
+    const auto volume = type == Type::volume;
+    const auto cut = type == Type::lowCut || type == Type::highCut;
+    return { ! volume && ! cut, ! volume && type != Type::tilt, ! volume,
+             type == Type::bell && orderChoice != 0, ! cut };
+}
 
 struct ShelfSlopeBlend
 {
@@ -27,7 +46,6 @@ struct ShelfSlopeBlend
     int upperOrder = 1;
     double blend = 0.0;
 };
-
 
 juce::String formatDecibelValue(float value);
 juce::String formatFrequencyValue(float value);
@@ -41,7 +59,6 @@ bool isShelfFilterType(EqlModuleProcessor::FilterType type) noexcept;
 bool isCutFilterType(EqlModuleProcessor::FilterType type) noexcept;
 bool isTiltFilterType(EqlModuleProcessor::FilterType type) noexcept;
 bool isVolumeFilterType(EqlModuleProcessor::FilterType type) noexcept;
-bool isPhasePlaceChoice(int choiceIndex) noexcept;
 ShelfSlopeBlend mapBellSlopeToBlend(double slope) noexcept;
 ShelfSlopeBlend mapShelfSlopeToBlend(double slope) noexcept;
 ShelfSlopeBlend mapCutSlopeToBlend(EqlModuleProcessor::FilterType type, double slope) noexcept;

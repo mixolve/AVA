@@ -1,5 +1,5 @@
 #include "Editor.h"
-#include "PresetSections.h"
+#include "PresetSection.h"
 
 void AvaAudioProcessorEditor::setupPresetControls()
 {
@@ -22,27 +22,20 @@ void AvaAudioProcessorEditor::setupPresetControls()
             refreshFilterPresetList(presetName);
         }
     };
-    presetsSection->filterActionsToggleButton->onClick = [this]
+    presetsSection->actionsReveal.onUpdate = [safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
     {
-        presetsSection->filterActionsExpanded = presetsSection->filterActionsToggleButton->getToggleState();
-        if (presetsSection->filterActionsExpanded)
+        if (safeEditor != nullptr)
         {
-            presetsSection->actionsExpanded = false;
-            presetsSection->actionsToggleButton->setToggleState(false, juce::dontSendNotification);
+            safeEditor->updateSectionStates();
+            safeEditor->resized();
         }
-        setPresetsVisible(eqlModuleLoaded);
-        resized();
-        clearKeyboardFocus(*this);
     };
     presetsSection->actionsToggleButton->onClick = [this]
     {
-        presetsSection->actionsExpanded = presetsSection->actionsToggleButton->getToggleState();
-        if (presetsSection->actionsExpanded)
-        {
-            presetsSection->filterActionsExpanded = false;
-            presetsSection->filterActionsToggleButton->setToggleState(false, juce::dontSendNotification);
-        }
-        setPresetsVisible(eqlModuleLoaded);
+        presetsSection->actionsToggleButton->setTablerIcon(
+            presetsSection->actionsToggleButton->getToggleState() ? "arrows-up" : "arrows-down");
+        presetsSection->actionsReveal.setExpanded(presetsSection->actionsToggleButton->getToggleState());
+        updateSectionStates();
         resized();
         clearKeyboardFocus(*this);
     };
@@ -76,21 +69,22 @@ void AvaAudioProcessorEditor::setupPresetControls()
         clearKeyboardFocus(*this);
     });
     presetsSection->deleteButton->setLongPressPrimaryPromptIcon("trash");
-    addAndMakeVisible(presetsSection->presetCombo);
-    addAndMakeVisible(*presetsSection->filterActionsToggleButton);
     addAndMakeVisible(*presetsSection->actionsToggleButton);
-    addAndMakeVisible(*presetsSection->addButton);
-    addAndMakeVisible(*presetsSection->saveButton);
-    addAndMakeVisible(*presetsSection->renameButton);
-    addAndMakeVisible(*presetsSection->defaultButton);
-    addAndMakeVisible(*presetsSection->deleteButton);
+    addAndMakeVisible(presetsSection->presetClip);
+    addAndMakeVisible(presetsSection->actionsClip);
+    presetsSection->presetClip.addAndMakeVisible(presetsSection->presetCombo);
+    presetsSection->presetClip.addAndMakeVisible(*presetsSection->addButton);
+    presetsSection->actionsClip.addAndMakeVisible(*presetsSection->saveButton);
+    presetsSection->actionsClip.addAndMakeVisible(*presetsSection->renameButton);
+    presetsSection->actionsClip.addAndMakeVisible(*presetsSection->defaultButton);
+    presetsSection->actionsClip.addAndMakeVisible(*presetsSection->deleteButton);
     presetsSection->onRenameRequested = [this] (const juce::String& currentName)
     {
         auto promptBounds = moduleTitle != nullptr ? getLocalArea(moduleTitle.get(), moduleTitle->getLocalBounds())
                                                    : juce::Rectangle<int>();
 
         if (! promptBounds.isEmpty())
-            promptBounds.setY(getEditorInsetTop(getHeight()));
+            promptBounds.setY(uiGap);
 
         showTextPrompt(currentName,
                        [this, currentName] (const juce::String& newName)

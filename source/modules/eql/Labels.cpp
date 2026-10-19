@@ -60,9 +60,9 @@ juce::String EqlModuleProcessor::getFilterTypeParamId(const int filterIndex)
     return "filter-" + juce::String(filterIndex + 1) + "_type";
 }
 
-juce::String EqlModuleProcessor::getFilterPlaceParamId(const int filterIndex)
+juce::String EqlModuleProcessor::getFilterPhaseParamId(const int filterIndex)
 {
-    return "filter-" + juce::String(filterIndex + 1) + "_place";
+    return "filter-" + juce::String(filterIndex + 1) + "_phase";
 }
 
 juce::String EqlModuleProcessor::getFilterFrequencyParamId(const int filterIndex)
@@ -90,59 +90,23 @@ juce::String EqlModuleProcessor::getFilterBypassParamId(const int filterIndex)
     return makeFilterParameterId("bp", filterIndex);
 }
 
-juce::String EqlModuleProcessor::getFilterHeaderText(const FilterType type, const int filterIndex)
-{
-    return juce::String::formatted("%02d %s",
-                                   filterIndex + 1,
-                                   filterTypeDisplayPrefix(type).toRawUTF8());
-}
-
-namespace
-{
-juce::String filterPlaceDisplayPrefix(const int choiceIndex)
-{
-    switch (juce::jlimit(0, 7, choiceIndex))
-    {
-        case 0: return "LR";
-        case 1: return "LL";
-        case 2: return "RR";
-        case 3: return "MM";
-        case 4: return "SS";
-        case 5: return "PHS";
-        case 6: return "PHL";
-        case 7: return "PHR";
-        default: return "LR";
-    }
-}
-
-}
-
-juce::String EqlModuleProcessor::getFilterHeaderText(const int filterIndex, const int) const noexcept
+juce::String EqlModuleProcessor::getFilterHeaderText(const int filterIndex) const noexcept
 {
     if (! juce::isPositiveAndBelow(filterIndex, static_cast<int>(filterTypeParams.size())))
         return {};
 
     const auto filterArrayIndex = static_cast<size_t>(filterIndex);
     const auto filterType = getFilterTypeForSection(filterArrayIndex);
-    const auto placeChoice = filterPlaceParams[filterArrayIndex] != nullptr
-        ? juce::jlimit(0, 7, static_cast<int>(std::lround(filterPlaceParams[filterArrayIndex]->load(std::memory_order_relaxed))))
-        : 0;
+    const auto phaseEnabled = filterPhaseParams[filterArrayIndex] != nullptr
+        && filterPhaseParams[filterArrayIndex]->load(std::memory_order_relaxed) >= 0.5f
+        && !isCutFilterType(filterType) && !isVolumeFilterType(filterType);
     const auto frequency = filterFrequencyParams[filterArrayIndex] != nullptr
         ? filterFrequencyParams[filterArrayIndex]->load(std::memory_order_relaxed)
         : defaultFilterFrequencyHz;
 
-    if (filterType == FilterType::volume)
-    {
-        return juce::String::formatted("%s-%s",
-                                       filterTypeDisplayPrefix(filterType).toRawUTF8(),
-                                       filterPlaceDisplayPrefix(placeChoice).toRawUTF8())
-            + "-00000";
-    }
-
-    return juce::String::formatted("%s-%s-%05d",
-                                   filterTypeDisplayPrefix(filterType).toRawUTF8(),
-                                   filterPlaceDisplayPrefix(placeChoice).toRawUTF8(),
-                                   static_cast<int>(std::lround(frequency)));
+    return filterTypeDisplayPrefix(filterType) + "-"
+        + juce::String::formatted("%05d", filterType == FilterType::volume ? 0 : static_cast<int>(std::lround(frequency)))
+        + (filterType == FilterType::volume ? "" : (phaseEnabled ? "-P" : "-F"));
 }
 
 juce::StringArray getOrderDisplayChoicesForType(const EqlModuleProcessor::FilterType type) noexcept

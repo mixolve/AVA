@@ -23,8 +23,11 @@ public:
     void refreshDelayCapacity();
     void process(juce::AudioBuffer<float>&, juce::MidiBuffer&);
     int getLatencySamples() const noexcept;
+    AvaAudioProcessor* getSoloProcessor(bool channelSolo) const noexcept;
+    void clearOtherSolo(AvaAudioProcessor& selected, bool channelSolo);
     std::shared_ptr<AvaAudioProcessor> getInstanceHandle(int id) noexcept;
-    bool hasMultipleInstances() const noexcept { return topology.nodes.size() > 1; }
+    bool hasMultipleInstances() const noexcept { return getInstanceCount(topology) > 1; }
+    bool isRootBypassed() const noexcept { return topology.rootBypassed; }
     int getRootInstanceId() const noexcept { return topology.rootInstanceId; }
     void writeProcessorStates(juce::ValueTree&, int excludedId = 0) const;
     void restoreProcessorStates(const juce::ValueTree&);
@@ -45,8 +48,8 @@ private:
 
     const State::Node* findNode(int id) const noexcept;
     void prepareBuffers(Instance&);
-    void processGroup(int firstId, juce::AudioBuffer<float>& input,
-                      juce::AudioBuffer<float>& output, juce::MidiBuffer&);
+    unsigned processGroup(int firstId, juce::AudioBuffer<float>& input,
+                          juce::AudioBuffer<float>& output, juce::MidiBuffer&);
     void planGroupDelays(int firstId);
     void applyDelay(int id, juce::AudioBuffer<float>&);
     int nodeLatency(int id) const noexcept;

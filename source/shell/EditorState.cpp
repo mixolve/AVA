@@ -1,6 +1,9 @@
 #include "Editor.h"
+#include "EditorStateSchema.h"
+#include "EditorSetup.h"
+#include "ChoiceControl.h"
 #include "FilterSection.h"
-#include "WindowState.h"
+#include "EditorPreferences.h"
 #include "FilterOrderState.h"
 #include "../modules/eql/Processor.h"
 
@@ -12,8 +15,6 @@ juce::Point<int> clampEditorSize(const int width, const int height) noexcept
              juce::jlimit(minimumEditorHeight, maximumEditorHeight, height) };
 }
 }
-
-
 
 EqlModuleProcessor* AvaAudioProcessorEditor::getActiveEqlProcessor() noexcept
 {
@@ -31,7 +32,6 @@ const EqlModuleProcessor* AvaAudioProcessorEditor::getActiveEqlProcessor() const
     return audioProcessor.getEqlModuleProcessor();
 }
 
-
 void AvaAudioProcessorEditor::clearAllFilters()
 {
     auto* eqlProcessor = getActiveEqlProcessor();
@@ -39,14 +39,10 @@ void AvaAudioProcessorEditor::clearAllFilters()
     if (eqlProcessor == nullptr || ! eqlProcessor->clearFilters())
         return;
 
-    filterDisplayOrder.clear();
-    filterDisplayOrder.reserve(EqlModuleProcessor::maxFilterCount);
+    filterDisplayOrder = shell_filter_order_state::makeIdentity(EqlModuleProcessor::maxFilterCount);
 
     for (int filterIndex = 0; filterIndex < EqlModuleProcessor::maxFilterCount; ++filterIndex)
-    {
-        filterDisplayOrder.push_back(filterIndex);
         resetFilterSectionUiState(filterIndex);
-    }
 
     storeEditorStateToValueTree();
     updateSectionStates();
@@ -54,42 +50,25 @@ void AvaAudioProcessorEditor::clearAllFilters()
     scheduleHistorySnapshot();
 }
 
-void AvaAudioProcessorEditor::performUndo()
+void AvaAudioProcessorEditor::performHistoryStep(const HistoryAction action)
 {
     commitPendingHistorySnapshot(true);
 
-    if (undoHistory.empty())
+    auto& sourceHistory = action == HistoryAction::undo ? undoHistory : redoHistory;
+    auto& destinationHistory = action == HistoryAction::undo ? redoHistory : undoHistory;
+
+    if (sourceHistory.empty())
         return;
 
-    const auto snapshot = undoHistory.back();
-    undoHistory.pop_back();
+    const auto snapshot = sourceHistory.back();
+    sourceHistory.pop_back();
 
     const auto currentSnapshot = committedHistorySnapshot;
 
     if (applyHistorySnapshot(snapshot))
-        redoHistory.push_back(currentSnapshot);
+        destinationHistory.push_back(currentSnapshot);
     else
-        undoHistory.push_back(snapshot);
-
-    updateUndoRedoButtons();
-}
-
-void AvaAudioProcessorEditor::performRedo()
-{
-    commitPendingHistorySnapshot(true);
-
-    if (redoHistory.empty())
-        return;
-
-    const auto snapshot = redoHistory.back();
-    redoHistory.pop_back();
-
-    const auto currentSnapshot = committedHistorySnapshot;
-
-    if (applyHistorySnapshot(snapshot))
-        undoHistory.push_back(currentSnapshot);
-    else
-        redoHistory.push_back(snapshot);
+        sourceHistory.push_back(snapshot);
 
     updateUndoRedoButtons();
 }
@@ -135,6 +114,8 @@ void AvaAudioProcessorEditor::storeFilterDisplayOrderToValueTree() noexcept
 
 void AvaAudioProcessorEditor::restoreEditorStateFromValueTree()
 {
+    cancelHostSlotMove();
+    const juce::ScopedValueSetter<bool> restoreGuard(restoringEditorUiState, true);
     auto& state = valueTreeState.state;
 
     setLoadedModuleFlags(audioProcessor.getActiveModule());
@@ -144,14 +125,6 @@ void AvaAudioProcessorEditor::restoreEditorStateFromValueTree()
         AvaAudioProcessor::editorRoutingExpandedStateKey, false));
     if (routingExpanded)
         hostParametersExpanded = false;
-
-    for (int filterIndex = 0; filterIndex < EqlModuleProcessor::maxFilterCount; ++filterIndex)
-    {
-        auto* section = filterSections[static_cast<size_t>(filterIndex)].get();
-
-        if (section != nullptr)
-            section->expanded = false;
-    }
 
     for (int slotIndex = 0; slotIndex < static_cast<int>(hostSlotAssignments.size()); ++slotIndex)
     {
@@ -163,19 +136,20 @@ void AvaAudioProcessorEditor::restoreEditorStateFromValueTree()
     refreshHostSlotButtons();
     rebindActiveModuleEditors();
     restoreFilterDisplayOrderFromValueTree();
+    restoreEditorUiState();
 }
 
 void AvaAudioProcessorEditor::setLoadedModuleFlags(const AvaAudioProcessor::ActiveModule activeModule) noexcept
 {
     eqlModuleLoaded = activeModule == AvaAudioProcessor::ActiveModule::eql;
-    fftModuleLoaded = activeModule == AvaAudioProcessor::ActiveModule::fft;
     tlsModuleLoaded = activeModule == AvaAudioProcessor::ActiveModule::tls;
     dynModuleLoaded = activeModule == AvaAudioProcessor::ActiveModule::dyn;
-    trsModuleLoaded = activeModule == AvaAudioProcessor::ActiveModule::trs;
 }
 
 void AvaAudioProcessorEditor::storeEditorStateToValueTree() noexcept
 {
+    if (restoringEditorUiState) return;
+    storeEditorUiState();
     auto& state = valueTreeState.state;
     const auto activeModuleId = juce::String(AvaAudioProcessor::stateIdForModule(audioProcessor.getActiveModule()));
 
@@ -249,4 +223,39 @@ void AvaAudioProcessorEditor::syncEditorWidthToBounds()
 
     if (restoredWidth != getWidth())
         setSize(restoredWidth, getHeight());
+}
+
+void AvaAudioProcessorEditor::storeEditorUiState()
+{
+    if (restoringEditorUiState) return;
+    auto& state = valueTreeState.state;
+    const auto put = [&state](const char* name, juce::var value) { state.setProperty(shell_editor_ui::key(name), value, nullptr); };
+    put("osc.expanded", oscExpanded);
+    put("active_instance", activeInstanceId);
+    if (hostParametersExpanded) put("scroll.host", hostParametersViewport.getViewPositionY());
+    if (eqlModuleLoaded)
+    {
+        put("scroll.eql", filterViewport.getViewPositionY());
+        int expanded = -1;
+        for (size_t i = 0; i < filterSections.size(); ++i)
+            if (filterSections[i] != nullptr && filterSections[i]->expanded) expanded = static_cast<int>(i);
+        state.setProperty(shell_editor_ui::key("eql.expanded." + juce::String(static_cast<int>(audioProcessor.getSelectedCrossoverRange()))), expanded, nullptr);
+    }
+
+}
+
+void AvaAudioProcessorEditor::restoreEditorUiState()
+{
+    const juce::ScopedValueSetter<bool> restoreGuard(restoringEditorUiState, true);
+    const auto& state = valueTreeState.state;
+    const auto get = [&state](const char* name, juce::var fallback) { return state.getProperty(shell_editor_ui::key(name), fallback); };
+    oscExpanded = static_cast<bool>(get("osc.expanded", false));
+    if (oscExpanded) { hostParametersExpanded = false; routingExpanded = false; }
+
+    const auto expanded = static_cast<int>(state.getProperty(shell_editor_ui::key("eql.expanded." + juce::String(static_cast<int>(audioProcessor.getSelectedCrossoverRange()))), -1));
+    enforceSingleExpandedFilterSection(expanded);
+    updateSectionStates();
+    resized();
+    filterViewport.setViewPosition(0, static_cast<int>(get("scroll.eql", 0)));
+    hostParametersViewport.setViewPosition(0, static_cast<int>(get("scroll.host", 0)));
 }

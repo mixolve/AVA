@@ -6,6 +6,7 @@
 
 class BoxTextButton;
 class AvaAudioProcessor;
+class FlatScrollBarLookAndFeel;
 
 class RoutingPanel final : public juce::Component,
                            private juce::Timer
@@ -19,18 +20,18 @@ public:
     void setOnTopologyChanged(std::function<void()> action);
     void setOnRenameRequest(std::function<void(int, const juce::String&, juce::Component&)> action);
 
+    bool cancelMoveMode();
     void paint(juce::Graphics& graphics) override;
     void resized() override;
 
 private:
     class Content;
-    class ScrollBarLookAndFeel;
 
     void timerCallback() override;
     void openInstance(int instanceId, const juce::String& label);
 
     juce::AudioProcessorValueTreeState& parameters;
-    std::unique_ptr<ScrollBarLookAndFeel> scrollBarLookAndFeel;
+    std::unique_ptr<FlatScrollBarLookAndFeel> scrollBarLookAndFeel;
     juce::Viewport viewport;
     std::unique_ptr<Content> content;
     std::unique_ptr<BoxTextButton> backButton;
@@ -41,4 +42,7 @@ private:
     std::function<void()> onTopologyChanged;
     std::function<void(int, const juce::String&, juce::Component&)> onRenameRequest;
     int openInstanceId = 0;
+    int scrollReflowGeneration = 0;
+    juce::Point<int> scrollReflowStart;
+    bool scrollReflowActive = false;
 };

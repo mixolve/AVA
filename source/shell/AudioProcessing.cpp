@@ -1,10 +1,7 @@
 #include "Processor.h"
-#include "../modules/eql/ProcessorBank.h"
-#include "../modules/fft/ProcessorBank.h"
+#include "../modules/eql/RangeBank.h"
 #include "../modules/tls/Processor.h"
 #include "../modules/dyn/Processor.h"
-#include "../modules/fft/Processor.h"
-#include "../modules/trs/Processor.h"
 #include "../routing/Runtime.h"
 
 #include <cmath>
@@ -16,7 +13,7 @@ void AvaAudioProcessor::prepareToPlay(const double sampleRate, const int samples
 
     currentSampleRate = sampleRate;
     preparedBlockSize = juce::jmax(1, samplesPerBlock);
-    preparedNumChannels = juce::jlimit(1, static_cast<int>(maxSupportedChannels), getTotalNumOutputChannels());
+    preparedNumChannels = static_cast<int>(maxSupportedChannels);
     const auto maximumRangeLatencySamples = static_cast<int>(std::ceil(sampleRate * 0.25)) + 16384;
     crossoverRouter.prepare(sampleRate,
                             preparedBlockSize,
@@ -25,17 +22,23 @@ void AvaAudioProcessor::prepareToPlay(const double sampleRate, const int samples
 
     if (eqlProcessorBank != nullptr)
         eqlProcessorBank->prepareToPlay(sampleRate, preparedBlockSize);
-    if (fftProcessorBank != nullptr)
-        fftProcessorBank->prepareToPlay(sampleRate, preparedBlockSize);
+
     if (tlsModuleProcessor != nullptr)
         tlsModuleProcessor->prepareToPlay(sampleRate, preparedBlockSize);
     if (dynModuleProcessor != nullptr)
         dynModuleProcessor->prepareToPlay(sampleRate, preparedBlockSize);
-    if (trsModuleProcessor != nullptr)
-        trsModuleProcessor->prepareToPlay(sampleRate, preparedBlockSize);
+
+    routingChannels.setSize(routingChannelCount, preparedBlockSize);
+    selectedInputBuffer.setSize(preparedNumChannels, preparedBlockSize);
+    routingInputSnapshot.setSize(routingChannelCount, preparedBlockSize);
+    unselectedDelay.setSize(routingChannelCount, maximumRangeLatencySamples + 1);
+    unselectedDelay.clear();
+    unselectedDelayPosition = 0;
+    unselectedLatency = 0;
+    lastProcessingMask = 0;
 
     if (routingRuntime != nullptr)
-        routingRuntime->prepare(sampleRate, preparedBlockSize, preparedNumChannels);
+        routingRuntime->prepare(sampleRate, preparedBlockSize, routingChannelCount);
 
     updateShellLatency();
     processingPrepared.store(true, std::memory_order_release);
@@ -48,14 +51,11 @@ void AvaAudioProcessor::releaseResources()
 
     if (eqlProcessorBank != nullptr)
         eqlProcessorBank->releaseResources();
-    if (fftProcessorBank != nullptr)
-        fftProcessorBank->releaseResources();
+
     if (tlsModuleProcessor != nullptr)
         tlsModuleProcessor->releaseResources();
     if (dynModuleProcessor != nullptr)
         dynModuleProcessor->releaseResources();
-    if (trsModuleProcessor != nullptr)
-        trsModuleProcessor->releaseResources();
 
     if (routingRuntime != nullptr)
         routingRuntime->release();
@@ -72,19 +72,19 @@ void AvaAudioProcessor::reset()
 
     if (eqlProcessorBank != nullptr)
         eqlProcessorBank->resetProcessingState();
-    if (fftProcessorBank != nullptr)
-        fftProcessorBank->resetProcessingState();
+
     if (tlsModuleProcessor != nullptr)
         tlsModuleProcessor->resetProcessingState();
     if (dynModuleProcessor != nullptr)
         dynModuleProcessor->resetProcessingState();
-    if (trsModuleProcessor != nullptr)
-        trsModuleProcessor->resetProcessingState();
 
     if (routingRuntime != nullptr)
         routingRuntime->reset();
 
     crossoverRouter.reset();
+    unselectedDelay.clear();
+    unselectedDelayPosition = 0;
+    lastProcessingMask = 0;
 
     globalClipIndicator.store(0.0f, std::memory_order_relaxed);
 }
@@ -107,11 +107,6 @@ int AvaAudioProcessor::getActiveModuleLatencySamples() const noexcept
 
     switch (module)
     {
-        case ActiveModule::fft:
-            if (const auto* processor = getFftProcessorBank())
-                return maxActiveLatency(*processor);
-            break;
-
         case ActiveModule::tls:
             if (const auto* processor = getTlsModuleProcessor())
                 return maxActiveLatency(*processor);
@@ -119,11 +114,6 @@ int AvaAudioProcessor::getActiveModuleLatencySamples() const noexcept
 
         case ActiveModule::dyn:
             if (const auto* processor = getDynModuleProcessor())
-                return maxActiveLatency(*processor);
-            break;
-
-        case ActiveModule::trs:
-            if (const auto* processor = getTrsModuleProcessor())
                 return maxActiveLatency(*processor);
             break;
 
@@ -182,17 +172,69 @@ bool AvaAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
     if (mainInput != mainOutput)
         return false;
 
+    if (layouts.outputBuses.size() != 1 || layouts.inputBuses.size() != routingChannelCount / 2)
+        return false;
+    for (int bus = 1; bus < layouts.inputBuses.size(); ++bus)
+    {
+        const auto channels = layouts.getChannelSet(true, bus);
+        if (!channels.isDisabled() && channels != juce::AudioChannelSet::mono()
+            && channels != juce::AudioChannelSet::stereo()) return false;
+    }
     return mainInput == juce::AudioChannelSet::mono()
         || mainInput == juce::AudioChannelSet::stereo();
 }
 
+juce::StringArray AvaAudioProcessor::getProcessingInputChoices()
+{
+    return ava::channels::choices();
+}
+
+bool AvaAudioProcessor::isProcessingInputAvailable(const int choiceIndex) const
+{
+    const auto* host = routingOwner != nullptr ? routingOwner : this;
+    return ava::channels::isAvailable(*host, choiceIndex);
+}
+
+std::array<int, 2> AvaAudioProcessor::getProcessingInputChannels() const noexcept
+{
+    const auto choice = processingInputParam != nullptr ? juce::roundToInt(processingInputParam->load()) : 0;
+    return ava::channels::decode(choice);
+}
+
 void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
+    const juce::ScopedTryLock blockLock(processingLock);
+    if (!blockLock.isLocked()) return;
+    // Each bus owns a stable pair, including disabled/mono buses. Channel numbers
+    // therefore never change when the host enables another auxiliary input.
+    routingChannels.setSize(routingChannelCount, buffer.getNumSamples(), false, false, true);
+    routingChannels.clear();
+    for (int bus = 0; bus < getBusCount(true); ++bus)
+    {
+        auto input = getBusBuffer(buffer, true, bus);
+        for (int channel = 0; channel < input.getNumChannels(); ++channel)
+            routingChannels.copyFrom(bus * 2 + channel, 0, input, channel, 0, buffer.getNumSamples());
+    }
+    processChannelBlock(routingChannels, midi);
+    auto output = getBusBuffer(buffer, false, 0);
+    auto* monitor = routingRuntime != nullptr ? routingRuntime->getSoloProcessor(true)
+        : soloChannelParam != nullptr && soloChannelParam->load() >= 0.5f ? this : nullptr;
+    if (globalBypassParam != nullptr && globalBypassParam->load() >= 0.5f) monitor = nullptr;
+    const auto selected = monitor != nullptr ? monitor->getProcessingInputChannels() : std::array<int, 2> { 0, 1 };
+    const auto right = selected[1] >= 0 && getChannelCountOfBus(true, selected[1] / 2) > selected[1] % 2
+        ? selected[1] : selected[0];
+    for (int channel = 0; channel < output.getNumChannels(); ++channel)
+        output.copyFrom(channel, 0, routingChannels, channel == 0 ? selected[0] : right, 0, buffer.getNumSamples());
+    if (monitor != nullptr && output.getNumChannels() == 1 && right != selected[0])
+    {
+        output.applyGain(0.5f);
+        output.addFrom(0, 0, routingChannels, right, 0, buffer.getNumSamples(), 0.5f);
+    }
+}
+
+void AvaAudioProcessor::processChannelBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
     juce::ScopedNoDenormals noDenormals;
-
-    for (auto channel = getTotalNumInputChannels(); channel < getTotalNumOutputChannels(); ++channel)
-        buffer.clear(channel, 0, buffer.getNumSamples());
-
     const juce::ScopedTryLock lock(processingLock);
 
     if (! lock.isLocked())
@@ -209,6 +251,12 @@ void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
 
     if (routingRuntime != nullptr && routingRuntime->hasMultipleInstances())
     {
+        if (globalBypassParam != nullptr && globalBypassParam->load(std::memory_order_relaxed) >= 0.5f)
+        {
+            requestLatencySamples(0);
+            globalClipIndicator.store(0.0f, std::memory_order_relaxed);
+            return;
+        }
         routingRuntime->process(buffer, midi);
         auto clipped = false;
         for (int channel = 0; channel < juce::jmin(buffer.getNumChannels(), preparedNumChannels); ++channel)
@@ -218,10 +266,81 @@ void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         return;
     }
 
-    processOwnBlock(buffer);
+    processOwnChannels(buffer);
 }
 
-void AvaAudioProcessor::processOwnBlock(juce::AudioBuffer<float>& buffer)
+unsigned AvaAudioProcessor::processOwnChannels(juce::AudioBuffer<float>& channels)
+{
+    const auto selected = getProcessingInputChannels();
+    const auto mask = (1u << selected[0]) | (selected[1] >= 0 ? 1u << selected[1] : 0u);
+    const auto samples = channels.getNumSamples();
+    selectedInputBuffer.setSize(preparedNumChannels, samples, false, false, true);
+    routingInputSnapshot.setSize(routingChannelCount, samples, false, false, true);
+    const auto* host = routingOwner != nullptr ? routingOwner : this;
+    const auto secondAvailable = selected[1] >= 0
+        && host->getChannelCountOfBus(true, selected[1] / 2) > selected[1] % 2;
+    for (int channel = 0; channel < preparedNumChannels; ++channel)
+        selectedInputBuffer.copyFrom(channel, 0, channels,
+            channel == 0 || !secondAvailable ? selected[0] : selected[1], 0, samples);
+    for (int channel = 0; channel < routingChannelCount; ++channel)
+        routingInputSnapshot.copyFrom(channel, 0, channels, channel, 0, samples);
+
+    if (lastProcessingMask != 0 && mask != lastProcessingMask)
+    {
+        if (eqlProcessorBank != nullptr) eqlProcessorBank->resetProcessingState();
+        if (tlsModuleProcessor != nullptr) tlsModuleProcessor->resetProcessingState();
+        if (dynModuleProcessor != nullptr) dynModuleProcessor->resetProcessingState();
+        crossoverRouter.reset();
+        unselectedDelay.clear();
+        unselectedDelayPosition = 0;
+    }
+    lastProcessingMask = mask;
+    processOwnBlock(selectedInputBuffer, &routingInputSnapshot);
+    channels.copyFrom(selected[0], 0, selectedInputBuffer, 0, 0, samples);
+    if (selected[1] >= 0 && secondAvailable)
+        channels.copyFrom(selected[1], 0, selectedInputBuffer, preparedNumChannels > 1 ? 1 : 0, 0, samples);
+    else if (selected[1] < 0 && preparedNumChannels > 1)
+    {
+        // A mono destination receives the mono fold of the module's stereo output.
+        channels.applyGain(selected[0], 0, samples, 0.5f);
+        channels.addFrom(selected[0], 0, selectedInputBuffer, 1, 0, samples, 0.5f);
+    }
+    const auto bypassed = (globalBypassParam != nullptr && globalBypassParam->load() >= 0.5f)
+        || (routingRuntime != nullptr && routingRuntime->isRootBypassed());
+    delayUnselectedChannels(channels, mask, bypassed ? 0 : getActiveModuleLatencySamples());
+    return mask;
+}
+
+void AvaAudioProcessor::delayUnselectedChannels(juce::AudioBuffer<float>& channels,
+                                                const unsigned mask, const int latency)
+{
+    const auto length = unselectedDelay.getNumSamples();
+    if (length == 0) return;
+    const auto delay = juce::jlimit(0, length - 1, latency);
+    if (delay != unselectedLatency)
+    {
+        unselectedDelay.clear();
+        unselectedDelayPosition = 0;
+        unselectedLatency = delay;
+    }
+    if (delay == 0) return;
+    for (int sample = 0; sample < channels.getNumSamples(); ++sample)
+    {
+        const auto read = (unselectedDelayPosition + length - delay) % length;
+        for (int channel = 0; channel < channels.getNumChannels(); ++channel)
+        {
+            if ((mask & (1u << channel)) != 0) continue;
+            const auto input = channels.getSample(channel, sample);
+            const auto output = delay > 0 ? unselectedDelay.getSample(channel, read) : input;
+            unselectedDelay.setSample(channel, unselectedDelayPosition, input);
+            channels.setSample(channel, sample, output);
+        }
+        unselectedDelayPosition = (unselectedDelayPosition + 1) % length;
+    }
+}
+
+void AvaAudioProcessor::processOwnBlock(juce::AudioBuffer<float>& buffer,
+                                        const juce::AudioBuffer<float>* routingInputs)
 {
     const auto active = activeModule.load(std::memory_order_acquire);
     auto crossoverSettings = getCrossoverSettings();
@@ -244,68 +363,10 @@ void AvaAudioProcessor::processOwnBlock(juce::AudioBuffer<float>& buffer)
         globalClipIndicator.store(clipped ? 1.0f : 0.0f, std::memory_order_relaxed);
     };
 
-    const auto readGlobalListen = [this] (const size_t index) noexcept
-    {
-        if (const auto* value = globalListenParams[index])
-            return value->load(std::memory_order_relaxed) >= 0.5f;
-
-        return false;
-    };
-
-    const auto applyGlobalListen = [&buffer,
-                                    listenLc = readGlobalListen(0),
-                                    listenRc = readGlobalListen(1),
-                                    listenMc = readGlobalListen(2),
-                                    listenSc = readGlobalListen(3),
-                                    listenLl = readGlobalListen(4),
-                                    listenRr = readGlobalListen(5),
-                                    listenSs = readGlobalListen(6),
-                                    msPlus3 = globalListenMsPlus3Param != nullptr
-                                        && globalListenMsPlus3Param->load(std::memory_order_relaxed) >= 0.5f]
-    {
-        if (! (listenLc || listenRc || listenMc || listenSc || listenLl || listenRr || listenSs)
-            || buffer.getNumChannels() < 2)
-            return;
-
-        const auto msGain = msPlus3 ? juce::Decibels::decibelsToGain(3.0f) : 1.0f;
-
-        for (int sampleIndex = 0; sampleIndex < buffer.getNumSamples(); ++sampleIndex)
-        {
-            const auto left = buffer.getSample(0, sampleIndex);
-            const auto right = buffer.getSample(1, sampleIndex);
-            const auto mid = 0.5f * (left + right) * msGain;
-            const auto side = 0.5f * (left - right) * msGain;
-
-            if (listenLc)
-                buffer.setSample(1, sampleIndex, left);
-            else if (listenRc)
-                buffer.setSample(0, sampleIndex, right);
-            else if (listenMc)
-            {
-                buffer.setSample(0, sampleIndex, mid);
-                buffer.setSample(1, sampleIndex, mid);
-            }
-            else if (listenSc)
-            {
-                buffer.setSample(0, sampleIndex, side);
-                buffer.setSample(1, sampleIndex, side);
-            }
-            else if (listenLl)
-                buffer.setSample(1, sampleIndex, 0.0f);
-            else if (listenRr)
-                buffer.setSample(0, sampleIndex, 0.0f);
-            else if (listenSs)
-            {
-                buffer.setSample(0, sampleIndex, side);
-                buffer.setSample(1, sampleIndex, -side);
-            }
-        }
-    };
-
     const auto globalBypassActive = globalBypassParam != nullptr
         && globalBypassParam->load(std::memory_order_relaxed) >= 0.5f;
 
-    if (globalBypassActive)
+    if (globalBypassActive || (routingRuntime != nullptr && routingRuntime->isRootBypassed()))
     {
         requestLatencySamples(0);
         globalClipIndicator.store(0.0f, std::memory_order_relaxed);
@@ -319,15 +380,6 @@ void AvaAudioProcessor::processOwnBlock(juce::AudioBuffer<float>& buffer)
 
     switch (active)
     {
-        case ActiveModule::fft:
-            if (auto* processor = getFftProcessorBank())
-            {
-                processor->refreshLatencyState();
-                availableRangeCount = processor->getCreatedRangeCount();
-                rangeLatencies = processor->getRangeLatencies();
-            }
-            break;
-
         case ActiveModule::tls:
             if (auto* processor = getTlsModuleProcessor())
             {
@@ -340,16 +392,8 @@ void AvaAudioProcessor::processOwnBlock(juce::AudioBuffer<float>& buffer)
         case ActiveModule::dyn:
             if (auto* processor = getDynModuleProcessor())
             {
-                processor->syncParameters();
-                availableRangeCount = processor->getCreatedRangeCount();
-                rangeLatencies = processor->getRangeLatencies();
-            }
-            break;
-
-        case ActiveModule::trs:
-            if (auto* processor = getTrsModuleProcessor())
-            {
-                processor->refreshLatencyState();
+                processor->setProcessingInputChannel(juce::roundToInt(processingInputParam->load()));
+                processor->syncParameters(false, true);
                 availableRangeCount = processor->getCreatedRangeCount();
                 rangeLatencies = processor->getRangeLatencies();
             }
@@ -374,18 +418,13 @@ void AvaAudioProcessor::processOwnBlock(juce::AudioBuffer<float>& buffer)
     crossoverRouter.setRangeLatencies(rangeLatencies);
     updateShellLatency();
 
-    crossoverRouter.process(buffer, [this, active] (const size_t rangeIndex,
-                                                   juce::AudioBuffer<float>& rangeBuffer)
+    crossoverRouter.process(buffer, [this, active, routingInputs] (const size_t rangeIndex,
+                                                   juce::AudioBuffer<float>& rangeBuffer, const int blockStart)
     {
         switch (active)
         {
             case ActiveModule::eql:
                 if (auto* processor = getEqlProcessorBank())
-                    processor->processRange(rangeIndex, rangeBuffer);
-                break;
-
-            case ActiveModule::fft:
-                if (auto* processor = getFftProcessorBank())
                     processor->processRange(rangeIndex, rangeBuffer);
                 break;
 
@@ -396,12 +435,7 @@ void AvaAudioProcessor::processOwnBlock(juce::AudioBuffer<float>& buffer)
 
             case ActiveModule::dyn:
                 if (auto* processor = getDynModuleProcessor())
-                    processor->processRange(rangeIndex, rangeBuffer);
-                break;
-
-            case ActiveModule::trs:
-                if (auto* processor = getTrsModuleProcessor())
-                    processor->processRange(rangeIndex, rangeBuffer);
+                    processor->processRange(rangeIndex, rangeBuffer, routingInputs, blockStart);
                 break;
 
             case ActiveModule::none:
@@ -409,7 +443,6 @@ void AvaAudioProcessor::processOwnBlock(juce::AudioBuffer<float>& buffer)
         }
     });
 
-    applyGlobalListen();
     applyGlobalOutputStage();
     updateShellLatency();
 }

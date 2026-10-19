@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Splitter.h"
-#include "UiState.h"
+#include "UiStateSchema.h"
 #include "../shell/Controls.h"
 #include "../shell/Style.h"
 
@@ -22,14 +22,6 @@ inline constexpr std::array<const char*, splitControlCount> splitLabels {
     "SPLIT-1", "SPLIT-2", "SPLIT-3", "SPLIT-4", "SPLIT-5"
 };
 
-inline constexpr std::array<const char*, 7> globalListenSuffixes {
-    "lc", "rc", "mc", "sc", "ll", "rr", "ss"
-};
-
-inline constexpr std::array<const char*, 7> globalListenLabels {
-    "LC", "RC", "MC", "SC", "LL", "RR", "SS"
-};
-
 inline constexpr float minSplitFrequencyGapHz = 1.0f;
 
 inline std::unique_ptr<BoxTextButton> makeTextButton(const juce::String& text,
@@ -44,7 +36,7 @@ inline std::unique_ptr<BoxTextButton> makeTextButton(const juce::String& text,
 
 inline std::unique_ptr<BoxTextButton> makeTimeModeButton()
 {
-    return makeTextButton("M", uiGrey500);
+    return makeTextButton("M", uiAccent);
 }
 
 inline bool getBool(const juce::ValueTree& state,

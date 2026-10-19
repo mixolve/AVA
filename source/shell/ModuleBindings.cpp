@@ -1,8 +1,7 @@
 #include "Editor.h"
-#include "../crossover/ComponentConfig.h"
+#include "../crossover/ModuleBindings.h"
 #include "FilterSection.h"
-#include "SetupSupport.h"
-#include "../modules/fft/Processor.h"
+#include "EditorSetup.h"
 
 void AvaAudioProcessorEditor::rebindActiveModuleEditors()
 {
@@ -19,6 +18,7 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
         };
         config.onPageChanged = [this]
         {
+            storeEditorUiState();
             storeFilterDisplayOrderToValueTree();
 
             if (const auto* editor = dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get()))
@@ -26,6 +26,7 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
 
             restoreFilterDisplayOrderFromValueTree();
             rebindActiveModuleEditors();
+            restoreEditorUiState();
             refreshHostSlotButtons();
             updateSectionStates();
             resized();
@@ -41,56 +42,6 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
         if (audioProcessor.getSelectedCrossoverRange() != visibleRange)
             audioProcessor.setSelectedCrossoverRange(visibleRange);
     }
-
-    auto rebindFftControls = [this] (juce::AudioProcessorValueTreeState& fftState,
-                                     FftModuleProcessor& fftProcessor)
-    {
-        if (fftAttackControl != nullptr) fftAttackControl->rebind(fftState);
-        if (fftReleaseControl != nullptr) fftReleaseControl->rebind(fftState);
-        if (fftKneeControl != nullptr) fftKneeControl->rebind(fftState);
-        if (fftRatioControl != nullptr) fftRatioControl->rebind(fftState);
-        if (fftFloorControl != nullptr) fftFloorControl->rebind(fftState);
-        if (fftDynamicModeControl != nullptr) fftDynamicModeControl->rebind(fftState);
-        if (fftCorrelationTypeControl != nullptr) fftCorrelationTypeControl->rebind(fftState);
-        if (fftDynamicDirectionControl != nullptr) fftDynamicDirectionControl->rebind(fftState);
-        if (fftCorrelationSmoothingControl != nullptr) fftCorrelationSmoothingControl->rebind(fftState);
-        if (fftDspFftSizeControl != nullptr) fftDspFftSizeControl->rebind(fftState);
-        if (fftDspOverlapControl != nullptr) fftDspOverlapControl->rebind(fftState);
-        if (fftDspSlopeControl != nullptr) fftDspSlopeControl->rebind(fftState);
-        if (fftCorrelationImpactControl != nullptr) fftCorrelationImpactControl->rebind(fftState);
-        if (fftDualMonoLeftThresholdControl != nullptr) fftDualMonoLeftThresholdControl->rebind(fftState, FftModuleProcessor::paramDualMonoLeftThresholdId);
-        if (fftDualMonoLeftAdaptiveControl != nullptr) fftDualMonoLeftAdaptiveControl->rebind(fftState);
-        if (fftDualMonoRightThresholdControl != nullptr) fftDualMonoRightThresholdControl->rebind(fftState, FftModuleProcessor::paramDualMonoRightThresholdId);
-        if (fftDualMonoRightAdaptiveControl != nullptr) fftDualMonoRightAdaptiveControl->rebind(fftState);
-        if (fftAdaptiveOffsetControl != nullptr) fftAdaptiveOffsetControl->rebind(fftState, FftModuleProcessor::paramSpectralAdaptiveOffsetId);
-        if (fftAdaptiveAttackControl != nullptr) fftAdaptiveAttackControl->rebind(fftState, FftModuleProcessor::paramAdaptiveAttackId);
-        if (fftAdaptiveHoldControl != nullptr) fftAdaptiveHoldControl->rebind(fftState, FftModuleProcessor::paramAdaptiveHoldId);
-        if (fftAdaptiveReleaseControl != nullptr) fftAdaptiveReleaseControl->rebind(fftState, FftModuleProcessor::paramAdaptiveReleaseId);
-        if (fftDetectorLowCutControl != nullptr) fftDetectorLowCutControl->rebind(fftState);
-        if (fftDetectorHighCutControl != nullptr) fftDetectorHighCutControl->rebind(fftState);
-        rebindFftModeControls(fftProcessor);
-        refreshFftAnalyserControls(fftProcessor);
-    };
-
-    auto rebindFftAttachments = [this] (juce::AudioProcessorValueTreeState& fftState)
-    {
-        if (fftDeltaButton != nullptr)
-            fftDeltaAttachment = std::make_unique<ButtonAttachment>(fftState,
-                                                                    FftModuleProcessor::paramDeltaId,
-                                                                    *fftDeltaButton);
-        if (fftDualMonoLinkButton != nullptr)
-            fftDualMonoLinkAttachment = std::make_unique<ButtonAttachment>(fftState,
-                                                                           FftModuleProcessor::paramDualMonoLinkId,
-                                                                           *fftDualMonoLinkButton);
-    };
-
-    auto rebuildFftAnalyser = [this] (FftModuleProcessor& fftProcessor)
-    {
-        shell_setup_support::removeOwnedChild(*this, fftAnalyserComponent);
-        fftAnalyserComponent = shell_setup_support::createFftAnalyserComponent(fftProcessor);
-        addAndMakeVisible(*fftAnalyserComponent);
-        fftAnalyserComponent->setVisible(fftModuleLoaded);
-    };
 
     auto rebindEqlEditorSections = [this]
     {
@@ -115,24 +66,6 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
         }
     };
 
-    auto rebindFftEditorSections = [this, &rebindFftControls, &rebindFftAttachments, &rebuildFftAnalyser]
-    {
-        if (auto* fftProcessor = audioProcessor.getFftModuleProcessor())
-        {
-            auto& fftState = fftProcessor->getValueTreeState();
-
-            if (fftAttackControl == nullptr)
-                setupFftControls(fftState, *fftProcessor);
-            else
-            {
-                rebindFftControls(fftState, *fftProcessor);
-                rebindFftAttachments(fftState);
-            }
-
-            rebuildFftAnalyser(*fftProcessor);
-        }
-    };
-
     auto rebindCrossoverEditor = [this] (const bool moduleLoaded,
                                          auto* processor,
                                          std::unique_ptr<juce::Component>& editor,
@@ -147,12 +80,12 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
         if (processor == nullptr)
             return;
 
+        auto config = makeConfig(*processor);
         auto* currentEditor = dynamic_cast<CrossoverModuleComponent*>(editor.get());
 
-        if (currentEditor == nullptr || currentEditor->getProcessorIdentity() != processor)
+        if (currentEditor == nullptr || currentEditor->getProcessorIdentity() != config.processorIdentity)
         {
             shell_setup_support::removeOwnedChild(*this, editor);
-            auto config = makeConfig(*processor);
             config.assignHostSlot = [this] (const juce::String& parameterId,
                                             const juce::String& parameterName,
                                             const float normalizedValue)
@@ -170,6 +103,22 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
                     clearKeyboardFocus(*safeEditor);
                 });
             };
+            if(config.moduleKey=="tls") {
+                config.showGainArrangePrompt=[this, state=config.valueTreeState](size_t range, tls::gain::Order order, auto preview, auto commit, auto dismiss) {
+                    showGainArrangePrompt(*state,range,order,std::move(preview),
+                        [this, action=std::move(commit)](const tls::gain::Order& value) {
+                            if(action) action(value);
+                            scheduleHistorySnapshot();
+                        },std::move(dismiss));
+                };
+                config.showArrangePrompt=[this, state=config.valueTreeState](size_t range, tls::blocks::Order order, auto preview, auto commit, auto dismiss) {
+                    showBlockArrangePrompt(*state,range,order,std::move(preview),
+                        [this, action=std::move(commit)](const tls::blocks::Order& value) {
+                            if(action) action(value);
+                            scheduleHistorySnapshot();
+                        },std::move(dismiss));
+                };
+            }
             editor = std::make_unique<CrossoverModuleComponent>(std::move(config));
             addAndMakeVisible(*editor);
         }
@@ -190,7 +139,6 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
     refreshModuleStateListeners();
 
     rebindEqlEditorSections();
-    rebindFftEditorSections();
     rebindCrossoverEditor(tlsModuleLoaded,
                           audioProcessor.getTlsModuleProcessor(),
                           tlsModuleEditor,
@@ -198,10 +146,6 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
     rebindCrossoverEditor(dynModuleLoaded,
                           audioProcessor.getDynModuleProcessor(),
                           dynModuleEditor,
-                          [] (auto& processor) { return makeDynCrossoverConfig(processor); });
-    rebindCrossoverEditor(trsModuleLoaded,
-                          audioProcessor.getTrsModuleProcessor(),
-                          trsModuleEditor,
-                          [this] (auto& processor) { return makeTrsCrossoverConfig(processor, *this, trsModuleEditor); });
+                          [this] (auto& processor) { return makeDynCrossoverConfig(processor, *this, dynModuleEditor, audioProcessor.getSelectedCrossoverRange()); });
     refreshHostSlotButtons();
 }

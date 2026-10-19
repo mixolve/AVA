@@ -1,5 +1,6 @@
-#include "PromptComponents.h"
+#include "Prompt.h"
 #include "Controls.h"
+#include "UppercaseText.h"
 
 #include <utility>
 
@@ -7,7 +8,7 @@ namespace
 {
 constexpr int promptEditorHeight = 30;
 
-class FloatingTextPrompt final : public PromptComponent
+class FloatingTextPrompt final : public PromptComponent, private juce::KeyListener
 {
 public:
     using CommitCallback = std::function<bool(const juce::String&)>;
@@ -18,11 +19,12 @@ public:
                        CommitCallback commitCallback,
                      juce::Rectangle<int> anchorBoundsIn,
                        DismissCallback dismissCallback,
-                       CloseCallback closeCallback)
+                       CloseCallback closeCallback,
+                       const bool uppercaseInput, const bool allowEmptyIn)
         : onCommit(std::move(commitCallback)),
             anchorBounds(anchorBoundsIn),
           onDismiss(std::move(dismissCallback)),
-          onClose(std::move(closeCallback))
+          onClose(std::move(closeCallback)), allowEmpty(allowEmptyIn)
     {
         setOpaque(false);
         setWantsKeyboardFocus(true);
@@ -36,14 +38,26 @@ public:
         textEditor.setJustification(juce::Justification::centred);
         textEditor.setColour(juce::TextEditor::textColourId, uiWhite);
         textEditor.setColour(juce::CaretComponent::caretColourId, uiWhite);
-        textEditor.setColour(juce::TextEditor::backgroundColourId, uiGrey800);
-        textEditor.setColour(juce::TextEditor::outlineColourId, uiGrey500);
+        textEditor.setColour(juce::TextEditor::backgroundColourId, uiGreyDark);
+        textEditor.setColour(juce::TextEditor::outlineColourId, uiGreyLight);
         textEditor.setColour(juce::TextEditor::focusedOutlineColourId, uiAccent);
+        if (uppercaseInput)
+        {
+            textEditor.setInputFilter(new UppercaseEditorInputFilter(), true);
+            currentText = uppercaseText(currentText);
+        }
         textEditor.setText(std::move(currentText), false);
         textEditor.setReturnKeyStartsNewLine(false);
+        textEditor.setEscapeAndReturnKeysConsumed(true);
+        textEditor.addKeyListener(this);
         textEditor.onReturnKey = [this] { commit(); };
         textEditor.onEscapeKey = [this] { cancel(); };
         addAndMakeVisible(textEditor);
+    }
+
+    ~FloatingTextPrompt() override
+    {
+        textEditor.removeKeyListener(this);
     }
 
     void focusEditor() override
@@ -74,10 +88,10 @@ public:
             }
         }
 
-        const auto visibleBounds = getVisibleBounds();
-        const auto editorInsetX = getEditorInsetX(getWidth());
-        const auto editorInsetTop = getEditorInsetTop(visibleBounds.getHeight());
-        const auto editorInsetBottom = getEditorInsetBottom(visibleBounds.getHeight());
+        const auto visibleBounds = getLocalBounds();
+        const auto editorInsetX = uiGap;
+        const auto editorInsetTop = uiGap;
+        const auto editorInsetBottom = uiGap;
         const auto promptWidth = juce::jmax(0, getWidth() - editorInsetX * 2);
         const auto promptHeight = juce::jmin(promptEditorHeight, juce::jmax(0, visibleBounds.getHeight() - editorInsetTop - editorInsetBottom));
 
@@ -89,44 +103,41 @@ public:
 
     void mouseDown(const juce::MouseEvent&) override
     {
-        cancel();
+        textEditor.grabKeyboardFocus();
     }
 
     bool keyPressed(const juce::KeyPress& key) override
     {
+        if (handleConfirmationKey(key))
+            return true;
         textEditor.grabKeyboardFocus();
         return textEditor.keyPressed(key);
     }
 
 private:
-    juce::Rectangle<int> getVisibleBounds() const
+    bool keyPressed(const juce::KeyPress& key, juce::Component*) override
     {
-        auto bounds = getLocalBounds();
+        return handleConfirmationKey(key);
+    }
 
-
-        return bounds;
+    bool handleConfirmationKey(const juce::KeyPress& key)
+    {
+        if (key.isKeyCode(juce::KeyPress::returnKey))
+        {
+            commit();
+            return true;
+        }
+        if (key.isKeyCode(juce::KeyPress::escapeKey))
+        {
+            cancel();
+            return true;
+        }
+        return false;
     }
 
     void requestClose()
     {
-        if (closePending)
-            return;
-
-        closePending = true;
-        auto deferredCloseCallback = std::move(onClose);
-        onClose = {};
-
-        if (onDismiss != nullptr)
-            onDismiss();
-
-        juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<FloatingTextPrompt>(this),
-                                         callback = std::move(deferredCloseCallback)]() mutable
-                                        {
-                                            if (safeThis == nullptr || callback == nullptr)
-                                                return;
-
-                                            callback();
-                                        });
+        requestPromptClose(*this, closePending, onClose, onDismiss);
     }
 
     void commit()
@@ -136,7 +147,7 @@ private:
 
         const auto enteredText = textEditor.getText().trim();
 
-        if (enteredText.isEmpty())
+        if (enteredText.isEmpty() && !allowEmpty)
         {
             textEditor.selectAll();
             textEditor.grabKeyboardFocus();
@@ -164,6 +175,7 @@ private:
     DismissCallback onDismiss;
     CloseCallback onClose;
     bool closePending = false;
+    const bool allowEmpty;
 };
 }
 
@@ -171,11 +183,13 @@ std::unique_ptr<PromptComponent> makeTextPrompt(juce::String currentText,
                                                 std::function<bool(const juce::String&)> onCommit,
                                                 const juce::Rectangle<int> anchorBounds,
                                                 std::function<void()> onDismiss,
-                                                std::function<void()> onClose)
+                                                std::function<void()> onClose,
+                                                const bool uppercaseInput, const bool allowEmpty)
 {
     return std::make_unique<FloatingTextPrompt>(std::move(currentText),
                                                 std::move(onCommit),
                                                 anchorBounds,
                                                 std::move(onDismiss),
-                                                std::move(onClose));
+                                                std::move(onClose),
+                                                uppercaseInput, allowEmpty);
 }

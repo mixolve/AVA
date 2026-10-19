@@ -1,12 +1,11 @@
 #include "Processor.h"
-#include "../modules/eql/ProcessorBank.h"
-#include "../modules/fft/ProcessorBank.h"
+#include "Editor.h"
+#include "HostChangeDetails.h"
+#include "../modules/eql/RangeBank.h"
 #include "../modules/tls/Processor.h"
 #include "../modules/dyn/Processor.h"
-#include "../modules/fft/Processor.h"
-#include "../modules/trs/Processor.h"
 #include "../routing/Runtime.h"
-#include "WindowState.h"
+#include "EditorPreferences.h"
 #include "../modules/eql/Processor.h"
 
 #include <algorithm>
@@ -17,9 +16,7 @@ const char* AvaAudioProcessor::stateIdForModule(const ActiveModule module) noexc
     {
         case ActiveModule::tls: return tlsModuleId;
         case ActiveModule::eql: return eqlModuleId;
-        case ActiveModule::fft: return fftModuleId;
         case ActiveModule::dyn: return dynModuleId;
-        case ActiveModule::trs: return trsModuleId;
         case ActiveModule::none: break;
     }
 
@@ -31,17 +28,11 @@ AvaAudioProcessor::ActiveModule AvaAudioProcessor::moduleFromStateId(const juce:
     if (moduleId == eqlModuleId)
         return ActiveModule::eql;
 
-    if (moduleId == fftModuleId)
-        return ActiveModule::fft;
-
     if (moduleId == tlsModuleId)
         return ActiveModule::tls;
 
     if (moduleId == dynModuleId)
         return ActiveModule::dyn;
-
-    if (moduleId == trsModuleId)
-        return ActiveModule::trs;
 
     return ActiveModule::none;
 }
@@ -149,10 +140,8 @@ void AvaAudioProcessor::registerActiveModuleStateListeners()
     switch (getActiveModule())
     {
         case ActiveModule::eql: observeModule(getEqlModuleProcessor()); break;
-        case ActiveModule::fft: observeModule(getFftModuleProcessor()); break;
         case ActiveModule::tls: observeModule(getTlsModuleProcessor()); break;
         case ActiveModule::dyn: observeModule(getDynModuleProcessor()); break;
-        case ActiveModule::trs: observeModule(getTrsModuleProcessor()); break;
         case ActiveModule::none: break;
     }
 
@@ -207,6 +196,29 @@ void AvaAudioProcessor::parameterChanged(const juce::String& parameterID, const 
         }
     }
 
+    // Child BP controls an instance; the owner's BP is the global plugin bypass
+    // and must remain available while another instance is soloed.
+    if (parameterID == paramGlobalBypassId && routingInstance && newValue < 0.5f
+        && acceptedInstanceBypassed.load(std::memory_order_relaxed)
+        && !suppressHostStateNotifications.load(std::memory_order_relaxed) && isInstanceSoloBypassed())
+    {
+        if (auto* bypass = parameters.getParameter(paramGlobalBypassId))
+            bypass->setValueNotifyingHost(1.0f);
+        return;
+    }
+
+    if (parameterID == paramGlobalBypassId)
+        acceptedInstanceBypassed.store(newValue >= 0.5f, std::memory_order_relaxed);
+
+    if (parameterID == paramSoloInstanceId || parameterID == paramSoloChannelId)
+    {
+        auto& owner = getOscOwner();
+        const juce::ScopedLock lock(owner.processingLock);
+        if (newValue >= 0.5f && owner.routingRuntime != nullptr)
+            owner.routingRuntime->clearOtherSolo(*this, parameterID == paramSoloChannelId);
+        owner.triggerAsyncUpdate();
+    }
+
     if (parameterID == paramCrossoverActiveSplitCountId)
     {
         const auto splitCount = juce::jlimit(0,
@@ -241,14 +253,7 @@ void AvaAudioProcessor::applyPendingShellUpdates()
     if (pendingHostStateNotification.exchange(false, std::memory_order_acq_rel)
         && ! suppressHostStateNotifications.load(std::memory_order_relaxed))
     {
-        auto details = juce::AudioProcessorListener::ChangeDetails()
-                           .withNonParameterStateChanged(true);
-
-       #if JucePlugin_Build_AU
-        details = details.withProgramChanged(true);
-       #endif
-
-        updateHostDisplay(details);
+        updateHostDisplay(makeHostStateChangeDetails());
     }
 }
 
@@ -258,16 +263,12 @@ void AvaAudioProcessor::ensureActiveCrossoverRangeCount(const size_t rangeCount)
     const juce::ScopedLock lock(processingLock);
     const auto eqlNeedsRange = eqlProcessorBank != nullptr
         && eqlProcessorBank->getCreatedRangeCount() < constrainedRangeCount;
-    const auto fftNeedsRange = fftProcessorBank != nullptr
-        && fftProcessorBank->getCreatedRangeCount() < constrainedRangeCount;
     const auto tlsNeedsRange = tlsModuleProcessor != nullptr
         && tlsModuleProcessor->getCreatedRangeCount() < constrainedRangeCount;
     const auto dynNeedsRange = dynModuleProcessor != nullptr
         && dynModuleProcessor->getCreatedRangeCount() < constrainedRangeCount;
-    const auto trsNeedsRange = trsModuleProcessor != nullptr
-        && trsModuleProcessor->getCreatedRangeCount() < constrainedRangeCount;
 
-    if (! eqlNeedsRange && ! fftNeedsRange && ! tlsNeedsRange && ! dynNeedsRange && ! trsNeedsRange)
+    if (! eqlNeedsRange && ! tlsNeedsRange && ! dynNeedsRange)
         return;
 
     const ScopedProcessingSuspend suspendGuard(*this);
@@ -276,17 +277,11 @@ void AvaAudioProcessor::ensureActiveCrossoverRangeCount(const size_t rangeCount)
     if (eqlNeedsRange)
         eqlProcessorBank->ensureRangeCount(constrainedRangeCount);
 
-    if (fftNeedsRange)
-        fftProcessorBank->ensureRangeCount(constrainedRangeCount);
-
     if (tlsNeedsRange)
         tlsModuleProcessor->ensureRangeCount(constrainedRangeCount);
 
     if (dynNeedsRange)
         dynModuleProcessor->ensureRangeCount(constrainedRangeCount);
-
-    if (trsNeedsRange)
-        trsModuleProcessor->ensureRangeCount(constrainedRangeCount);
 
     updateShellLatency();
 
@@ -309,26 +304,6 @@ const TlsModuleProcessor* AvaAudioProcessor::getTlsModuleProcessor() const noexc
     return tlsModuleProcessor.get();
 }
 
-FftModuleProcessor* AvaAudioProcessor::getFftModuleProcessor() noexcept
-{
-    return fftProcessorBank != nullptr ? fftProcessorBank->getSelectedProcessor() : nullptr;
-}
-
-const FftModuleProcessor* AvaAudioProcessor::getFftModuleProcessor() const noexcept
-{
-    return fftProcessorBank != nullptr ? fftProcessorBank->getSelectedProcessor() : nullptr;
-}
-
-FftProcessorBank* AvaAudioProcessor::getFftProcessorBank() noexcept
-{
-    return fftProcessorBank.get();
-}
-
-const FftProcessorBank* AvaAudioProcessor::getFftProcessorBank() const noexcept
-{
-    return fftProcessorBank.get();
-}
-
 DynModuleProcessor* AvaAudioProcessor::getDynModuleProcessor() noexcept
 {
     return dynModuleProcessor.get();
@@ -339,26 +314,15 @@ const DynModuleProcessor* AvaAudioProcessor::getDynModuleProcessor() const noexc
     return dynModuleProcessor.get();
 }
 
-TrsModuleProcessor* AvaAudioProcessor::getTrsModuleProcessor() noexcept
-{
-    return trsModuleProcessor.get();
-}
-
-const TrsModuleProcessor* AvaAudioProcessor::getTrsModuleProcessor() const noexcept
-{
-    return trsModuleProcessor.get();
-}
-
 void AvaAudioProcessor::resetModuleProcessors() noexcept
 {
+    if (auto* editor = getOscActionEditor()) editor->prepareForProcessorStateRestore();
     for (auto& target : hostSlotTargets)
         target.store(nullptr, std::memory_order_release);
 
     eqlProcessorBank.reset();
-    fftProcessorBank.reset();
     tlsModuleProcessor.reset();
     dynModuleProcessor.reset();
-    trsModuleProcessor.reset();
 }
 
 bool AvaAudioProcessor::createModuleInstance(const ActiveModule module)
@@ -384,12 +348,6 @@ bool AvaAudioProcessor::createModuleInstance(const ActiveModule module)
             eqlProcessorBank->setSelectedRange(selectedRange);
             return prepareModule(eqlProcessorBank);
 
-        case ActiveModule::fft:
-            fftProcessorBank = std::make_unique<FftProcessorBank>(*this);
-            fftProcessorBank->ensureRangeCount(requiredRangeCount);
-            fftProcessorBank->setSelectedRange(selectedRange);
-            return prepareModule(fftProcessorBank);
-
         case ActiveModule::tls:
             tlsModuleProcessor = std::make_unique<TlsModuleProcessor>(*this);
             tlsModuleProcessor->ensureRangeCount(requiredRangeCount);
@@ -399,11 +357,6 @@ bool AvaAudioProcessor::createModuleInstance(const ActiveModule module)
             dynModuleProcessor = std::make_unique<DynModuleProcessor>(*this);
             dynModuleProcessor->ensureRangeCount(requiredRangeCount);
             return prepareModule(dynModuleProcessor);
-
-        case ActiveModule::trs:
-            trsModuleProcessor = std::make_unique<TrsModuleProcessor>(*this);
-            trsModuleProcessor->ensureRangeCount(requiredRangeCount);
-            return prepareModule(trsModuleProcessor);
 
         case ActiveModule::none:
             break;
@@ -441,9 +394,6 @@ void AvaAudioProcessor::setSelectedCrossoverRange(const size_t rangeIndex)
 
     if (eqlProcessorBank != nullptr)
         eqlProcessorBank->setSelectedRange(selectedRange);
-
-    if (fftProcessorBank != nullptr)
-        fftProcessorBank->setSelectedRange(selectedRange);
 
     registerActiveModuleStateListeners();
     refreshHostSlotTargets();

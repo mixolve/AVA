@@ -1,12 +1,77 @@
-#include "PromptComponents.h"
+#include "Prompt.h"
 #include "Controls.h"
 #include "Editor.h"
-#include "MarkdownContent.h"
+#include "AboutLinks.h"
 
 #include <utility>
 
 namespace
 {
+constexpr int promptPanelPadding = uiGap;
+constexpr int promptItemGap = uiGap;
+
+class AboutTextRow final : public juce::Component,
+                               public juce::SettableTooltipClient
+{
+public:
+    explicit AboutTextRow(juce::String textIn) : text(std::move(textIn))
+    {
+        setOpaque(false);
+        setWantsKeyboardFocus(false);
+        setMouseClickGrabsKeyboardFocus(false);
+    }
+
+    void setText(const juce::String& newText)
+    {
+        text = newText;
+        cachedWidth = -1;
+        repaint();
+    }
+
+    int getPreferredHeight(const int width) const
+    {
+        updateLayout(width);
+        return juce::jmax(rowHeight, juce::roundToInt(layout.getHeight()));
+    }
+
+    void paint(juce::Graphics& graphics) override
+    {
+        updateLayout(getWidth());
+        graphics.setColour(uiWhite);
+        layout.draw(graphics, getLocalBounds().toFloat());
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        if (onClick != nullptr)
+            onClick();
+    }
+
+    std::function<void()> onClick;
+
+private:
+    void updateLayout(const int width) const
+    {
+        const auto contentWidth = juce::jmax(1, width - uiGap * 2);
+
+        if (cachedWidth == contentWidth)
+            return;
+
+        juce::AttributedString attributed(text);
+        attributed.setFont(makeUiFont());
+        attributed.setColour(uiWhite);
+        attributed.setJustification(juce::Justification::centred);
+        attributed.setWordWrap(juce::AttributedString::byWord);
+
+        layout.createLayout(attributed, static_cast<float>(contentWidth));
+        cachedWidth = contentWidth;
+    }
+
+    juce::String text;
+    mutable juce::TextLayout layout;
+    mutable int cachedWidth = -1;
+};
+
 class FloatingInfoPrompt final : public PromptComponent
 {
 public:
@@ -14,21 +79,79 @@ public:
 
     FloatingInfoPrompt(juce::String markdownText,
                        CloseCallback closeCallback)
-        : markdownContent(std::move(markdownText)),
-          okButton(uiAccent),
-          onClose(std::move(closeCallback))
+        : onClose(std::move(closeCallback))
     {
-        setOpaque(false);
+        setOpaque(true);
         setWantsKeyboardFocus(true);
         setMouseClickGrabsKeyboardFocus(false);
         setInterceptsMouseClicks(true, true);
 
-        markdownViewport.setViewedComponent(&markdownContent, false);
-        markdownViewport.setScrollBarsShown(false, false);
-        markdownViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
-        markdownViewport.setWantsKeyboardFocus(false);
-        markdownViewport.setMouseClickGrabsKeyboardFocus(false);
-        addAndMakeVisible(markdownViewport);
+        for (const auto& line : juce::StringArray::fromLines(markdownText))
+        {
+            const auto trimmed = line.trim();
+
+            if (trimmed.isEmpty())
+                continue;
+
+            const auto link = parseMarkdownLinkLine(trimmed);
+
+            if (link.url.isNotEmpty())
+            {
+                auto linkRow = std::make_unique<MarkdownLinkRow>(link.label, link.url, makeUiFont());
+                contentRows.push_back(linkRow.get());
+                linkRows.push_back(std::move(linkRow));
+                continue;
+            }
+
+            auto label = std::make_unique<AboutTextRow>(trimmed);
+
+            if (trimmed.containsChar('@'))
+            {
+                juce::String address;
+
+                for (const auto& token : juce::StringArray::fromTokens(trimmed, " \t", ""))
+                {
+                    if (! token.containsChar('@'))
+                        continue;
+
+                    address = token.trimCharactersAtStart("(").trimCharactersAtEnd("),.;:");
+                    break;
+                }
+
+                if (address.isNotEmpty())
+                {
+                    label->setTooltip("CLICK TO COPY");
+                    label->setMouseCursor(juce::MouseCursor::PointingHandCursor);
+                    juce::Component::SafePointer<AboutTextRow> safeLabel(label.get());
+                    label->onClick = [safeLabel, email = address.toLowerCase(),
+                                      original = trimmed, token = address]
+                    {
+                        juce::SystemClipboard::copyTextToClipboard(email);
+
+                        if (safeLabel == nullptr)
+                            return;
+
+                        // Monospace font: centre COPIED in the address slot so the line stays put.
+                        const auto padTotal = juce::jmax(0, token.length() - juce::String("COPIED").length());
+                        const auto leftPad = padTotal / 2;
+                        const auto copied = juce::String::repeatedString(" ", leftPad) + "COPIED"
+                            + juce::String::repeatedString(" ", padTotal - leftPad);
+                        safeLabel->setText(original.replace(token, copied));
+                        juce::Timer::callAfterDelay(1200, [safeLabel, original]
+                        {
+                            if (safeLabel != nullptr)
+                                safeLabel->setText(original);
+                        });
+                    };
+                }
+            }
+
+            contentRows.push_back(label.get());
+            textRows.push_back(std::move(label));
+        }
+
+        for (auto* row : contentRows)
+            addAndMakeVisible(row);
 
         okButton.setButtonText("OK");
         okButton.setTextJustification(juce::Justification::centred);
@@ -40,11 +163,6 @@ public:
         addAndMakeVisible(okButton);
     }
 
-    ~FloatingInfoPrompt() override
-    {
-        markdownViewport.setViewedComponent(nullptr, false);
-    }
-
     void paint(juce::Graphics& graphics) override
     {
         graphics.setColour(uiBackground);
@@ -53,7 +171,7 @@ public:
 
     void resized() override
     {
-        const auto visibleBounds = getVisibleBounds();
+        const auto visibleBounds = getLocalBounds();
         auto anchorBounds = juce::Rectangle<int>();
         auto panelVisibleBounds = visibleBounds;
 
@@ -86,13 +204,21 @@ public:
         auto contentBounds = panelBounds.reduced(promptPanelPadding);
         auto okBounds = contentBounds.removeFromBottom(rowHeight);
 
+        for (size_t index = 0; index < contentRows.size(); ++index)
+        {
+            const auto* textRow = dynamic_cast<AboutTextRow*>(contentRows[index]);
+            const auto rowHeightForRow = textRow != nullptr
+                ? textRow->getPreferredHeight(contentBounds.getWidth())
+                : rowHeight;
+            contentRows[index]->setBounds(contentBounds.removeFromTop(rowHeightForRow));
+
+            if (index + 1 < contentRows.size() && ! contentBounds.isEmpty())
+                contentBounds.removeFromTop(promptItemGap);
+        }
+
         if (! contentBounds.isEmpty())
             contentBounds.removeFromBottom(promptPanelPadding);
 
-        markdownViewport.setBounds(contentBounds);
-        markdownContent.setSize(contentBounds.getWidth(),
-                                juce::jmax(contentBounds.getHeight(),
-                                           markdownContent.getContentHeight(contentBounds.getWidth())));
         okButton.setBounds(okBounds);
     }
 
@@ -100,27 +226,6 @@ public:
     {
         if (! panelBounds.contains(event.getPosition()))
             cancel();
-    }
-
-    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
-    {
-        if (! markdownViewport.getBounds().contains(event.getPosition()))
-            return;
-
-        const auto directionalDelta = wheel.isReversed ? wheel.deltaY : -wheel.deltaY;
-        const auto scrollAmount = wheel.isSmooth
-            ? static_cast<int>(std::round(directionalDelta * 220.0f))
-            : static_cast<int>(std::round((directionalDelta < 0.0f ? -1.0f : 1.0f) * 48.0f));
-
-        if (scrollAmount == 0)
-            return;
-
-        const auto maxOffset = juce::jmax(0, markdownContent.getHeight() - markdownViewport.getHeight());
-
-        if (maxOffset <= 0)
-            return;
-
-        markdownViewport.setViewPosition(0, juce::jlimit(0, maxOffset, markdownViewport.getViewPositionY() + scrollAmount));
     }
 
     bool keyPressed(const juce::KeyPress& key) override
@@ -135,31 +240,9 @@ public:
     }
 
 private:
-    juce::Rectangle<int> getVisibleBounds() const
-    {
-        auto bounds = getLocalBounds();
-
-
-        return bounds;
-    }
-
     void requestClose()
     {
-        if (closePending)
-            return;
-
-        closePending = true;
-        auto deferredCloseCallback = std::move(onClose);
-        onClose = {};
-
-        juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<FloatingInfoPrompt>(this),
-                                         callback = std::move(deferredCloseCallback)]() mutable
-                                        {
-                                            if (safeThis == nullptr || callback == nullptr)
-                                                return;
-
-                                            callback();
-                                        });
+        requestPromptClose(*this, closePending, onClose);
     }
 
     void cancel()
@@ -168,9 +251,10 @@ private:
     }
 
     juce::Rectangle<int> panelBounds;
-    MarkdownContentView markdownContent;
-    juce::Viewport markdownViewport;
-    BoxTextButton okButton;
+    std::vector<std::unique_ptr<AboutTextRow>> textRows;
+    std::vector<std::unique_ptr<MarkdownLinkRow>> linkRows;
+    std::vector<juce::Component*> contentRows;
+    BoxTextButton okButton { uiAccent };
     CloseCallback onClose;
     bool closePending = false;
 };

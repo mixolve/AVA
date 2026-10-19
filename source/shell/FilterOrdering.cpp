@@ -31,7 +31,6 @@ void AvaAudioProcessorEditor::selectFilterSection(const int filterIndex)
         filterViewport.setViewPosition(0, juce::jlimit(0, maxOffset, targetY));
     }
 
-    refreshFftAnalyserResponse();
 }
 
 juce::Rectangle<int> AvaAudioProcessorEditor::getFilterSectionBounds(const int filterIndex) const
@@ -54,8 +53,8 @@ juce::Rectangle<int> AvaAudioProcessorEditor::getFilterSectionBounds(const int f
         bounds = bounds.getUnion(filterContent.getLocalArea(component, component->getLocalBounds()));
     };
 
+    includeVisibleComponent(&section->accentFrame);
     includeVisibleComponent(section->typeControl.get());
-    includeVisibleComponent(section->placeControl.get());
     includeVisibleComponent(section->orderControl.get());
     includeVisibleComponent(section->frequencyControl.get());
     includeVisibleComponent(section->bandwidthControl.get());
@@ -107,24 +106,13 @@ namespace
 struct FilterSortKey
 {
     int index = 0;
-    int place = 0;
     double frequency = 0.0;
+    bool phase = false;
 };
 
-int sortPlaceFor(const int place) noexcept
-{
-    switch (juce::jlimit(0, 7, place))
-    {
-        case 5: return 0; // PHS -> LR
-        case 6: return 1; // PHL -> LL
-        case 7: return 2; // PHR -> RR
-        default: return juce::jlimit(0, 4, place);
-    }
 }
 
-}
-
-void AvaAudioProcessorEditor::sortFilterSectionsByPlace()
+void AvaAudioProcessorEditor::sortFilterSections()
 {
     const auto activeCount = getActiveFilterCount();
 
@@ -141,94 +129,22 @@ void AvaAudioProcessorEditor::sortFilterSectionsByPlace()
         if (section == nullptr)
             return;
 
-        const auto sortFrequency = section->getFilterType() == EqlModuleProcessor::FilterType::volume ? 0.0
-                                                                                                      : section->getFrequency();
-        sortKeys.push_back({ filterIndex, sortPlaceFor(section->getPlace()), sortFrequency });
+        const auto sortFrequency = section->getFilterType() != EqlModuleProcessor::FilterType::volume
+            ? section->getFrequency() : 0.0;
+        const auto type = section->getFilterType();
+        const auto phase = section->isPhaseEnabled()
+            && type != EqlModuleProcessor::FilterType::lowCut
+            && type != EqlModuleProcessor::FilterType::highCut
+            && type != EqlModuleProcessor::FilterType::volume;
+        sortKeys.push_back({ filterIndex, sortFrequency, phase });
     }
 
     std::stable_sort(sortKeys.begin(),
                      sortKeys.end(),
                      [] (const FilterSortKey& left, const FilterSortKey& right)
                      {
-                         return left.place < right.place;
-                     });
-
-    std::vector<int> orderedIndices;
-    orderedIndices.reserve(sortKeys.size());
-
-    for (const auto& key : sortKeys)
-        orderedIndices.push_back(key.index);
-
-    applyFilterSortOrder(orderedIndices);
-}
-
-void AvaAudioProcessorEditor::sortFilterSectionsByFrequency()
-{
-    const auto activeCount = getActiveFilterCount();
-
-    if (activeCount <= 1)
-        return;
-
-    std::vector<FilterSortKey> sortKeys;
-    sortKeys.reserve(static_cast<size_t>(activeCount));
-
-    for (int filterIndex = 0; filterIndex < activeCount; ++filterIndex)
-    {
-        auto* section = filterSections[static_cast<size_t>(filterIndex)].get();
-
-        if (section == nullptr)
-            return;
-
-        const auto sortFrequency = section->getFilterType() == EqlModuleProcessor::FilterType::volume ? 0.0
-                                                                                                      : section->getFrequency();
-        sortKeys.push_back({ filterIndex, sortPlaceFor(section->getPlace()), sortFrequency });
-    }
-
-    std::stable_sort(sortKeys.begin(),
-                     sortKeys.end(),
-                     [] (const FilterSortKey& left, const FilterSortKey& right)
-                     {
-                         return left.frequency < right.frequency;
-                     });
-
-    std::vector<int> orderedIndices;
-    orderedIndices.reserve(sortKeys.size());
-
-    for (const auto& key : sortKeys)
-        orderedIndices.push_back(key.index);
-
-    applyFilterSortOrder(orderedIndices);
-}
-
-void AvaAudioProcessorEditor::sortFilterSectionsByDuo()
-{
-    const auto activeCount = getActiveFilterCount();
-
-    if (activeCount <= 1)
-        return;
-
-    std::vector<FilterSortKey> sortKeys;
-    sortKeys.reserve(static_cast<size_t>(activeCount));
-
-    for (int filterIndex = 0; filterIndex < activeCount; ++filterIndex)
-    {
-        auto* section = filterSections[static_cast<size_t>(filterIndex)].get();
-
-        if (section == nullptr)
-            return;
-
-        const auto sortFrequency = section->getFilterType() == EqlModuleProcessor::FilterType::volume ? 0.0
-                                                                                                      : section->getFrequency();
-        sortKeys.push_back({ filterIndex, sortPlaceFor(section->getPlace()), sortFrequency });
-    }
-
-    std::stable_sort(sortKeys.begin(),
-                     sortKeys.end(),
-                     [] (const FilterSortKey& left, const FilterSortKey& right)
-                     {
-                         if (left.place != right.place)
-                             return left.place < right.place;
-
+                         if (left.phase != right.phase)
+                             return !left.phase;
                          return left.frequency < right.frequency;
                      });
 
@@ -245,11 +161,14 @@ void AvaAudioProcessorEditor::applyFilterSortOrder(const std::vector<int>& order
 {
     const auto activeCount = getActiveFilterCount();
 
-    if (activeCount <= 1 || static_cast<int>(orderedIndices.size()) != activeCount)
+    if (activeCount <= 1 || static_cast<int>(orderedIndices.size()) != activeCount
+        || filterDisplayOrder.size() < orderedIndices.size())
         return;
 
-    for (int destinationIndex = 0; destinationIndex < activeCount; ++destinationIndex)
-        filterDisplayOrder[static_cast<size_t>(destinationIndex)] = orderedIndices[static_cast<size_t>(destinationIndex)];
+    if (std::equal(orderedIndices.begin(), orderedIndices.end(), filterDisplayOrder.begin()))
+        return;
+
+    std::copy(orderedIndices.begin(), orderedIndices.end(), filterDisplayOrder.begin());
 
     storeEditorStateToValueTree();
     updateSectionStates();
@@ -270,11 +189,7 @@ void AvaAudioProcessorEditor::moveFilterSectionTo(const int filterIndex, const i
     if (sourceOrderPosition == destination)
         return;
 
-    std::vector<int> orderedIndices;
-    orderedIndices.reserve(static_cast<size_t>(activeCount));
-
-    for (int orderPosition = 0; orderPosition < activeCount; ++orderPosition)
-        orderedIndices.push_back(filterDisplayOrder[static_cast<size_t>(orderPosition)]);
+    std::vector<int> orderedIndices(filterDisplayOrder.begin(), filterDisplayOrder.begin() + activeCount);
 
     const auto movedFilterIndex = orderedIndices[static_cast<size_t>(sourceOrderPosition)];
     orderedIndices.erase(orderedIndices.begin() + sourceOrderPosition);

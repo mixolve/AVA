@@ -1,8 +1,13 @@
+#include "ModuleBindings.h"
 #include "RangePage.h"
 #include "UiSupport.h"
+#include "UiStateSchema.h"
 
 #include "../shell/LocalParameterControl.h"
+#include "../shell/PetalGeometry.h"
+#include "../shell/EditorSetup.h"
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -13,61 +18,99 @@ int CrossoverRangePage::RowBase::getTopGap() const noexcept
     return juce::jmax(0, topGapMultiplier) * verticalGap;
 }
 
-void CrossoverRangePage::RowBase::mouseDown(const juce::MouseEvent&)
+void CrossoverRangePage::RowBase::paint(juce::Graphics& graphics)
 {
-    shell_parameter_focus::clearFocus(*this);
+    if (paintsRowBackground) graphics.fillAll(uiBackground);
+}
+
+void CrossoverRangePage::RowBase::mouseDown(const juce::MouseEvent& event)
+{
+    if (event.mods.isPopupMenu())
+        if (auto* page = findParentComponentOfClass<CrossoverRangePage>())
+            page->mouseDown(event.getEventRelativeTo(page));
+}
+
+void CrossoverRangePage::RowBase::paintOverChildren(juce::Graphics& graphics)
+{
+    if (exclusiveScope == ExclusiveScope::none) return;
+    const auto markerColour = exclusiveScope == ExclusiveScope::domain ? uiGreyLight : uiWhite;
+    const auto drawPetal = [&graphics, markerColour] (juce::Component& box, const juce::Rectangle<int> bounds)
+    {
+        const auto* button = dynamic_cast<BoxTextButton*>(&box);
+        if (button == nullptr || ! button->isVisible() || button->usesIconOnlyContent())
+            return;
+        const auto petal = makeSidePetal(bounds);
+        graphics.setColour(markerColour.interpolatedWith(uiGreyDark,button->getActiveFillAmount()));
+        graphics.fillPath(petal);
+        graphics.setColour(uiGreyLight);
+        graphics.strokePath(petal, juce::PathStrokeType(1.0f));
+        button->paintOutline(graphics,bounds);
+    };
+    for (auto* child : getChildren())
+    {
+        if (dynamic_cast<ParameterControl*>(child) != nullptr || dynamic_cast<ChoiceControl*>(child) != nullptr)
+        {
+            for (auto* box : child->getChildren())
+                drawPetal(*box, getLocalArea(child, box->getBounds()));
+        }
+        else
+            drawPetal(*child, child->getBounds());
+    }
 }
 
 CrossoverRangePage::ParameterRow::ParameterRow(CrossoverRangePage& pageIn,
                                                 CrossoverModuleComponent& ownerIn,
                                                 juce::String parameterId,
                                                 juce::String auxiliaryToggleParameterId,
-                                                juce::String enabledWhenParameterId,
                                                 const CrossoverControlSpec& spec)
     : page(pageIn),
       owner(ownerIn),
       auxiliaryToggleId(std::move(auxiliaryToggleParameterId)),
-      enabledWhenId(std::move(enabledWhenParameterId))
+      controlSpec(spec)
 {
     control = std::make_unique<ParameterControl>(
         ownerIn.valueTreeState,
         parameterId,
         spec.label,
         spec.decimals);
+    if(owner.config.moduleKey=="tls" && juce::String(spec.suffix).endsWith(".gain"))
+        control->setTitlePopupAction([safe=juce::Component::SafePointer<CrossoverRangePage>(&page)] {
+            if(safe!=nullptr) safe->showGainArrange();
+        });
+    if (owner.config.moduleKey == "dyn"
+        && (juce::String(spec.suffix) == "morph" || juce::String(spec.suffix) == "mix" || juce::String(spec.suffix) == "peak-rms" || juce::String(spec.suffix) == "release-type" || juce::String(spec.suffix) == "feedback" || juce::String(spec.suffix) == "clip-knee" || juce::String(spec.suffix) == "comp-knee" || juce::String(spec.suffix) == "range-curve"))
+        control->setValueTextTransform({},
+            [] (double value) { return juce::String(value, 2); },
+            [] (const juce::String& text)
+            {
+                if (text.trim().equalsIgnoreCase("COMPRESSOR") || text.trim().equalsIgnoreCase("WET") || text.trim().equalsIgnoreCase("RMS") || text.trim().equalsIgnoreCase("TO-SIGNAL") || text.trim().equalsIgnoreCase("FB") || text.trim().equalsIgnoreCase("SOFT"))
+                    return 100.0;
+                return text.trim().getDoubleValue();
+            });
+    if (juce::String(spec.auxiliaryChoiceSuffix).isNotEmpty())
+    {
+        const auto choiceId = owner.config.makeRangeParameterId(page.rangeIndex, spec.auxiliaryChoiceSuffix);
+        auxiliaryChoice = std::make_unique<ChoiceControl>(owner.valueTreeState, choiceId, "");
+        auxiliaryChoice->setTitleWidthOverride(0);
+        addAndMakeVisible(*auxiliaryChoice);
+    }
+    const auto dependencyRange = spec.sourceRangeIndex >= 0
+        ? static_cast<size_t>(spec.sourceRangeIndex) : page.rangeIndex;
+    for (const auto* suffix : spec.enabledWhenAnyNonZeroSuffixes)
+        enabledWhenAnyNonZeroIds.push_back(owner.config.makeRangeParameterId(dependencyRange, suffix));
     topGapMultiplier = spec.topGapMultiplier;
-    reorderGroup = spec.reorderGroup != nullptr ? spec.reorderGroup : "";
-    fixedOrder = spec.fixedOrder;
     auxiliaryToggleInverted = spec.auxiliaryToggleInverted;
     parameterTitleWidth = spec.parameterTitleWidth;
     auxiliaryToggleWidth = spec.auxiliaryToggleWidth;
 
-    if (spec.orderSuffix != nullptr && juce::String(spec.orderSuffix).isNotEmpty())
-        orderParameterId = owner.config.makeRangeParameterId(page.rangeIndex, spec.orderSuffix);
-
+    control->getProperties().set("domainDisabled", spec.interactionDisabled);
+    if (owner.config.moduleKey == "dyn" && juce::String(spec.suffix) == "morph"
+        && readRawParameter(owner.valueTreeState, parameterId.upToLastOccurrenceOf("_", true, false) + "domain", 0.0f) >= 0.5f)
+        control->setOverrideText("COMPRESSOR");
     addAndMakeVisible(*control);
+    if (auxiliaryChoice != nullptr) auxiliaryChoice->toFront(false);
 
-    if (enabledWhenId.isNotEmpty())
-        control->setInteractionEnabled(readRawParameter(owner.valueTreeState, enabledWhenId, 0.0f) >= 0.5f);
-
-    if (reorderGroup.isNotEmpty())
-    {
-        if (owner.config.moduleKey == "tls" && reorderGroup == "gain")
-        {
-            orderLabel = makeTextButton("00", uiGrey500);
-            if (orderParameterId.isNotEmpty())
-                orderLabel->getProperties().set(juce::Identifier("oscParameterId"), orderParameterId);
-            orderLabel->setFillVisible(false);
-            orderLabel->setPressFillEnabled(false);
-            addAndMakeVisible(*orderLabel);
-            refreshOrderLabel();
-
-            if (! fixedOrder)
-            {
-                orderLabel->onClick = [this] { page.applyReorderMove(*this); };
-                control->setTitleMoveArmedAction([this] { page.armReorderMove(*this); });
-            }
-        }
-    }
+    refreshInteractionState();
 
     if (auxiliaryToggleId.isNotEmpty())
     {
@@ -100,6 +143,7 @@ CrossoverRangePage::ParameterRow::ParameterRow(CrossoverRangePage& pageIn,
 
             owner.clearFocus();
         };
+        auxiliaryToggle->setEnabled(! spec.interactionDisabled);
         addAndMakeVisible(*auxiliaryToggle);
     }
 }
@@ -117,12 +161,18 @@ void CrossoverRangePage::ParameterRow::resized()
     auto bounds = getLocalBounds();
     const auto valueWidth = getScaledParameterNameWidth(bounds.getWidth());
 
-    if (orderLabel != nullptr)
+    if (auxiliaryChoice != nullptr)
     {
-        orderLabel->setBounds(bounds.removeFromLeft(42));
-        bounds.removeFromLeft(juce::jmin(parameterGap, bounds.getWidth()));
+        const auto titleZone = getScaledParameterNameWidth(bounds.getWidth());
+        const auto choiceWidth = juce::jmin(60, titleZone);
+        const auto titleWidth = juce::jmax(0, titleZone - choiceWidth - parameterGap);
+        control->setTitleWidthOverride(titleWidth);
+        control->setValueLeadingInset(choiceWidth + parameterGap);
+        control->setBounds(bounds);
+        auxiliaryChoice->setBounds(bounds.getX() + titleWidth + parameterGap, bounds.getY(),
+                                   choiceWidth, bounds.getHeight());
+        return;
     }
-
     if (auxiliaryToggle == nullptr)
     {
         control->setBounds(bounds);
@@ -158,22 +208,16 @@ void CrossoverRangePage::ParameterRow::refreshExternalState()
 {
     refreshAuxiliaryToggleState();
 
-    if (control != nullptr && enabledWhenId.isNotEmpty())
-        control->setInteractionEnabled(readRawParameter(owner.valueTreeState, enabledWhenId, 0.0f) >= 0.5f);
+    refreshInteractionState();
 
-    refreshOrderLabel();
 }
 
-void CrossoverRangePage::ParameterRow::refreshOrderLabel()
+void CrossoverRangePage::ParameterRow::refreshInteractionState()
 {
-    if (orderLabel == nullptr)
-        return;
-
-    const auto position = fixedOrder ? 0
-                                     : juce::roundToInt(readRawParameter(owner.valueTreeState,
-                                                                         orderParameterId,
-                                                                         2.0f)) - 1;
-    orderLabel->setButtonText(juce::String::formatted("%02d", position));
+    if (control != nullptr)
+        control->setInteractionEnabled(crossover_configs::isRangeControlEnabled(
+            controlSpec, owner.valueTreeState, page.rangeIndex, owner.config.moduleKey),
+            ! controlSpec.interactionDisabled);
 }
 
 void CrossoverRangePage::ParameterRow::refreshAuxiliaryToggleState()
@@ -194,11 +238,46 @@ void CrossoverRangePage::ParameterRow::toggleAuxiliaryParameter()
 
 CrossoverRangePage::ChoiceRow::ChoiceRow(CrossoverModuleComponent& ownerIn,
                                          const juce::String& parameterId,
+                                         const juce::String& auxiliaryToggleId,
                                          const CrossoverControlSpec& spec)
+    : owner(ownerIn), suffix(spec.suffix)
 {
     control = std::make_unique<ChoiceControl>(ownerIn.valueTreeState, parameterId, spec.label);
+    if (ownerIn.config.moduleKey == "dyn")
+    {
+        const auto prefix = parameterId.upToLastOccurrenceOf("_", true, false);
+        if (juce::String(spec.suffix) == "mode")
+            control->setChoices(readRawParameter(ownerIn.valueTreeState, prefix + "domain", 0.0f) >= 0.5f
+                ? juce::StringArray { "FREQ", "CORR" } : juce::StringArray { "COMP/CLIP", "TRANS/SUST" });
+    }
+    control->setInteractionEnabled(! spec.interactionDisabled);
     topGapMultiplier = spec.topGapMultiplier;
     addAndMakeVisible(*control);
+    if (auxiliaryToggleId.isNotEmpty())
+    {
+        auxiliaryToggle = makeTextButton(spec.auxiliaryToggleLabel);
+        auxiliaryToggle->setClickingTogglesState(true);
+        auxiliaryToggle->setTablerIcon(spec.auxiliaryToggleIcon);
+        auxiliaryToggle->setTooltip("Listen to side chain");
+        auxiliaryToggle->getProperties().set(juce::Identifier("oscParameterId"), auxiliaryToggleId);
+        addAndMakeVisible(*auxiliaryToggle);
+        auxiliaryToggleAttachment = std::make_unique<ButtonAttachment>(ownerIn.valueTreeState,
+            auxiliaryToggleId, *auxiliaryToggle);
+        auxiliaryToggle->setLongPressPromptActions({}, [ownerPtr = &ownerIn, auxiliaryToggleId, this]
+        {
+            ownerPtr->assignButtonToHostSlot(auxiliaryToggleId, auxiliaryToggleId, auxiliaryToggle.get());
+        });
+    }
+    refreshExternalState();
+}
+
+void CrossoverRangePage::ChoiceRow::refreshExternalState()
+{
+    if (!owner.config.isRangeChoiceAvailable) return;
+    if (auto* parameter = dynamic_cast<juce::AudioParameterChoice*>(
+            owner.valueTreeState.getParameter(control->getParameterId())))
+        for (int choice = 0; choice < parameter->choices.size(); ++choice)
+            control->setChoiceEnabled(choice, owner.config.isRangeChoiceAvailable(suffix, choice));
 }
 
 int CrossoverRangePage::ChoiceRow::getPreferredHeight() const
@@ -208,8 +287,20 @@ int CrossoverRangePage::ChoiceRow::getPreferredHeight() const
 
 void CrossoverRangePage::ChoiceRow::resized()
 {
-    if (control != nullptr)
-        control->setBounds(getLocalBounds());
+    if (control == nullptr)
+        return;
+    const auto bounds = getLocalBounds();
+    if (auxiliaryToggle != nullptr)
+    {
+        const auto titleZone = getScaledParameterNameWidth(bounds.getWidth());
+        const auto buttonWidth = juce::jmin(auxiliaryToggle->usesIconOnlyContent() ? iconControlSize : 60, titleZone);
+        const auto titleWidth = juce::jmax(0, titleZone - buttonWidth - parameterGap);
+        control->setTitleWidthOverride(titleWidth);
+        control->setValueLeadingInset(buttonWidth + parameterGap);
+        auxiliaryToggle->setBounds(bounds.getX() + titleWidth + parameterGap, bounds.getY(),
+                                   buttonWidth, bounds.getHeight());
+    }
+    control->setBounds(bounds);
 }
 
 CrossoverRangePage::HeadingRow::HeadingRow(const CrossoverControlSpec& spec)
@@ -219,7 +310,7 @@ CrossoverRangePage::HeadingRow::HeadingRow(const CrossoverControlSpec& spec)
     heading->setBorderVisible(true);
     heading->setFillVisible(false);
     heading->setDividerLineVisible(false);
-    heading->setPressFillEnabled(false);
+    heading->setInteractionOutlineEnabled(false);
     heading->setTextJustification(juce::Justification::centredLeft);
     heading->setInterceptsMouseClicks(false, false);
     topGapMultiplier = spec.topGapMultiplier;
@@ -242,7 +333,7 @@ CrossoverRangePage::InactiveRow::InactiveRow(const CrossoverControlSpec& spec)
     button = makeTextButton(spec.label);
     button->setEnabled(false);
     button->setClickingTogglesState(false);
-    button->setPressFillEnabled(false);
+    button->setInteractionOutlineEnabled(false);
     button->setInterceptsMouseClicks(false, false);
     topGapMultiplier = spec.topGapMultiplier;
     addAndMakeVisible(*button);
@@ -274,7 +365,7 @@ CrossoverRangePage::ToggleRow::ToggleRow(CrossoverRangePage& pageIn,
     button->getProperties().set(juce::Identifier("oscParameterId"), parameterIdToToggle);
     topGapMultiplier = spec.topGapMultiplier;
     button->setClickingTogglesState(true);
-    button->setToggleAccentVisible(spec.toggleAccentVisible);
+    button->setToggleActiveFillEnabled(spec.toggleActiveFillEnabled);
     attachment = std::make_unique<ButtonAttachment>(owner.valueTreeState, parameterIdToToggle, *button);
     button->setLongPressPromptActions({}, [this]
     {
@@ -290,7 +381,25 @@ CrossoverRangePage::ToggleRow::ToggleRow(CrossoverRangePage& pageIn,
         owner.clearFocus();
     };
     addAndMakeVisible(*button);
-    updateLabel();
+    if (spec.auxiliaryToggleSuffix != nullptr && juce::String(spec.auxiliaryToggleSuffix).isNotEmpty())
+    {
+        const auto auxiliaryId = owner.config.makeRangeParameterId(page.rangeIndex, spec.auxiliaryToggleSuffix);
+        auxiliaryToggleWidth = spec.auxiliaryToggleWidth > 0 ? spec.auxiliaryToggleWidth : 60;
+        auxiliaryToggle = makeTextButton(spec.auxiliaryToggleLabel);
+        auxiliaryToggle->setClickingTogglesState(true);
+        auxiliaryToggle->setTablerIcon(spec.auxiliaryToggleIcon);
+        auxiliaryToggle->setTooltip(spec.auxiliaryToggleLabel);
+        auxiliaryToggle->getProperties().set(juce::Identifier("oscParameterId"), auxiliaryId);
+        auxiliaryToggleAttachment = std::make_unique<ButtonAttachment>(owner.valueTreeState, auxiliaryId, *auxiliaryToggle);
+        auxiliaryToggle->setLongPressPromptActions({}, [this, auxiliaryId]
+        {
+            owner.assignButtonToHostSlot(auxiliaryId, auxiliaryId, auxiliaryToggle.get());
+        });
+        auxiliaryToggle->onClick = [this] { owner.clearFocus(); };
+        addAndMakeVisible(*auxiliaryToggle);
+    }
+    button->getProperties().set("domainDisabled", spec.interactionDisabled);
+    refreshExternalState();
 }
 
 int CrossoverRangePage::ToggleRow::getPreferredHeight() const
@@ -300,13 +409,22 @@ int CrossoverRangePage::ToggleRow::getPreferredHeight() const
 
 void CrossoverRangePage::ToggleRow::refreshExternalState()
 {
+    const auto disabled = button != nullptr && static_cast<bool>(button->getProperties().getWithDefault("domainDisabled", false));
+    if (button != nullptr) button->setEnabled(! disabled);
+    if (auxiliaryToggle != nullptr) auxiliaryToggle->setEnabled(! disabled);
     updateLabel();
 }
 
 void CrossoverRangePage::ToggleRow::resized()
 {
+    auto bounds = getLocalBounds();
+    if (auxiliaryToggle != nullptr)
+    {
+        auxiliaryToggle->setBounds(bounds.removeFromRight(juce::jmin(auxiliaryToggleWidth, bounds.getWidth())));
+        bounds.removeFromRight(parameterGap);
+    }
     if (button != nullptr)
-        button->setBounds(getLocalBounds());
+        button->setBounds(bounds);
 }
 
 void CrossoverRangePage::ToggleRow::updateLabel()
@@ -328,7 +446,7 @@ CrossoverRangePage::ReadoutRow::ReadoutRow(CrossoverModuleComponent& ownerIn,
     value.setFont(makeUiFont());
     value.setColour(juce::Label::textColourId, uiWhite);
     value.setColour(juce::Label::backgroundColourId, uiBackground);
-    value.setColour(juce::Label::outlineColourId, uiGrey500);
+    value.setColour(juce::Label::outlineColourId, uiGreyLight);
     value.setJustificationType(juce::Justification::centred);
     value.setBorderSize(juce::BorderSize<int> { 1 });
     value.setInterceptsMouseClicks(false, false);
@@ -365,7 +483,7 @@ CrossoverRangePage::TimeRow::TimeRow(CrossoverModuleComponent& ownerIn,
                                      juce::String modeParameterId,
                                      juce::String syncParameterId,
                                      const CrossoverControlSpec& spec)
-    : owner(ownerIn),
+    : controlSpec(spec), owner(ownerIn),
       valueParameterIdToEdit(std::move(valueParameterId)),
       modeParameterIdToEdit(std::move(modeParameterId)),
       syncParameterIdToEdit(std::move(syncParameterId))
@@ -381,6 +499,7 @@ CrossoverRangePage::TimeRow::TimeRow(CrossoverModuleComponent& ownerIn,
     if (spec.showTimeModeButton)
     {
         modeButton = makeTimeModeButton();
+        if (owner.config.moduleKey == "dyn") modeButton->setTablerIcon("clef");
         modeButton->getProperties().set(juce::Identifier("oscParameterId"), modeParameterIdToEdit);
         modeButton->getProperties().set(juce::Identifier("oscParameterId2"), syncParameterIdToEdit);
         modeButton->setLongPressPromptActions({}, [this]
@@ -522,7 +641,7 @@ void CrossoverRangePage::TimeRow::updateModeControl()
     if (modeButton != nullptr)
     {
         modeButton->setButtonText(hostSync ? "T" : "M");
-        modeButton->setAlwaysAccentOutline(hostSync);
+        modeButton->setActiveFill(hostSync);
     }
 
     if (hostSync)
@@ -536,5 +655,13 @@ void CrossoverRangePage::TimeRow::updateModeControl()
         control->clearOverrideText();
         control->setValueClickAction(nullptr);
         control->setInteractionEnabled(true);
+    }
+    if (owner.config.moduleKey == "dyn")
+    {
+        const auto prefix = valueParameterIdToEdit.upToLastOccurrenceOf("_", false, false);
+        const auto range = static_cast<size_t>(juce::jmax(1, prefix.fromFirstOccurrenceOf("band-", false, false).getIntValue()) - 1);
+        const auto enabled = crossover_configs::isRangeControlEnabled(controlSpec, owner.valueTreeState, range, owner.config.moduleKey);
+        control->setInteractionEnabled(enabled, ! controlSpec.interactionDisabled);
+        if (modeButton != nullptr) modeButton->setEnabled(enabled);
     }
 }

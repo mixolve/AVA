@@ -1,6 +1,9 @@
 #pragma once
 
 #include "Style.h"
+#include "AnimationSettings.h"
+#include "HoverAnimation.h"
+#include "NumericTextRaster.h"
 
 #include <functional>
 #include <memory>
@@ -11,11 +14,44 @@ bool scrollViewportWithWheel(juce::Viewport& viewport,
                              const juce::MouseWheelDetails& wheel,
                              bool fineControl = false);
 
-class FourLinePlaceholder final : public juce::Component
+class FlatScrollBarLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
-    FourLinePlaceholder();
+    void drawScrollbar(juce::Graphics&, juce::ScrollBar&, int x, int y, int width, int height,
+                       bool vertical, int thumbStart, int thumbSize, bool hovered, bool pressed) override;
+};
+
+class BurningFilmArtwork final : public juce::Component, private juce::Timer
+{
+public:
+    BurningFilmArtwork();
+    ~BurningFilmArtwork() override;
     void paint(juce::Graphics& g) override;
+    void resized() override;
+    void setGpuRenderingEnabled(bool enabled);
+    void setPreviewEnabled(bool enabled);
+    void setAnimationSettings(std::shared_ptr<AnimationSettings> settings);
+    void setBottomAnimation(bool bottom);
+    void setAnimationSource(BurningFilmArtwork& source);
+    void setSynchronizationSource(BurningFilmArtwork& source);
+    void mouseDown(const juce::MouseEvent&) override;
+    void mouseMove(const juce::MouseEvent&) override;
+    void mouseDrag(const juce::MouseEvent&) override;
+    void mouseUp(const juce::MouseEvent&) override;
+    std::function<void()> onSettingsRequested;
+    std::function<void(float)> onCropChanged;
+
+private:
+    void timerCallback() override;
+    void ensurePreview();
+    void resetNameScroll();
+    juce::Rectangle<float> getCropBounds() const;
+    struct Animation;
+    std::unique_ptr<Animation> animation;
+    juce::Component::SafePointer<BurningFilmArtwork> animationSource;
+    juce::Component::SafePointer<BurningFilmArtwork> synchronizationSource;
+    bool cropDragActive = false;
+    float cropDragStartY = 0, cropDragStartPosition = 0;
 };
 
 class NoTickComboBox final : public juce::ComboBox
@@ -43,8 +79,8 @@ public:
     juce::Justification getPopupMenuTextJustification() const noexcept;
     void setPromptStylePopupEnabled(bool shouldEnable) noexcept;
     void setChoicePromptPresenter(ChoicePromptPresenter presenter);
-    void setChoiceEnabled(int choiceIndex, bool shouldEnable);
     bool isPressedHighlightEnabled() const noexcept;
+    float getHoverAmount() { return hoverAnimation.amount(isPressedHighlightEnabled()); }
 
     std::function<void()> onReselectedCurrentItem;
 
@@ -55,53 +91,27 @@ private:
     bool pressHighlight = false;
     bool promptStylePopupEnabled = false;
     ChoicePromptPresenter choicePromptPresenter;
+    HoverAnimation hoverAnimation { *this };
 };
 
 class CopyPasteTextEditor final : public juce::TextEditor
 {
 public:
     CopyPasteTextEditor();
+    void setText(const juce::String& text, bool sendChangeMessage = true)
+    { juce::TextEditor::setText(uppercaseText(text), sendChangeMessage); }
     ~CopyPasteTextEditor() override;
+    void mouseDown(const juce::MouseEvent& event) override;
 
     void addPopupMenuItems(juce::PopupMenu& menuToAddTo, const juce::MouseEvent* mouseClickEvent) override;
     void performPopupMenuAction(int menuItemID) override;
 
 private:
-    class PopupLookAndFeel final : public juce::LookAndFeel_V4
-    {
-    public:
-        juce::Font getPopupMenuFont() override;
-        void drawPopupMenuBackgroundWithOptions(juce::Graphics& g,
-                                                int width,
-                                                int height,
-                                                const juce::PopupMenu::Options&) override;
-        int getPopupMenuBorderSizeWithOptions(const juce::PopupMenu::Options&) override;
-        void getIdealPopupMenuItemSizeWithOptions(const juce::String& text,
-                                                  bool isSeparator,
-                                                  int standardMenuItemHeight,
-                                                  int& idealWidth,
-                                                  int& idealHeight,
-                                                  const juce::PopupMenu::Options&) override;
-        void drawPopupMenuItem(juce::Graphics& g,
-                               const juce::Rectangle<int>& area,
-                               bool isSeparator,
-                               bool isActive,
-                               bool isHighlighted,
-                               bool isTicked,
-                               bool hasSubMenu,
-                               const juce::String& text,
-                               const juce::String& shortcutKeyText,
-                               const juce::Drawable* icon,
-                               const juce::Colour* textColour) override;
-        void drawPopupMenuItemWithOptions(juce::Graphics& g,
-                                          const juce::Rectangle<int>& area,
-                                          bool isHighlighted,
-                                          const juce::PopupMenu::Item& item,
-                                          const juce::PopupMenu::Options& options) override;
-    };
+    std::unique_ptr<juce::Component> contextMenu;
 
-    PopupLookAndFeel popupLookAndFeel;
 };
+
+class InlineParameterSlider;
 
 class ValueBoxComponent final : public juce::Component
 {
@@ -109,15 +119,19 @@ public:
     explicit ValueBoxComponent(juce::Slider& sliderToControl);
     ~ValueBoxComponent() override;
 
+    static bool refocusActiveInlineEditorIn(juce::Component& scope);
+    static void cancelActiveInlineEditorIn(juce::Component& scope);
+
     void setInteractionEnabled(bool shouldEnable);
     void setOutlineColour(juce::Colour colour);
     void setPromptActive(bool shouldBeActive);
     void setCustomPromptAction(std::function<void()> action);
+    void setNumericControlEnabled(bool enabled);
 
     void paint(juce::Graphics& g) override;
+    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent& event) override;
-    void mouseDoubleClick(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
     void mouseEnter(const juce::MouseEvent&) override;
     void mouseExit(const juce::MouseEvent&) override;
@@ -126,28 +140,30 @@ public:
     std::function<juce::String()> displayTextProvider;
     std::function<juce::String()> editorTextProvider;
     std::function<double(const juce::String&)> textToValueParser;
-    std::function<void()> onBeforeShowEditor;
 
 private:
-    void updateMouseCursor();
+    void updateSliderAvailability();
     void showEditor();
     void applyValue(double value);
     void applyEnteredText(const juce::String& enteredText);
     void hideEditor(bool discard);
     void startGlobalEditTracking();
     void stopGlobalEditTracking();
-    void scheduleMarqueeRepaint();
 
+    NumericTextRaster textRaster;
+    HoverAnimation hoverAnimation { *this };
     juce::Slider& slider;
     bool isTrackingGlobalClicks = false;
     bool interactionEnabled = true;
     bool pointerDown = false;
     bool pressHighlight = false;
     bool promptActive = false;
-    juce::Colour outlineColour = uiGrey500;
+    juce::Colour outlineColour = uiGreyLight;
     std::function<void()> customPromptAction;
     std::unique_ptr<juce::TextEditor> editor;
     bool marqueeRepaintPending = false;
+    bool numericControlEnabled = true;
+    std::unique_ptr<InlineParameterSlider> inlineSlider;
 };
 
 class BoxTextButton final : public juce::TextButton, private juce::Timer
@@ -156,42 +172,43 @@ public:
     explicit BoxTextButton(juce::Colour accent);
     ~BoxTextButton() override;
 
-    void setAlwaysAccentOutline(bool shouldAlwaysAccent);
-    void setToggleAccentVisible(bool shouldShow) noexcept;
-    void setPressFillEnabled(bool shouldEnable) noexcept;
-    void setClearsParameterFocusOnMouseDown(bool shouldClear) noexcept;
+    void setActiveFill(bool shouldBeActive);
+    bool hasActiveHighlight() const noexcept;
+    float getActiveFillAmount() const noexcept { return activeFillAmount; }
+    void paintOutline(juce::Graphics&, juce::Rectangle<int> bounds) const;
+    void setToggleActiveFillEnabled(bool shouldShow) noexcept;
+    void setInteractionOutlineEnabled(bool shouldEnable) noexcept;
     void setFillVisible(bool shouldShow) noexcept;
     void setFillColour(juce::Colour colour) noexcept;
-    void setInteractionFillColour(juce::Colour colour) noexcept;
     void setDividerLineVisible(bool shouldShow) noexcept;
     void setTextJustification(juce::Justification justification) noexcept;
+    void setTextScrollingEnabled(bool enabled) { textScrollingEnabled = enabled; repaint(); }
+    void setTextHorizontalPadding(int padding) { textHorizontalPadding = juce::jmax(0, padding); repaint(); }
     void setBorderVisible(bool shouldShow) noexcept;
     void setCancelClickOnLeave(bool shouldEnable) noexcept;
-    void setHorizontalBidirectionalArrowVisible(bool shouldShow) noexcept;
     void setTablerIcon(const char* iconName);
-    void setIconOnlyText(const juce::String& text);
     bool usesIconOnlyContent() const noexcept;
     void setTextColourOverride(juce::Colour colour);
-    void clearTextColourOverride();
-    void setLongPressAction(std::function<void()> action, int delayMs = 500, juce::String promptText = "RESET?");
     void setLongPressPromptActions(std::function<void()> resetAction,
-                                   std::function<void()> secondaryAction = {},
-                                   juce::String primaryPromptText = "R?");
+                                   std::function<void()> secondaryAction = {});
     void setLongPressPrimaryPromptIcon(const char* iconName);
+    void setLongPressMovePromptEnabled(bool enabled) { longPressMovePromptEnabled = enabled; repaint(); }
     void setLongPressPrimaryPromptEnabled(bool shouldEnable);
     void setLongPressSecondaryPromptIcon(const char* iconName);
     void setLongPressSecondaryPromptActive(bool shouldBeActive);
-    void setLongPressTrailingPromptAction(std::function<void()> action, juce::String promptText);
     void setLongPressTrailingPromptIconAction(std::function<void()> action, const char* iconName);
-    void setLongPressAdditionalPromptIconAction(std::function<void()> action, const char* iconName);
-    void setDragTargetOutlineVisible(bool shouldShow) noexcept;
-    void flashConfirmationOutline();
+    void flashConfirmationFill();
+    void setDragTargetHighlighted(bool shouldShow) noexcept;
+    void inheritHover(bool highlighted) { hoverAnimation.inherit(highlighted); }
+    void setMoveTargetAvailable(bool available);
+    juce::MouseCursor getMouseCursor() override;
 
-    std::function<void(juce::Point<int>)> onDragDrop;
-    std::function<void(juce::Point<int>)> onDragMove;
-    std::function<void()> onDragEnd;
     std::function<void()> onMoveArmed;
     std::function<void()> onDoubleClick;
+    std::function<void()> onPopupClick;
+    std::function<void(juce::ModifierKeys)> onModifiedClick;
+    std::function<void()> onControlDragStarted;
+    std::function<void(const juce::MouseEvent&, bool released)> onControlDrag;
 
     void paintButton(juce::Graphics& graphics, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
     void enablementChanged() override;
@@ -206,14 +223,16 @@ public:
 private:
     class PromptDismissListener;
 
+    HoverAnimation hoverAnimation { *this };
     juce::Colour accentColour;
-    bool alwaysAccentOutline = false;
-    bool toggleAccentVisible = true;
-    bool pressFillEnabled = true;
-    bool clearsParameterFocusOnMouseDown = true;
+    bool activeFillEnabled = false;
+    float activeFillAmount = 0.0f;
+    float hoverOutlineAmount = 0.0f;
+    bool toggleActiveFillEnabled = true;
+    bool interactionOutlineEnabled = true;
+    bool longPressMovePromptEnabled = true;
     bool fillVisible = true;
-    juce::Colour fillColour = uiGrey800;
-    juce::Colour interactionFillColour = uiGreyLight;
+    juce::Colour fillColour = uiGreyDark;
     bool dividerLineVisible = false;
     bool pointerDown = false;
     bool dragActive = false;
@@ -221,45 +240,35 @@ private:
     bool cancelClickOnLeave = false;
     bool pressCanceled = false;
     juce::Justification textJustification = juce::Justification::centred;
+    int textHorizontalPadding = uiGap;
+    bool textScrollingEnabled = true;
     bool borderVisible = true;
-    bool horizontalBidirectionalArrowVisible = false;
-    juce::Image horizontalBidirectionalArrowImage;
     juce::Image tablerIconImage;
-    bool iconOnlyText = false;
     bool hasTextColourOverride = false;
     juce::Colour textColourOverride;
-    bool dragTargetOutlineVisible = false;
     bool confirmationFlashActive = false;
-    std::function<void()> longPressAction;
+    bool dragTargetHighlighted = false;
+    bool moveTargetAvailable = false;
     int longPressDelayMs = 500;
     bool longPressEligible = false;
-    bool longPressArmed = false;
-    juce::String longPressOriginalText;
-    juce::String longPressPromptText = "RESET?";
-    bool dragHoldEligible = false;
-    bool dragHoldArmed = false;
     std::function<void()> longPressResetAction;
     std::function<void()> longPressSecondaryAction;
-    juce::String longPressPrimaryPromptText = "R?";
     juce::Image longPressPrimaryPromptIconImage;
     bool longPressPrimaryPromptEnabled = true;
     juce::Image longPressSecondaryPromptIconImage;
     bool longPressSecondaryPromptActive = false;
     std::function<void()> longPressTrailingAction;
-    juce::String longPressTrailingPromptText;
     juce::Image longPressTrailingPromptIconImage;
-    std::function<void()> longPressAdditionalPromptAction;
-    juce::Image longPressAdditionalPromptIconImage;
     std::unique_ptr<PromptDismissListener> promptDismissListener;
     bool actionPromptActive = false;
     bool actionPromptGlobalListenerActive = false;
     bool consumeNextMouseUp = false;
     int actionPromptPressedIndex = -1;
     int actionPromptHoverIndex = -1;
-    bool moveOnNextDrag = false;
-    juce::String moveArmedOriginalText;
     juce::String actionPromptOriginalText;
     bool marqueeRepaintPending = false;
+    bool controlDragActive = false;
+    juce::ModifierKeys clickModifiers;
     int pendingClickGeneration = 0;
 
     void showActionPrompt();
@@ -267,6 +276,5 @@ private:
     int getActionPromptCount() const noexcept;
     juce::Rectangle<int> getActionPromptBounds(int index) const noexcept;
     int getActionPromptHitIndex(juce::Point<int> position) const noexcept;
-    void scheduleMarqueeRepaint();
     void timerCallback() override;
 };

@@ -50,6 +50,16 @@ public:
         return createdRangeCount;
     }
 
+    DspCore* getProcessor(const size_t rangeIndex) noexcept
+    {
+        return rangeIndex < createdRangeCount ? rangeProcessors[rangeIndex].get() : nullptr;
+    }
+
+    const DspCore* getProcessor(const size_t rangeIndex) const noexcept
+    {
+        return rangeIndex < createdRangeCount ? rangeProcessors[rangeIndex].get() : nullptr;
+    }
+
     void prepare(const double sampleRate, const int maxBlockSize, const int numChannels)
     {
         preparedSampleRate = sampleRate;
@@ -95,6 +105,15 @@ public:
 
     void processRange(const size_t rangeIndex, juce::AudioBuffer<float>& buffer)
     {
+        const auto* processor = getProcessor(rangeIndex);
+        if (processor == nullptr || processor->isNeutral()) return;
+        processRange(rangeIndex, buffer, [](double, double, const auto&) {});
+    }
+
+    // The observer runs on the audio thread, without copying the audio buffer.
+    template <typename Observer>
+    void processRange(const size_t rangeIndex, juce::AudioBuffer<float>& buffer, Observer&& observe)
+    {
         if (rangeIndex >= createdRangeCount || rangeProcessors[rangeIndex] == nullptr)
             return;
 
@@ -105,14 +124,15 @@ public:
         auto* rightChannel = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : nullptr;
         auto& processor = *rangeProcessors[rangeIndex];
 
-        if (processor.isNeutral())
-            return;
+        const auto neutral = processor.isNeutral();
 
         for (int sampleIndex = 0; sampleIndex < buffer.getNumSamples(); ++sampleIndex)
         {
             const auto leftInput = static_cast<double>(leftChannel[sampleIndex]);
             const auto rightInput = rightChannel != nullptr ? static_cast<double>(rightChannel[sampleIndex]) : leftInput;
-            const auto output = processor.processSample(leftInput, rightInput);
+            const auto output = neutral ? typename DspCore::StereoSample {leftInput, rightInput}
+                                        : processor.processSample(leftInput, rightInput);
+            observe(leftInput, rightInput, output);
             leftChannel[sampleIndex] = static_cast<float>(output.left);
 
             if (rightChannel != nullptr)

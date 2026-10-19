@@ -1,5 +1,5 @@
 #include "ChoiceControl.h"
-#include "ParameterControlSupport.h"
+#include "ParameterEditing.h"
 
 #include <utility>
 
@@ -15,7 +15,7 @@ ChoiceControl::ChoiceControl(juce::AudioProcessorValueTreeState& state,
     setWantsKeyboardFocus(false);
     setMouseClickGrabsKeyboardFocus(false);
 
-    titleButton = std::make_unique<BoxTextButton>(parameter_control_support::titleFocusColour);
+    titleButton = std::make_unique<BoxTextButton>(uiAccent);
     titleButton->setButtonText(titleText);
     titleButton->setTextJustification(juce::Justification::centredLeft);
     titleButton->onClick = [this]
@@ -45,11 +45,11 @@ ChoiceControl::ChoiceControl(juce::AudioProcessorValueTreeState& state,
 
     comboBox.setEditableText(false);
     comboBox.setJustificationType(juce::Justification::centred);
-    comboBox.setColour(juce::ComboBox::backgroundColourId, uiGrey800);
-    comboBox.setColour(juce::ComboBox::outlineColourId, uiGrey500);
+    comboBox.setColour(juce::ComboBox::backgroundColourId, uiGreyDark);
+    comboBox.setColour(juce::ComboBox::outlineColourId, uiGreyLight);
     comboBox.setColour(juce::ComboBox::textColourId, uiWhite);
     comboBox.setColour(juce::ComboBox::arrowColourId, uiWhite);
-    comboBox.setColour(juce::ComboBox::buttonColourId, uiGrey800);
+    comboBox.setColour(juce::ComboBox::buttonColourId, uiGreyDark);
     comboBox.setWantsKeyboardFocus(false);
     comboBox.setMouseClickGrabsKeyboardFocus(false);
     comboBox.setName(titleText);
@@ -123,11 +123,6 @@ ChoiceControl::ChoiceControl(juce::AudioProcessorValueTreeState& state,
 int ChoiceControl::getPreferredHeight() const noexcept
 {
     return rowHeight;
-}
-
-ChoiceControl::~ChoiceControl()
-{
-    parameter_control_support::clearFocusedTitleButton(titleButton.get(), nullptr);
 }
 
 void ChoiceControl::detach() noexcept
@@ -262,7 +257,7 @@ void ChoiceControl::setInteractionEnabled(const bool shouldEnable)
     if (titleButton != nullptr)
     {
         titleButton->setEnabled(shouldEnable);
-        titleButton->setPressFillEnabled(shouldEnable);
+        titleButton->setInteractionOutlineEnabled(shouldEnable);
     }
 
     comboBox.setEnabled(true);
@@ -270,7 +265,7 @@ void ChoiceControl::setInteractionEnabled(const bool shouldEnable)
     comboBox.setInterceptsMouseClicks(shouldEnable, shouldEnable);
     const auto displayText = overrideText.isNotEmpty() ? overrideText : comboBox.getText();
     comboBox.setColour(juce::ComboBox::textColourId,
-                       shouldEnable ? getDisplayTextColour(displayText) : uiGrey500);
+                       shouldEnable ? getDisplayTextColour(displayText) : uiGreyLight);
 }
 
 void ChoiceControl::setOverrideText(const juce::String& text)
@@ -303,12 +298,39 @@ void ChoiceControl::clearOverrideText()
     comboBox.setSelectedItemIndex(displayIndex, juce::dontSendNotification);
 }
 
+void ChoiceControl::setTitleWidthOverride(const int width) noexcept
+{
+    titleWidthOverride = width;
+    resized();
+}
+
+void ChoiceControl::setValueLeadingInset(const int width) noexcept
+{
+    valueLeadingInset = juce::jmax(0, width);
+    resized();
+}
+
+void ChoiceControl::setTitleAccessory(juce::Component* accessory)
+{
+    titleAccessory = accessory;
+    if (titleAccessory != nullptr) addAndMakeVisible(*titleAccessory);
+    resized();
+}
+
 void ChoiceControl::resized()
 {
     auto row = getLocalBounds();
-    const auto titleWidth = getScaledParameterNameWidth(row.getWidth());
-    titleButton->setBounds(row.removeFromLeft(titleWidth));
-    row.removeFromLeft(parameterGap);
+    const auto titleWidth = titleWidthOverride >= 0 ? juce::jmin(titleWidthOverride, row.getWidth())
+        : getScaledParameterNameWidth(row.getWidth());
+    auto titleBounds = row.removeFromLeft(titleWidth);
+    if (titleAccessory != nullptr)
+    {
+        titleAccessory->setBounds(titleBounds.removeFromRight(juce::jmin(iconControlSize, titleBounds.getWidth())));
+        titleBounds.removeFromRight(juce::jmin(parameterGap, titleBounds.getWidth()));
+    }
+    titleButton->setBounds(titleBounds);
+    if (titleWidth > 0) row.removeFromLeft(parameterGap);
+    row.removeFromLeft(juce::jmin(valueLeadingInset, row.getWidth()));
     comboBox.setBounds(row);
 }
 
@@ -320,11 +342,13 @@ LocalChoiceControl::LocalChoiceControl(const juce::String& titleText,
     setWantsKeyboardFocus(false);
     setMouseClickGrabsKeyboardFocus(false);
 
-    titleButton = std::make_unique<BoxTextButton>(parameter_control_support::titleFocusColour);
+    titleButton = std::make_unique<BoxTextButton>(uiAccent);
     titleButton->setButtonText(titleText);
     titleButton->setTextJustification(juce::Justification::centredLeft);
-    titleButton->setClearsParameterFocusOnMouseDown(false);
-    titleButton->onClick = [] {};
+    titleButton->onClick = [this]
+    {
+        clearKeyboardFocus(*this);
+    };
     titleButton->setLongPressPromptActions([this]
     {
         setSelectedChoiceIndex(defaultChoiceIndex, true);
@@ -333,11 +357,11 @@ LocalChoiceControl::LocalChoiceControl(const juce::String& titleText,
 
     comboBox.setEditableText(false);
     comboBox.setJustificationType(juce::Justification::centred);
-    comboBox.setColour(juce::ComboBox::backgroundColourId, uiGrey800);
-    comboBox.setColour(juce::ComboBox::outlineColourId, uiGrey500);
+    comboBox.setColour(juce::ComboBox::backgroundColourId, uiGreyDark);
+    comboBox.setColour(juce::ComboBox::outlineColourId, uiGreyLight);
     comboBox.setColour(juce::ComboBox::textColourId, uiWhite);
     comboBox.setColour(juce::ComboBox::arrowColourId, uiWhite);
-    comboBox.setColour(juce::ComboBox::buttonColourId, uiGrey800);
+    comboBox.setColour(juce::ComboBox::buttonColourId, uiGreyDark);
     comboBox.setWantsKeyboardFocus(false);
     comboBox.setMouseClickGrabsKeyboardFocus(false);
     comboBox.setName(titleText);
@@ -384,8 +408,8 @@ void LocalChoiceControl::setInteractionEnabled(const bool shouldEnable)
     comboBox.setEnabled(true);
     comboBox.setAlpha(1.0f);
     comboBox.setInterceptsMouseClicks(shouldEnable, shouldEnable);
-    comboBox.setColour(juce::ComboBox::textColourId, shouldEnable ? uiWhite : uiGrey500);
-    comboBox.setColour(juce::ComboBox::arrowColourId, shouldEnable ? uiWhite : uiGrey500);
+    comboBox.setColour(juce::ComboBox::textColourId, shouldEnable ? uiWhite : uiGreyLight);
+    comboBox.setColour(juce::ComboBox::arrowColourId, shouldEnable ? uiWhite : uiGreyLight);
 }
 
 void LocalChoiceControl::resized()
@@ -395,4 +419,14 @@ void LocalChoiceControl::resized()
     titleButton->setBounds(row.removeFromLeft(titleWidth));
     row.removeFromLeft(parameterGap);
     comboBox.setBounds(row);
+}
+
+void LocalChoiceControl::setChoicePromptPresenter(ChoicePromptPresenter presenter)
+{
+    comboBox.setChoicePromptPresenter(std::move(presenter));
+}
+
+juce::Rectangle<int> LocalChoiceControl::getValueBounds() const noexcept
+{
+    return getLocalArea(&comboBox, comboBox.getLocalBounds());
 }

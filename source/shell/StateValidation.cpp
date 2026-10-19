@@ -1,20 +1,19 @@
 #include "Processor.h"
+#include "AnimationState.h"
+#include "EditorStateSchema.h"
 #include "StateValidation.h"
 #include "FilterOrderState.h"
 #include "Style.h"
 #include "../modules/tls/Processor.h"
 #include "../modules/dyn/Processor.h"
-#include "../modules/eql/ProcessorBank.h"
-#include "../modules/fft/ProcessorBank.h"
-#include "../modules/trs/Processor.h"
-#include "../modules/shared/StateUtilities.h"
-#include "../crossover/UiState.h"
+#include "../modules/eql/RangeBank.h"
+#include "../modules/shared/StateValidation.h"
+#include "../crossover/UiStateSchema.h"
 #include "../modules/eql/Processor.h"
 #include "../routing/State.h"
 
 #include <cmath>
 #include <optional>
-
 
 namespace
 {
@@ -25,11 +24,7 @@ bool hasCurrentActiveModuleId(const juce::ValueTree& state)
 
     const auto moduleId = state.getProperty(AvaAudioProcessor::activeModuleStateKey).toString();
 
-    for (const auto module : { AvaAudioProcessor::ActiveModule::eql,
-                               AvaAudioProcessor::ActiveModule::fft,
-                               AvaAudioProcessor::ActiveModule::tls,
-                               AvaAudioProcessor::ActiveModule::dyn,
-                               AvaAudioProcessor::ActiveModule::trs })
+    for (const auto module : AvaAudioProcessor::availableModules)
         if (moduleId == AvaAudioProcessor::stateIdForModule(module))
             return true;
 
@@ -42,10 +37,8 @@ bool isCurrentShellProperty(const juce::Identifier& property)
 
     for (const auto* key : { AvaAudioProcessor::activeModuleStateKey,
                              AvaAudioProcessor::eqlModuleStateKey,
-                             AvaAudioProcessor::fftModuleStateKey,
                              AvaAudioProcessor::tlsModuleStateKey,
                              AvaAudioProcessor::dynModuleStateKey,
-                             AvaAudioProcessor::trsModuleStateKey,
                              AvaAudioProcessor::abCompareSnapshotAStateKey,
                              AvaAudioProcessor::abCompareSnapshotBStateKey,
                              AvaAudioProcessor::abCompareActiveSlotStateKey,
@@ -56,13 +49,13 @@ bool isCurrentShellProperty(const juce::Identifier& property)
                              ava::routing::instancesStateKey,
                              ava::routing::nextInstanceIdStateKey,
                              ava::routing::rootInstanceIdStateKey,
+                             ava::routing::rootBypassStateKey,
                              ava::routing::namesStateKey,
                              ava::routing::processorStatesKey,
                              AvaAudioProcessor::oscEnabledStateKey,
                              AvaAudioProcessor::oscInputPortStateKey,
                              AvaAudioProcessor::oscOutputHostStateKey,
-                             AvaAudioProcessor::oscOutputPortStateKey,
-                             AvaAudioProcessor::oscInstanceNameStateKey })
+                             AvaAudioProcessor::oscOutputPortStateKey })
     {
         if (property == juce::Identifier(key))
             return true;
@@ -210,23 +203,6 @@ bool hasCurrentSerializedModuleState(const juce::ValueTree& state,
             && hasCurrentHostSlotTargets(state, shellParameters, &moduleProcessor->getValueTreeState());
     }
 
-    if (moduleId == AvaAudioProcessor::fftModuleId)
-    {
-        FftProcessorBank candidate(processor);
-
-        if (! candidate.setStateFromXmlString(state.getProperty(AvaAudioProcessor::fftModuleStateKey).toString()))
-            return false;
-
-        const auto requiredRangeCount = getRequiredCrossoverRangeCount(state);
-
-        if (! requiredRangeCount.has_value() || candidate.getCreatedRangeCount() < *requiredRangeCount)
-            return false;
-
-        auto* moduleProcessor = candidate.getSelectedProcessor();
-        return moduleProcessor != nullptr
-            && hasCurrentHostSlotTargets(state, shellParameters, &moduleProcessor->getValueTreeState());
-    }
-
     if (moduleId == AvaAudioProcessor::tlsModuleId)
     {
         TlsModuleProcessor candidate(processor);
@@ -241,13 +217,6 @@ bool hasCurrentSerializedModuleState(const juce::ValueTree& state,
             && hasCurrentHostSlotTargets(state, shellParameters, &candidate.getValueTreeState());
     }
 
-    if (moduleId == AvaAudioProcessor::trsModuleId)
-    {
-        TrsModuleProcessor candidate(processor);
-        return candidate.setStateFromXmlString(state.getProperty(AvaAudioProcessor::trsModuleStateKey).toString())
-            && hasCurrentHostSlotTargets(state, shellParameters, &candidate.getValueTreeState());
-    }
-
     return false;
 }
 
@@ -259,6 +228,16 @@ bool hasCurrentShellMetadata(const juce::ValueTree& state,
     {
         const auto property = state.getPropertyName(propertyIndex);
 
+        if (const auto valid = validateAnimationProperty(property, state.getProperty(property)); valid.has_value())
+        {
+            if (!*valid) return false;
+            continue;
+        }
+        if (const auto valid = shell_editor_ui::validate(property, state.getProperty(property)); valid.has_value())
+        {
+            if (!*valid) return false;
+            continue;
+        }
         if (! isCurrentShellProperty(property))
             return false;
 
@@ -274,7 +253,7 @@ bool hasCurrentShellMetadata(const juce::ValueTree& state,
         || (hasWidth
             && ! crossover_ui::hasExactIntegerValue(state.getProperty(AvaAudioProcessor::editorWidthStateKey),
                                                       1,
-                                                      maximumStoredEditorWidth))
+                                                      maximumEditorWidth))
         || (hasHeight
             && ! crossover_ui::hasExactIntegerValue(state.getProperty(AvaAudioProcessor::editorHeightStateKey),
                                                       minimumEditorHeight,
@@ -335,12 +314,10 @@ bool hasCurrentShellMetadata(const juce::ValueTree& state,
         return false;
 
     const auto moduleId = state.getProperty(AvaAudioProcessor::activeModuleStateKey).toString();
-    const std::array<std::pair<const char*, const char*>, 5> moduleProperties {{
+    const std::array<std::pair<const char*, const char*>, 3> moduleProperties {{
         { AvaAudioProcessor::eqlModuleId, AvaAudioProcessor::eqlModuleStateKey },
-        { AvaAudioProcessor::fftModuleId, AvaAudioProcessor::fftModuleStateKey },
         { AvaAudioProcessor::tlsModuleId, AvaAudioProcessor::tlsModuleStateKey },
-        { AvaAudioProcessor::dynModuleId, AvaAudioProcessor::dynModuleStateKey },
-        { AvaAudioProcessor::trsModuleId, AvaAudioProcessor::trsModuleStateKey }
+        { AvaAudioProcessor::dynModuleId, AvaAudioProcessor::dynModuleStateKey }
     }};
 
     auto foundActiveModuleState = moduleId.isEmpty();

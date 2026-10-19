@@ -2,14 +2,15 @@
 
 #include <JuceHeader.h>
 
-#include "DspCore.h"
+#include "SampleProcessor.h"
 #include "Parameters.h"
 #include "../shared/ParameterHost.h"
 
 #include <array>
 #include <atomic>
 
-class TlsModuleProcessor final : private juce::AudioProcessorValueTreeState::Listener
+class TlsModuleProcessor final : private juce::AudioProcessorValueTreeState::Listener,
+                                 private juce::ValueTree::Listener
 {
 public:
     explicit TlsModuleProcessor(juce::AudioProcessor& ownerProcessor);
@@ -33,6 +34,10 @@ public:
     void processRange(size_t rangeIndex, juce::AudioBuffer<float>& buffer);
     bool syncParameters(bool force = false);
     void markParametersDirty() noexcept;
+    tls::blocks::Order getBlockOrder(size_t range) const noexcept;
+    void setBlockOrder(size_t range, const tls::blocks::Order& order);
+    tls::gain::Order getGainOrder(size_t range) const noexcept;
+    void setGainOrder(size_t range, const tls::gain::Order& order);
 
 private:
     static constexpr size_t numRanges = tls::dsp::ProcessorBank::numRanges;
@@ -40,6 +45,9 @@ private:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void cacheParameterPointers();
+    void publishBlockOrders();
+    void valueTreePropertyChanged(juce::ValueTree&, const juce::Identifier&) override;
+    void valueTreeRedirected(juce::ValueTree&) override;
     void setParameterListenersEnabled(bool enabled);
     void parameterChanged(const juce::String& parameterID, float newValue) override;
     tls::dsp::DspCore::Parameters readCrossoverRangeParameters(size_t rangeIndex) const;
@@ -51,6 +59,7 @@ private:
     tls::dsp::ProcessorBank processorBank;
     std::array<std::array<std::atomic<float>*, numParameterSlots>, numRanges> rawRangeParameters {};
     std::array<tls::dsp::DspCore::Parameters, numRanges> currentRangeParameters {};
+    std::array<std::atomic<uint64_t>, numRanges> blockOrders {}, gainOrders {};
     std::atomic<bool> parametersDirty { true };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TlsModuleProcessor)

@@ -29,7 +29,7 @@ public:
     static constexpr int maxFilterCount = 64;
 
     static juce::String getFilterTypeParamId(int filterIndex);
-    static juce::String getFilterPlaceParamId(int filterIndex);
+    static juce::String getFilterPhaseParamId(int filterIndex);
     static juce::String getFilterFrequencyParamId(int filterIndex);
     static juce::String getFilterBandwidthParamId(int filterIndex);
     static juce::String getFilterOrderParamId(int filterIndex);
@@ -38,8 +38,7 @@ public:
     static juce::StringArray getFilterOrderChoices() noexcept;
     static float getSlopeDbPerOctForOrderChoice(int choiceIndex) noexcept;
     static int getOrderChoiceForSlopeDbPerOct(float slope) noexcept;
-    static juce::String getFilterHeaderText(FilterType type, int filterIndex);
-    juce::String getFilterHeaderText(int filterIndex, int displayIndex) const noexcept;
+    juce::String getFilterHeaderText(int filterIndex) const noexcept;
     static FilterType filterTypeFromChoiceIndex(int choiceIndex) noexcept;
     static int choiceIndexFromFilterType(FilterType type) noexcept;
     static void appendEqlParameters(std::vector<std::unique_ptr<juce::RangedAudioParameter>>& parameterLayout);
@@ -143,10 +142,14 @@ private:
         void reset() noexcept;
         void setIdentity() noexcept;
         void process(juce::AudioBuffer<float>& buffer, int numChannels) noexcept;
-        void processWithChannelMask(juce::AudioBuffer<float>& buffer, int numChannels, bool processLeft, bool processRight) noexcept;
+
+        void transitionTo(const std::array<float, phaseFirSize>& next, int samples) noexcept;
 
         bool active = false;
         std::array<float, phaseFirSize> taps {};
+        std::array<float, phaseFirSize> targetTaps {};
+        int transitionRemaining = 0;
+        int transitionLength = 0;
         std::array<std::array<float, phaseFirSize * 2>, maxSupportedChannels> state {};
         int writeIndex = 0;
     };
@@ -154,6 +157,7 @@ private:
     struct FilterDesignState
     {
         bool valid = false;
+        bool phase = false;
         bool active = false;
         FilterType type = FilterType::bell;
         float frequency = 0.0f;
@@ -184,6 +188,7 @@ private:
                                 float slope,
                                 float gainDb) noexcept;
     void setActiveFilterCount(int newCount) noexcept;
+    void resetFilterHistory() noexcept;
     void resetFilters() noexcept;
     void setBellIdentityResponse(size_t filterIndex) noexcept;
     void setShelfIdentityResponse(size_t filterIndex) noexcept;
@@ -220,7 +225,7 @@ private:
     juce::AudioProcessorValueTreeState parameters;
     mutable juce::CriticalSection filterProcessLock;
     std::array<std::atomic<float>*, maxFilterCount> filterTypeParams {};
-    std::array<std::atomic<float>*, maxFilterCount> filterPlaceParams {};
+    std::array<std::atomic<float>*, maxFilterCount> filterPhaseParams {};
     std::array<std::atomic<float>*, maxFilterCount> filterFrequencyParams {};
     std::array<std::atomic<float>*, maxFilterCount> filterBandwidthParams {};
     std::array<juce::AudioParameterChoice*, maxFilterCount> filterOrderParams {};
@@ -237,8 +242,6 @@ private:
     std::array<FilterDesignState, maxFilterCount> cachedFilterStates {};
     juce::AudioBuffer<float> filterProcessBufferA;
     juce::AudioBuffer<float> filterProcessBufferB;
-    juce::AudioBuffer<float> placeWorkBuffer;
-    juce::AudioBuffer<float> placeAuxBuffer;
     int preparedNumChannels = 2;
     double currentSampleRate = 0.0;
     std::atomic<int> activeFilterCount { 0 };

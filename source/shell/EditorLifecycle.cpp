@@ -1,56 +1,19 @@
 #include "Editor.h"
 #include "LookAndFeel.h"
 #include "FilterSection.h"
-#include "PresetSections.h"
-#include "../crossover/Component.h"
+#include "PresetSection.h"
+#include "../crossover/Editor.h"
 #include "../routing/Panel.h"
 #include "OscPanel.h"
 
 #include <cmath>
 
-namespace
-{
-bool usesLogFocusedParameterScale(const juce::Slider& slider) noexcept
-{
-    const auto minimum = static_cast<double>(slider.getMinimum());
-    const auto maximum = static_cast<double>(slider.getMaximum());
-
-    return minimum > 0.0 && maximum / minimum >= 100.0;
-}
-
-double sliderValueToFocusedParameterValue(const juce::Slider& slider) noexcept
-{
-    const auto currentValue = static_cast<double>(slider.getValue());
-
-    if (usesLogFocusedParameterScale(slider))
-    {
-        const auto minimum = static_cast<double>(slider.getMinimum());
-        const auto maximum = static_cast<double>(slider.getMaximum());
-        return juce::jlimit(0.0,
-                            1.0,
-                            std::log(currentValue / minimum) / std::log(maximum / minimum));
-    }
-
-    return slider.getNormalisableRange().convertTo0to1(currentValue);
-}
-
-double focusedParameterValueToSliderValue(const juce::Slider& slider, const double focusedValue) noexcept
-{
-    const auto normalisedValue = juce::jlimit(0.0, 1.0, focusedValue);
-
-    if (usesLogFocusedParameterScale(slider))
-    {
-        const auto minimum = static_cast<double>(slider.getMinimum());
-        const auto maximum = static_cast<double>(slider.getMaximum());
-        return minimum * std::pow(maximum / minimum, normalisedValue);
-    }
-
-    return slider.getNormalisableRange().convertFrom0to1(normalisedValue);
-}
-}
-
 AvaAudioProcessorEditor::~AvaAudioProcessorEditor()
 {
+#if JUCE_MAC
+    svg_export::removeKeyboardShortcut(svgExportKeyboardMonitor);
+#endif
+    animationSettingsWindow.reset();
     audioProcessor.setOscActionEditor(nullptr);
     oscParameterListWindow.reset();
     commitPendingHistorySnapshot(true);
@@ -62,19 +25,21 @@ AvaAudioProcessorEditor::~AvaAudioProcessorEditor()
 
 void AvaAudioProcessorEditor::timerCallback()
 {
+    const auto location = audioProcessor.refreshHostTrackName();
+    animationSettings->setHostName(location.text, location.onItem, location.itemName);
+    if (hostSlotControlDrag && ! juce::ModifierKeys::getCurrentModifiersRealtime().isCtrlDown())
+        cancelHostSlotMove();
+
     if (activeInstanceId != 0
         && audioProcessor.getRoutingInstanceHandle(activeInstanceId) == nullptr)
         closeRoutingInstance();
 
     commitPendingHistorySnapshot();
-    syncFocusedParameterControl();
 
     const auto activeModule = audioProcessor.getActiveModule();
     const auto moduleStateChanged = eqlModuleLoaded != (activeModule == AvaAudioProcessor::ActiveModule::eql)
-        || fftModuleLoaded != (activeModule == AvaAudioProcessor::ActiveModule::fft)
         || tlsModuleLoaded != (activeModule == AvaAudioProcessor::ActiveModule::tls)
-        || dynModuleLoaded != (activeModule == AvaAudioProcessor::ActiveModule::dyn)
-        || trsModuleLoaded != (activeModule == AvaAudioProcessor::ActiveModule::trs);
+        || dynModuleLoaded != (activeModule == AvaAudioProcessor::ActiveModule::dyn);
 
     if (moduleStateChanged)
         resyncEditorFromProcessorState();
@@ -105,89 +70,63 @@ void AvaAudioProcessorEditor::timerCallback()
     if (auto* dynEditor = dynamic_cast<CrossoverModuleComponent*>(dynModuleEditor.get()))
         dynEditor->refreshExternalState();
 
-    if (auto* trsEditor = dynamic_cast<CrossoverModuleComponent*>(trsModuleEditor.get()))
-        trsEditor->refreshExternalState();
-
     if (auto* editor = dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get()))
         editor->refreshExternalState();
 
     if (oscPanel != nullptr)
         oscPanel->refresh();
 
-    refreshFftAnalyserResponse();
 }
 
-double AvaAudioProcessorEditor::getFocusedParameterControlValueForTarget() const noexcept
+bool AvaAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 {
-    if (focusedParameterTargetSlider == nullptr)
-        return 0.0;
-
-    return sliderValueToFocusedParameterValue(*focusedParameterTargetSlider);
-}
-
-double AvaAudioProcessorEditor::getFocusedParameterTargetValueForControl() const noexcept
-{
-    if (focusedParameterControl == nullptr || focusedParameterTargetSlider == nullptr)
-        return 0.0;
-
-    return focusedParameterValueToSliderValue(*focusedParameterTargetSlider, focusedParameterControl->getValue());
-}
-
-void AvaAudioProcessorEditor::syncFocusedParameterControl()
-{
-    if (focusedParameterControl == nullptr)
-        return;
-
-    shell_parameter_focus::clearFocusIfNotShowing(*this);
-
-    auto* nextTarget = shell_parameter_focus::getFocusedValueSlider(*this);
-
-    if (nextTarget != focusedParameterTargetSlider)
+    if (isSvgExportGesture(key.getModifiers())
+        && (key.isKeyCode('E') || key.isKeyCode('e')))
     {
-        const auto preservedFilterScrollY = filterViewport.getViewPositionY();
-        focusedParameterTargetSlider = nextTarget;
-
-        if (focusedParameterTargetSlider != nullptr)
-        {
-            const juce::ScopedValueSetter<bool> scopedIgnore(suppressFocusedParameterControlChangeHandlers, true);
-            focusedParameterControl->setValue(getFocusedParameterControlValueForTarget(),
-                                              juce::dontSendNotification);
-            focusedParameterControl->setEnabled(true);
-            focusedParameterControl->setColour(juce::Slider::backgroundColourId, uiGrey800);
-            focusedParameterControl->setColour(juce::Slider::trackColourId, uiWhite);
-            focusedParameterControl->setAlpha(1.0f);
-        }
-        else
-        {
-            focusedParameterControl->setEnabled(false);
-            focusedParameterControl->setColour(juce::Slider::backgroundColourId, uiGrey800);
-            focusedParameterControl->setColour(juce::Slider::trackColourId, uiGrey500);
-            focusedParameterControl->setAlpha(1.0f);
-        }
-
-        resized();
-
-        const auto filterMaxOffset = juce::jmax(0, getActiveFilterContentHeight() - filterViewport.getHeight());
-        filterViewport.setViewPosition(0, juce::jlimit(0, filterMaxOffset, preservedFilterScrollY));
-
+        requestSvgExport();
+        return true;
     }
 
-    if (focusedParameterTargetSlider == nullptr || focusedParameterControl->isMouseButtonDown())
-        return;
-
-    const auto targetValue = getFocusedParameterControlValueForTarget();
-
-    if (std::abs(focusedParameterControl->getValue() - targetValue) > 1.0e-6)
+    if (hostSlotMoveSourceIndex >= 0
+        && (key.isKeyCode(juce::KeyPress::escapeKey) || key.isKeyCode(juce::KeyPress::returnKey)))
     {
-        const juce::ScopedValueSetter<bool> scopedIgnore(suppressFocusedParameterControlChangeHandlers, true);
-        focusedParameterControl->setValue(targetValue, juce::dontSendNotification);
+        cancelHostSlotMove();
+        return true;
     }
+
+    if (! key.isKeyCode(juce::KeyPress::escapeKey))
+        return false;
+
+    if (activeInstanceEditor != nullptr)
+        return activeInstanceEditor->keyPressed(key);
+    if (textPromptOverlay != nullptr)
+        return false;
+    if (routingPanel != nullptr && routingPanel->cancelMoveMode())
+        return true;
+
+    const auto* focused = juce::Component::getCurrentlyFocusedComponent();
+    if (focused != nullptr && (dynamic_cast<const juce::TextEditor*>(focused) != nullptr
+        || focused->findParentComponentOfClass<juce::TextEditor>() != nullptr))
+        return false;
+    if (juce::Desktop::getInstance().getNumDraggingMouseSources() > 0)
+        return false;
+
+    if (returnToRoutingAction != nullptr)
+    {
+        const auto action = returnToRoutingAction;
+        action();
+    }
+    else if (! routingExpanded)
+        toggleRoutingSection();
+    return true;
 }
 
-void AvaAudioProcessorEditor::mouseDown(const juce::MouseEvent&)
+void AvaAudioProcessorEditor::mouseDown(const juce::MouseEvent& event)
 {
-    shell_parameter_focus::clearFocus(*this);
+    if (hostSlotMoveSourceIndex >= 0) cancelHostSlotMove();
     clearKeyboardFocus(*this);
+    if(event.mods.isPopupMenu() && audioProcessor.getActiveModule()==AvaAudioProcessor::ActiveModule::tls)
+        if(auto* module=dynamic_cast<CrossoverModuleComponent*>(tlsModuleEditor.get())) module->showBlockArrange();
 }
 
 void AvaAudioProcessorEditor::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
@@ -195,11 +134,15 @@ void AvaAudioProcessorEditor::mouseWheelMove(const juce::MouseEvent& event, cons
     if (hostParametersViewport.getBounds().contains(event.getPosition()))
     {
         if (scrollViewportWithWheel(hostParametersViewport, hostParametersContent.getHeight(), wheel, event.mods.isShiftDown()))
+        {
+            storeEditorUiState();
             return;
+        }
     }
 
     if (! filterViewport.getBounds().contains(event.getPosition()))
         return;
 
     scrollViewportWithWheel(filterViewport, getActiveFilterContentHeight(), wheel, event.mods.isShiftDown());
+    storeEditorUiState();
 }

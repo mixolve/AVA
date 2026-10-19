@@ -17,7 +17,6 @@ public:
                           double skewCentre = 0.0,
                           bool supportsBrickwText = false,
                           bool supportsNoteTextIn = false);
-    ~LocalParameterControl() override;
 
     int getPreferredHeight() const noexcept;
     double getValue() const noexcept;

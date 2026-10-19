@@ -1,10 +1,10 @@
+#include "OwnerAttachedWindow.h"
 #include "Editor.h"
-#include "OscListWindowAttachment.h"
 
 #include "Style.h"
 #include "Controls.h"
-#include "PromptComponents.h"
-#include "../crossover/Component.h"
+#include "Prompt.h"
+#include "../crossover/Editor.h"
 #include "OscPanel.h"
 #include "../routing/State.h"
 
@@ -95,19 +95,22 @@ public:
             });
         instanceSelector.onChange = [this] { refreshParameters(); };
         addAndMakeVisible(instanceSelector);
+        closeButton.setTablerIcon("x");
+        closeButton.onClick = [this] { if (onClose != nullptr) onClose(); };
+        addAndMakeVisible(closeButton);
 
         table.setModel(this);
         table.setRowHeight(rowHeight);
         table.setOutlineThickness(frameLineThickness);
         table.setMultipleSelectionEnabled(false);
         table.setColour(juce::ListBox::backgroundColourId, uiBackground);
-        table.setColour(juce::ListBox::outlineColourId, uiGrey500);
+        table.setColour(juce::ListBox::outlineColourId, uiGreyLight);
         table.getViewport()->setScrollBarsShown(false, false, true, false);
 
         auto& header = table.getHeader();
         header.setColour(juce::TableHeaderComponent::backgroundColourId, uiBackground);
         header.setColour(juce::TableHeaderComponent::textColourId, uiWhite);
-        header.setColour(juce::TableHeaderComponent::outlineColourId, uiGrey500);
+        header.setColour(juce::TableHeaderComponent::outlineColourId, uiGreyLight);
         header.setColour(juce::TableHeaderComponent::highlightColourId, uiBackground);
         header.setLookAndFeel(&headerLookAndFeel);
         header.setInterceptsMouseClicks(true, true);
@@ -131,6 +134,8 @@ public:
         table.setModel(nullptr);
     }
 
+    std::function<void()> onClose;
+
     void paint(juce::Graphics& graphics) override
     {
         graphics.fillAll(uiBackground);
@@ -139,7 +144,10 @@ public:
     void resized() override
     {
         auto bounds = getLocalBounds().reduced(contentInset);
-        instanceSelector.setBounds(bounds.removeFromTop(rowHeight));
+        auto selectorRow = bounds.removeFromTop(rowHeight);
+        closeButton.setBounds(selectorRow.removeFromRight(rowHeight));
+        selectorRow.removeFromRight(uiGap);
+        instanceSelector.setBounds(selectorRow);
         bounds.removeFromTop(uiGap);
         table.setBounds(bounds);
         if (choicePromptOverlay != nullptr)
@@ -149,12 +157,6 @@ public:
     int getPreferredWindowWidth() const noexcept
     {
         return preferredWindowWidth;
-    }
-
-    void paintOverChildren(juce::Graphics& graphics) override
-    {
-        graphics.setColour(uiGreyLight);
-        graphics.drawRect(getLocalBounds(), frameLineThickness);
     }
 
 private:
@@ -223,7 +225,7 @@ private:
         auto refreshed = instance->getVisibleOscParameters();
         const auto prefix = makeOscAddressPrefix(ava::routing::getDisplayName(routing, id));
         for (auto& parameter : refreshed)
-            parameter.address = prefix + getOscAddressName(parameter.sourceId);
+            parameter.address = prefix + parameter.address.fromLastOccurrenceOf("/", false, false);
 
         if (refreshed == parameters)
         {
@@ -297,9 +299,9 @@ private:
             return;
 
         const auto& parameter = parameters[static_cast<size_t>(rowNumber)];
-        const auto text = rowNumber == copiedRow && columnId == nameColumn ? juce::String("copied")
+        const auto text = rowNumber == copiedRow && columnId == nameColumn ? juce::String("COPIED")
                         : columnId == nameColumn ? parameter.name
-                        : parameter.acceptedValues;
+                        : parameter.acceptedValues.toUpperCase();
         graphics.setColour(uiWhite);
         graphics.setFont(makeUiFont());
         graphics.drawFittedText(text,
@@ -402,7 +404,7 @@ private:
     }
 
     static constexpr int cellHorizontalPadding = uiGapDouble;
-    static constexpr int contentInset = uiGap + frameLineThickness;
+    static constexpr int contentInset = uiGap;
     static constexpr int nameColumn = 1;
     static constexpr int acceptedValuesColumn = 2;
     static constexpr int longPressDelayMs = 500;
@@ -411,6 +413,7 @@ private:
 
     AvaAudioProcessor& processor;
     NoTickComboBox instanceSelector;
+    BoxTextButton closeButton { uiAccent };
     std::unique_ptr<PromptComponent> choicePromptOverlay;
     std::vector<int> instanceIds;
     juce::StringArray instanceLabels;
@@ -425,15 +428,13 @@ private:
     int preferredWindowWidth = 900;
 };
 
-
-class OscParameterListWindow final : public juce::DocumentWindow,
-                                     private juce::Timer
+class OscParameterListWindow final : public OwnerAttachedWindow
 {
 public:
     OscParameterListWindow(AvaAudioProcessor& processor,
                            juce::LookAndFeel& ownerLookAndFeel,
                            std::function<void()> closeCallbackIn)
-        : DocumentWindow({}, uiBackground, 0, false),
+        : OwnerAttachedWindow(),
           closeCallback(std::move(closeCallbackIn))
     {
         setUsingNativeTitleBar(false);
@@ -441,6 +442,10 @@ public:
         setDropShadowEnabled(false);
         setResizable(false, false);
         auto* content = new OscParameterListContent(processor, ownerLookAndFeel);
+        content->onClose = [safeThis = juce::Component::SafePointer<OscParameterListWindow>(this)]
+        {
+            if (safeThis != nullptr) safeThis->closeButtonPressed();
+        };
         setContentOwned(content, true);
         setSize(content->getPreferredWindowWidth(), 1);
         setWantsKeyboardFocus(false);
@@ -449,47 +454,11 @@ public:
         addToDesktop();
     }
 
-    ~OscParameterListWindow() override
-    {
-        stopTimer();
-        osc_list_window::detachFromOwner(*this);
-    }
-
-    juce::BorderSize<int> getBorderThickness() const override
-    {
-        return {};
-    }
-
-    juce::BorderSize<int> getContentComponentBorder() const override
-    {
-        return {};
-    }
-
     int getDesktopWindowStyleFlags() const override
     {
         return (juce::DocumentWindow::getDesktopWindowStyleFlags()
                 & ~juce::ComponentPeer::windowAppearsOnTaskbar)
             | juce::ComponentPeer::windowIgnoresKeyPresses;
-    }
-
-    void showFor(juce::Component& owner)
-    {
-        ownerComponent = &owner;
-        const auto ownerBounds = owner.getScreenBounds();
-        auto targetBounds = getBounds();
-        targetBounds.setHeight(ownerBounds.getHeight());
-        targetBounds.setPosition(ownerBounds.getRight() + uiGap, ownerBounds.getY());
-
-        if (const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect(ownerBounds))
-            targetBounds = targetBounds.constrainedWithin(display->userArea);
-        targetBounds.setHeight(ownerBounds.getHeight());
-
-        ownerOffset = targetBounds.getPosition() - ownerBounds.getPosition();
-        setBounds(targetBounds);
-        osc_list_window::attachToOwner(*this, owner);
-        setVisible(true);
-        toFront(false);
-        startTimerHz(sizeRefreshRateHz);
     }
 
     void closeButtonPressed() override
@@ -503,35 +472,25 @@ public:
     }
 
 private:
-    void timerCallback() override
+    int getAttachedWidth() const override
     {
-        syncWindowSizeToOwner();
+        if (const auto* content = dynamic_cast<const OscParameterListContent*>(getContentComponent()))
+            return content->getPreferredWindowWidth();
+        return getWidth();
     }
 
-    void syncWindowSizeToOwner()
-    {
-        const auto* content = dynamic_cast<OscParameterListContent*>(getContentComponent());
-        if (content == nullptr || ownerComponent == nullptr)
-            return;
-
-        const auto targetWidth = content->getPreferredWindowWidth();
-        const auto targetHeight = ownerComponent->getHeight();
-        auto targetBounds = getBounds().withSize(targetWidth, targetHeight);
-        targetBounds.setPosition(ownerComponent->getScreenBounds().getPosition() + ownerOffset);
-        if (getBounds() != targetBounds)
-            setBounds(targetBounds);
-    }
-
-    static constexpr int sizeRefreshRateHz = 60;
-
-    juce::Component::SafePointer<juce::Component> ownerComponent;
-    juce::Point<int> ownerOffset;
     std::function<void()> closeCallback;
 };
 }
 
 void AvaAudioProcessorEditor::showOscParameterList()
 {
+    if (auto* parent = findParentComponentOfClass<AvaAudioProcessorEditor>())
+    {
+        parent->showOscParameterList();
+        return;
+    }
+
     if (oscParameterListWindow != nullptr)
     {
         oscParameterListWindow.reset();
@@ -541,6 +500,9 @@ void AvaAudioProcessorEditor::showOscParameterList()
 
         return;
     }
+
+    if (animationSettingsWindow != nullptr)
+        animationSettingsWindow->closeButtonPressed();
 
     auto window = std::make_unique<OscParameterListWindow>(
         audioProcessor.getOscOwner(),

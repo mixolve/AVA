@@ -1,9 +1,11 @@
+#include "ChoiceControl.h"
 #include "Editor.h"
 #include "OscPanel.h"
 #include "FilterSection.h"
-#include "PresetSections.h"
-#include "../crossover/Component.h"
+#include "PresetSection.h"
+#include "../crossover/Editor.h"
 #include "../modules/eql/Processor.h"
+#include "../modules/eql/FilterSupport.h"
 #include "../routing/Panel.h"
 #include "../routing/State.h"
 
@@ -22,17 +24,20 @@ void AvaAudioProcessorEditor::setPresetsVisible(const bool shouldShow)
     if (presetsSection == nullptr)
         return;
 
-    setComponentVisible(&presetsSection->presetCombo,
-                        shouldShow && ! presetsSection->filterActionsExpanded && ! presetsSection->actionsExpanded);
-    setComponentVisible(presetsSection->filterActionsToggleButton.get(), shouldShow);
+    const auto progress = presetsSection->actionsReveal.value();
+    const auto showActions = shouldShow && (presetsSection->actionsToggleButton->getToggleState() || progress > 0.0);
+    const auto showPresets = shouldShow && (!presetsSection->actionsToggleButton->getToggleState() || progress < 1.0);
     setComponentVisible(presetsSection->actionsToggleButton.get(), shouldShow);
-    const auto showFilterActions = shouldShow && presetsSection->filterActionsExpanded;
-    setComponentVisible(addFilterButton.get(), showFilterActions);
-    setComponentVisible(sortPlaceButton.get(), showFilterActions);
-    setComponentVisible(sortFreqButton.get(), showFilterActions);
-    setComponentVisible(sortDuoButton.get(), showFilterActions);
-    const auto showActions = shouldShow && presetsSection->actionsExpanded;
-    setComponentVisible(presetsSection->addButton.get(), showActions);
+    presetsSection->actionsClip.setVisible(showActions);
+    presetsSection->presetClip.setVisible(showPresets);
+    presetsSection->actionsClip.setAlpha(1.0f);
+    presetsSection->presetClip.setAlpha(1.0f);
+    presetsSection->actionsClip.setInterceptsMouseClicks(false, !presetsSection->actionsReveal.isRunning());
+    presetsSection->presetClip.setInterceptsMouseClicks(false, !presetsSection->actionsReveal.isRunning());
+    setComponentVisible(&presetsSection->presetCombo, showPresets);
+    setComponentVisible(presetsSection->addButton.get(), showPresets);
+    setComponentVisible(addFilterButton.get(), shouldShow);
+    setComponentVisible(sortFiltersButton.get(), shouldShow);
     setComponentVisible(presetsSection->saveButton.get(), showActions);
     setComponentVisible(presetsSection->renameButton.get(), showActions);
     setComponentVisible(presetsSection->defaultButton.get(), showActions);
@@ -46,9 +51,10 @@ void AvaAudioProcessorEditor::setEqlFilterSectionsVisible(const bool shouldShow)
         if (section == nullptr)
             continue;
 
+        section->body.setVisible(shouldShow && (section->expanded || section->disclosure.value() > 0.0));
+        section->accentFrame.setVisible(shouldShow && (section->expanded || section->disclosure.value() > 0.0));
         section->header->setVisible(shouldShow);
         section->typeControl->setVisible(shouldShow);
-        section->placeControl->setVisible(shouldShow);
         section->orderControl->setVisible(shouldShow);
         section->frequencyControl->setVisible(shouldShow);
         section->bandwidthControl->setVisible(shouldShow);
@@ -64,76 +70,16 @@ void AvaAudioProcessorEditor::setEqlControlsVisible(const bool shouldShow)
     setEqlFilterSectionsVisible(shouldShow);
 }
 
-void AvaAudioProcessorEditor::setFftControlsVisible(const bool shouldShow)
-{
-    const auto correlationMode = fftDynamicModeControl != nullptr
-        && fftDynamicModeControl->getSelectedChoiceIndex() == 1;
-
-    setComponentVisible(fftAnalyserComponent.get(), shouldShow);
-    setComponentVisible(fftAnalyserHighControl.get(), shouldShow);
-    setComponentVisible(fftAnalyserLowControl.get(), shouldShow);
-    setComponentVisible(fftAttackControl.get(), shouldShow);
-    setComponentVisible(fftReleaseControl.get(), shouldShow);
-    setComponentVisible(fftKneeControl.get(), shouldShow);
-    setComponentVisible(fftRatioControl.get(), shouldShow);
-    setComponentVisible(fftFloorControl.get(), shouldShow && correlationMode);
-    setComponentVisible(fftGeneralProcessorHeader.get(), shouldShow);
-    setComponentVisible(fftDspFftSizeControl.get(), shouldShow);
-    setComponentVisible(fftDspOverlapControl.get(), shouldShow);
-    setComponentVisible(fftDspSlopeControl.get(), shouldShow);
-    setComponentVisible(fftCorrelationImpactControl.get(), shouldShow && correlationMode);
-    setComponentVisible(fftDeltaButton.get(), shouldShow);
-    setComponentVisible(fftDualMonoLeftThresholdControl.get(), shouldShow);
-    setComponentVisible(fftDualMonoLeftAdaptiveControl.get(), shouldShow);
-    setComponentVisible(fftDualMonoRightThresholdControl.get(), shouldShow && ! correlationMode);
-    setComponentVisible(fftDualMonoRightAdaptiveControl.get(), shouldShow && ! correlationMode);
-    setComponentVisible(fftDynamicProcessorHeader.get(), shouldShow);
-    setComponentVisible(fftDynamicModeControl.get(), shouldShow);
-    setComponentVisible(fftCorrelationTypeControl.get(), shouldShow && correlationMode);
-    setComponentVisible(fftDynamicDirectionControl.get(), shouldShow);
-    setComponentVisible(fftCorrelationSmoothingControl.get(), shouldShow && correlationMode);
-    setComponentVisible(fftDualMonoLinkButton.get(), shouldShow && ! correlationMode);
-    setComponentVisible(fftAdaptiveSettingsHeader.get(), shouldShow);
-    setComponentVisible(fftAdaptiveOffsetControl.get(), shouldShow);
-    setComponentVisible(fftAdaptiveAttackControl.get(), shouldShow);
-    setComponentVisible(fftAdaptiveHoldControl.get(), shouldShow);
-    setComponentVisible(fftAdaptiveReleaseControl.get(), shouldShow);
-    setComponentVisible(fftDetectorRangeHeader.get(), shouldShow);
-    setComponentVisible(fftDetectorLowCutControl.get(), shouldShow);
-    setComponentVisible(fftDetectorHighCutControl.get(), shouldShow);
-    setComponentVisible(fftAnalyserTimeControl.get(), shouldShow);
-
-    if (fftDualMonoLeftThresholdControl != nullptr)
-        fftDualMonoLeftThresholdControl->setTitleText(correlationMode ? "THRESHOLD" : "L-THRESHOLD");
-    if (fftDualMonoLeftAdaptiveControl != nullptr)
-        fftDualMonoLeftAdaptiveControl->setTitleText(correlationMode ? "ADAPTIVE" : "L-ADAPTIVE");
-    if (fftDualMonoRightThresholdControl != nullptr)
-        fftDualMonoRightThresholdControl->setTitleText("R-THRESHOLD");
-    if (fftDualMonoRightAdaptiveControl != nullptr)
-        fftDualMonoRightAdaptiveControl->setTitleText("R-ADAPTIVE");
-    if (fftAdaptiveOffsetControl != nullptr)
-        fftAdaptiveOffsetControl->setTitleText("OFFSET");
-
-    if (fftDualMonoLinkButton != nullptr)
-    {
-        fftDualMonoLinkButton->setButtonText("LINK-LR (STEREO)");
-        fftDualMonoLinkButton->setEnabled(true);
-    }
-}
-
 void AvaAudioProcessorEditor::updateEqlSectionStates(const int activeFilterCount)
 {
     updateUndoRedoButtons();
     const auto canSortFilters = activeFilterCount > 1;
 
-    for (auto* sortButton : { sortPlaceButton.get(), sortFreqButton.get(), sortDuoButton.get() })
+    if (sortFiltersButton != nullptr)
     {
-        if (sortButton == nullptr)
-            continue;
-
-        sortButton->setVisible(eqlModuleLoaded && presetsSection != nullptr && presetsSection->filterActionsExpanded);
-        sortButton->setEnabled(canSortFilters);
-        sortButton->setAlpha(1.0f);
+        sortFiltersButton->setVisible(eqlModuleLoaded && presetsSection != nullptr);
+        sortFiltersButton->setEnabled(canSortFilters);
+        sortFiltersButton->setAlpha(1.0f);
     }
 
     filterViewport.setVisible(eqlModuleLoaded);
@@ -152,27 +98,38 @@ void AvaAudioProcessorEditor::updateEqlSectionStates(const int activeFilterCount
 
         const auto orderPosition = getFilterOrderPositionForIndex(filterIndex);
         const auto isActive = eqlModuleLoaded && orderPosition >= 0;
-        const auto sectionExpanded = isActive && section->expanded;
+        const auto targetExpanded = isActive && section->expanded;
+        if (! section->disclosureInitialised || ! isActive)
+        {
+            section->disclosure.snap(targetExpanded);
+            section->disclosureInitialised = true;
+        }
+        else section->disclosure.setExpanded(targetExpanded);
+        const auto sectionExpanded = isActive && (targetExpanded || section->disclosure.value() > 0.0);
+        section->body.setVisible(sectionExpanded);
+        section->body.setAlpha(static_cast<float>(section->disclosure.value()));
+        section->body.setInterceptsMouseClicks(! section->disclosure.isRunning(), ! section->disclosure.isRunning());
+        section->accentFrame.setAlpha(static_cast<float>(section->disclosure.value()));
         const auto filterType = section->getFilterType();
-        const auto isVolume = filterType == EqlModuleProcessor::FilterType::volume;
-        const auto isBell = filterType == EqlModuleProcessor::FilterType::bell;
-        const auto isPhasePlace = section->getPlace() >= 5 && section->getPlace() <= 7;
-        const auto bandwidthInactive = section->isBandwidthInactiveAtCurrentOrder();
-        const auto orderInactive = section->isOrderInactive();
-        const auto gainInactive = section->isGainInactive();
+        const auto availability = getFilterControlAvailability(filterType, section->orderControl->getSelectedChoiceIndex());
+        const auto isVolume = ! availability.frequency;
+        const auto phaseEnabled = section->isPhaseEnabled();
+        const auto orderInactive = ! availability.order;
+        const auto gainInactive = ! availability.gain;
         const auto filterOrderOff = filterType == EqlModuleProcessor::FilterType::bell
             && section->orderControl->getSelectedChoiceIndex() == 0;
 
-        section->updatePlaceChoicesForType(false);
+        section->updatePhaseForType(false);
         if (auto* eqlProcessor = getActiveEqlProcessor())
-            section->header->setButtonText(eqlProcessor->getFilterHeaderText(filterIndex, orderPosition));
+            section->header->setButtonText(eqlProcessor->getFilterHeaderText(filterIndex));
         else
             section->header->setButtonText({});
 
+        section->accentFrame.setVisible(sectionExpanded);
         section->header->setVisible(isActive);
-        section->header->setToggleState(sectionExpanded, juce::dontSendNotification);
+        section->header->setToggleState(targetExpanded, juce::dontSendNotification);
+        section->header->setActiveFill(targetExpanded);
         section->typeControl->setVisible(sectionExpanded);
-        section->placeControl->setVisible(sectionExpanded);
         section->orderControl->setVisible(sectionExpanded);
         section->orderControl->setInteractionEnabled(! orderInactive);
         if (orderInactive || filterOrderOff)
@@ -189,14 +146,14 @@ void AvaAudioProcessorEditor::updateEqlSectionStates(const int activeFilterCount
             section->frequencyControl->clearOverrideText();
 
         section->bandwidthControl->setVisible(sectionExpanded);
-        section->bandwidthControl->setInteractionEnabled(isBell && ! bandwidthInactive);
-        if (isBell && ! bandwidthInactive)
+        section->bandwidthControl->setInteractionEnabled(availability.bandwidth);
+        if (availability.bandwidth)
             section->bandwidthControl->clearOverrideText();
         else
             section->bandwidthControl->setOverrideText("OFF");
 
         section->gainControl->setVisible(sectionExpanded);
-        section->setGainDisplaysDegrees(isPhasePlace && ! gainInactive);
+        section->setGainDisplaysDegrees(phaseEnabled && ! gainInactive);
         section->gainControl->setInteractionEnabled(! gainInactive);
         if (gainInactive)
             section->gainControl->setOverrideText("OFF");
@@ -208,7 +165,7 @@ void AvaAudioProcessorEditor::updateEqlSectionStates(const int activeFilterCount
 
     if (addFilterButton != nullptr)
     {
-        addFilterButton->setVisible(eqlModuleLoaded && presetsSection != nullptr && presetsSection->filterActionsExpanded);
+        addFilterButton->setVisible(eqlModuleLoaded && presetsSection != nullptr);
         addFilterButton->setEnabled(true);
         addFilterButton->setAlpha(1.0f);
     }
@@ -231,9 +188,7 @@ void AvaAudioProcessorEditor::updateInstanceHeadings()
     {
         case AvaAudioProcessor::ActiveModule::tls: moduleLabel = "TLS"; break;
         case AvaAudioProcessor::ActiveModule::eql: moduleLabel = "EQL"; break;
-        case AvaAudioProcessor::ActiveModule::fft: moduleLabel = "FFT"; break;
         case AvaAudioProcessor::ActiveModule::dyn: moduleLabel = "DYN"; break;
-        case AvaAudioProcessor::ActiveModule::trs: moduleLabel = "TRS"; break;
         case AvaAudioProcessor::ActiveModule::none: break;
     }
 
@@ -280,19 +235,20 @@ void AvaAudioProcessorEditor::updateSectionStates()
         oscButton->setToggleState(oscExpanded, juce::dontSendNotification);
     if (oscPanel != nullptr)
         oscPanel->setVisible(oscExpanded);
-    if (focusedParameterControl != nullptr)
-        focusedParameterControl->setVisible(! routingExpanded && ! oscExpanded);
 
     ensureModuleTitle();
     updateInstanceHeadings();
 
     const auto hostParametersVisible = hostParametersExpanded;
-    const auto moduleContentVisible = crossoverEditor != nullptr
+    if (! hostParametersVisible && hostSlotMoveSourceIndex >= 0) cancelHostSlotMove();
+    const auto modulePageVisible = ! routingExpanded && ! oscExpanded && ! hostParametersExpanded;
+    setComponentVisible(crossoverEditor.get(), modulePageVisible);
+    const auto moduleContentVisible = modulePageVisible && crossoverEditor != nullptr
         && ! dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get())->isCrossoverSettingsSelected();
 
     if (moduleTitle != nullptr)
     {
-        moduleTitle->setVisible(audioProcessor.getActiveModule() != AvaAudioProcessor::ActiveModule::none);
+        moduleTitle->setVisible(modulePageVisible && audioProcessor.getActiveModule() != AvaAudioProcessor::ActiveModule::none);
     }
 
     hostParametersViewport.setVisible(hostParametersVisible);
@@ -300,7 +256,7 @@ void AvaAudioProcessorEditor::updateSectionStates()
     if (moduleAddButton != nullptr)
     {
         const auto noModuleLoaded = audioProcessor.getActiveModule() == AvaAudioProcessor::ActiveModule::none;
-        moduleAddButton->setVisible(noModuleLoaded);
+        moduleAddButton->setVisible(modulePageVisible && noModuleLoaded);
         moduleAddButton->setEnabled(noModuleLoaded);
     }
 
@@ -318,48 +274,28 @@ void AvaAudioProcessorEditor::updateSectionStates()
 
     setComponentVisible(tlsModuleEditor.get(), tlsModuleLoaded && moduleContentVisible);
     setComponentVisible(dynModuleEditor.get(), dynModuleLoaded && moduleContentVisible);
-    setComponentVisible(trsModuleEditor.get(), trsModuleLoaded && moduleContentVisible);
 
     if (! moduleContentVisible)
     {
         setEqlControlsVisible(false);
-        setFftControlsVisible(false);
         return;
     }
 
-    if (! eqlModuleLoaded && ! fftModuleLoaded && ! tlsModuleLoaded && ! dynModuleLoaded && ! trsModuleLoaded)
+    if (! eqlModuleLoaded && ! tlsModuleLoaded && ! dynModuleLoaded)
     {
         setEqlControlsVisible(false);
-        setFftControlsVisible(false);
         setComponentVisible(tlsModuleEditor.get(), false);
         setComponentVisible(dynModuleEditor.get(), false);
-        setComponentVisible(trsModuleEditor.get(), false);
         return;
     }
 
-    if (tlsModuleLoaded || dynModuleLoaded || trsModuleLoaded)
+    if (tlsModuleLoaded || dynModuleLoaded)
     {
         setEqlControlsVisible(false);
-        setFftControlsVisible(false);
         setComponentVisible(tlsModuleEditor.get(), tlsModuleLoaded);
         setComponentVisible(dynModuleEditor.get(), dynModuleLoaded);
-        setComponentVisible(trsModuleEditor.get(), trsModuleLoaded);
         return;
     }
 
-    if (fftModuleLoaded)
-    {
-        setPresetsVisible(false);
-        setFftControlsVisible(true);
-        filterViewport.setVisible(true);
-        setComponentVisible(addFilterButton.get(), false);
-        setComponentVisible(sortPlaceButton.get(), false);
-        setComponentVisible(sortFreqButton.get(), false);
-        setComponentVisible(sortDuoButton.get(), false);
-        setEqlFilterSectionsVisible(false);
-        return;
-    }
-
-    setFftControlsVisible(false);
     updateEqlSectionStates(activeFilterCount);
 }

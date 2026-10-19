@@ -1,4 +1,4 @@
-#include "Component.h"
+#include "Editor.h"
 #include "Page.h"
 #include "UiSupport.h"
 
@@ -13,23 +13,48 @@ using namespace crossover_ui;
 class CrossoverSettingsPage final : public CrossoverModulePage
 {
 public:
-    using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
-
     explicit CrossoverSettingsPage(CrossoverModuleComponent& ownerIn)
         : owner(ownerIn)
     {
         if (! owner.config.showCrossoverControls)
             return;
 
-        if (owner.config.crossoverSettingsHeading.isNotEmpty())
+        if (owner.config.processingInputParameterId.isNotEmpty())
         {
-            settingsHeading = makeTextButton(owner.config.crossoverSettingsHeading, uiGrey500);
-            settingsHeading->setFillVisible(false);
-            settingsHeading->setAlwaysAccentOutline(false);
-            settingsHeading->setToggleAccentVisible(false);
-            settingsHeading->setInterceptsMouseClicks(false, false);
-            addAndMakeVisible(*settingsHeading);
+            processingInputControl = std::make_unique<ChoiceControl>(owner.valueTreeState,
+                owner.config.processingInputParameterId, "CH-IN");
+            processingInputControl->onValueChanged = [this]
+            {
+                if (owner.config.markParametersDirty) owner.config.markParametersDirty();
+                owner.clearFocus();
+            };
+            addAndMakeVisible(*processingInputControl);
         }
+
+        const auto makeSoloButton = [this] (const juce::String& id, const char* label,
+            std::unique_ptr<BoxTextButton>& button,
+            std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>& attachment)
+        {
+            if (id.isEmpty()) return;
+            button = makeTextButton(label);
+            button->setClickingTogglesState(true);
+            button->getProperties().set(juce::Identifier("oscParameterId"), id);
+            auto* target = button.get();
+            button->setLongPressPromptActions({}, [this, id, label, target]
+            {
+                owner.assignButtonToHostSlot(id, label, target);
+            });
+            button->onClick = [this]
+            {
+                if (owner.config.markParametersDirty) owner.config.markParametersDirty();
+                owner.clearFocus();
+            };
+            addAndMakeVisible(*button);
+            attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+                owner.valueTreeState, id, *button);
+        };
+        makeSoloButton(owner.config.soloInstanceParameterId, "SOLO-INS", soloInstanceButton, soloInstanceAttachment);
+        makeSoloButton(owner.config.soloChannelParameterId, "SOLO-CH", soloChannelButton, soloChannelAttachment);
 
         autoSoloButton = makeTextButton("AUTO-SOLO");
         if (owner.config.makeCrossoverParameterId != nullptr)
@@ -102,72 +127,27 @@ public:
             splitControls[index] = std::move(control);
         }
 
-        globalListenHeading = makeTextButton("LISTEN", uiAccent);
-        globalListenHeading->setClickingTogglesState(false);
-        globalListenHeading->setBorderVisible(true);
-        globalListenHeading->setFillVisible(false);
-        globalListenHeading->setDividerLineVisible(false);
-        globalListenHeading->setPressFillEnabled(false);
-        globalListenHeading->setTextJustification(juce::Justification::centredLeft);
-        globalListenHeading->setInterceptsMouseClicks(false, false);
-        addAndMakeVisible(*globalListenHeading);
-
-        for (size_t index = 0; index < globalListenButtons.size(); ++index)
-        {
-            auto button = makeTextButton(globalListenLabels[index]);
-            button->setClickingTogglesState(true);
-            const auto parameterId = owner.config.makeCrossoverParameterId(globalListenSuffixes[index]);
-            button->getProperties().set(juce::Identifier("oscParameterId"), parameterId);
-            globalListenAttachments[index] = std::make_unique<ButtonAttachment>(owner.valueTreeState,
-                                                                                   parameterId,
-                                                                                   *button);
-            button->setLongPressPromptActions({}, [this, index, parameterId]
-            {
-                owner.assignButtonToHostSlot(parameterId, globalListenLabels[index], nullptr);
-            });
-            button->onClick = [this, index]
-            {
-                if (globalListenButtons[index] != nullptr && globalListenButtons[index]->getToggleState())
-                {
-                    for (size_t otherIndex = 0; otherIndex < globalListenButtons.size(); ++otherIndex)
-                    {
-                        if (otherIndex != index)
-                            owner.setParameterPlainValue(owner.config.makeCrossoverParameterId(globalListenSuffixes[otherIndex]),
-                                                         0.0f);
-                    }
-                }
-
-                owner.clearFocus();
-            };
-            addAndMakeVisible(*button);
-            globalListenButtons[index] = std::move(button);
-        }
-
-        globalListenMsPlus3 = makeTextButton("MS+3");
-        globalListenMsPlus3->setClickingTogglesState(true);
-        const auto msPlus3ParameterId = owner.config.makeCrossoverParameterId("ms+3");
-        globalListenMsPlus3->getProperties().set(juce::Identifier("oscParameterId"), msPlus3ParameterId);
-        globalListenMsPlus3Attachment = std::make_unique<ButtonAttachment>(owner.valueTreeState,
-                                                                            msPlus3ParameterId,
-                                                                            *globalListenMsPlus3);
-        globalListenMsPlus3->setLongPressPromptActions({}, [this, msPlus3ParameterId]
-        {
-            owner.assignButtonToHostSlot(msPlus3ParameterId, "MS+3", nullptr);
-        });
-        globalListenMsPlus3->onClick = [this] { owner.clearFocus(); };
-        addAndMakeVisible(*globalListenMsPlus3);
-
         refreshExternalState();
+
     }
 
     int getPreferredHeight() const override
+    {
+        const auto height = getFlatPreferredHeight();
+        return height;
+    }
+
+    int getFlatPreferredHeight() const
     {
         if (! owner.config.showCrossoverControls)
             return 0;
 
         auto height = 0;
 
-        if (settingsHeading != nullptr)
+        if (processingInputControl != nullptr)
+            height += processingInputControl->getPreferredHeight() + verticalGap * 2;
+
+        if (soloInstanceButton != nullptr || soloChannelButton != nullptr)
             height += rowHeight + verticalGap;
 
         height += rowHeight;
@@ -184,7 +164,6 @@ public:
             height += verticalGap + rowHeight;
 
         height += verticalGap + rowHeight;
-        height += verticalGap * 2 + rowHeight * 3;
 
         return height + moduleContentBottomGap;
     }
@@ -193,6 +172,12 @@ public:
     {
         if (! owner.config.showCrossoverControls)
             return;
+
+        if (processingInputControl != nullptr && owner.config.isProcessingInputAvailable)
+            if (auto* parameter = dynamic_cast<juce::AudioParameterChoice*>(
+                    owner.valueTreeState.getParameter(owner.config.processingInputParameterId)))
+                for (int choice = 0; choice < parameter->choices.size(); ++choice)
+                    processingInputControl->setChoiceEnabled(choice, owner.config.isProcessingInputAvailable(choice));
 
         const auto activeSplitCount = owner.getActiveSplitCount();
         const auto canAdd = activeSplitCount < splitControls.size();
@@ -235,7 +220,7 @@ public:
         if (! owner.config.showCrossoverControls)
             return;
 
-        auto bounds = getLocalBounds();
+        auto bounds = getLocalBounds().withHeight(juce::jmax(getHeight(), getFlatPreferredHeight()));
 
         auto placeButton = [&bounds] (BoxTextButton* button)
         {
@@ -259,7 +244,20 @@ public:
                 bounds.removeFromTop(verticalGap);
         };
 
-        placeButton(settingsHeading.get());
+        if (processingInputControl != nullptr)
+        {
+            placeControl(processingInputControl.get());
+        }
+        if (soloInstanceButton != nullptr && soloChannelButton != nullptr)
+        {
+            auto row = bounds.removeFromTop(rowHeight);
+            const auto width = (row.getWidth() - verticalGap) / 2;
+            soloInstanceButton->setBounds(row.removeFromLeft(width));
+            row.removeFromLeft(verticalGap);
+            soloChannelButton->setBounds(row);
+            bounds.removeFromTop(verticalGap);
+        }
+        if (processingInputControl != nullptr) bounds.removeFromTop(verticalGap);
         placeButton(addCrossoverButton.get());
 
         for (auto& control : splitControls)
@@ -273,35 +271,6 @@ public:
             autoSoloButton->setBounds({});
 
         placeControl(soloModeControl.get());
-
-        placeButton(globalListenHeading.get());
-
-        const auto placeListenRow = [&bounds, this] (const std::array<int, 4>& buttonOrder)
-        {
-            auto rowBounds = bounds.removeFromTop(rowHeight);
-            const auto columnWidth = (rowBounds.getWidth() - parameterGap * 3) / 4;
-
-            for (size_t column = 0; column < 4; ++column)
-            {
-                const auto isLast = column == 3;
-                auto cellBounds = rowBounds.removeFromLeft(isLast ? rowBounds.getWidth() : columnWidth);
-                const auto buttonIndex = buttonOrder[column];
-
-                if (buttonIndex >= 0 && static_cast<size_t>(buttonIndex) < globalListenButtons.size())
-                    globalListenButtons[static_cast<size_t>(buttonIndex)]->setBounds(cellBounds);
-                else if (globalListenMsPlus3 != nullptr)
-                    globalListenMsPlus3->setBounds(cellBounds);
-
-                if (! isLast)
-                    rowBounds.removeFromLeft(juce::jmin(parameterGap, rowBounds.getWidth()));
-            }
-
-            if (! bounds.isEmpty())
-                bounds.removeFromTop(verticalGap);
-        };
-
-        placeListenRow({ 0, 1, 2, 3 });
-        placeListenRow({ 4, 5, -1, 6 });
 
         refreshExternalState();
     }
@@ -342,17 +311,14 @@ private:
     }
 
     CrossoverModuleComponent& owner;
-    std::unique_ptr<BoxTextButton> settingsHeading;
+    std::unique_ptr<ChoiceControl> processingInputControl;
+    std::unique_ptr<BoxTextButton> soloInstanceButton, soloChannelButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> soloInstanceAttachment, soloChannelAttachment;
     std::unique_ptr<BoxTextButton> autoSoloButton;
     std::unique_ptr<LocalChoiceControl> soloModeControl;
     std::unique_ptr<BoxTextButton> addCrossoverButton;
     std::unique_ptr<BoxTextButton> removeCrossoverButton;
     std::array<std::unique_ptr<ParameterControl>, splitControlCount> splitControls;
-    std::unique_ptr<BoxTextButton> globalListenHeading;
-    std::array<std::unique_ptr<BoxTextButton>, globalListenSuffixes.size()> globalListenButtons;
-    std::array<std::unique_ptr<ButtonAttachment>, globalListenSuffixes.size()> globalListenAttachments;
-    std::unique_ptr<BoxTextButton> globalListenMsPlus3;
-    std::unique_ptr<ButtonAttachment> globalListenMsPlus3Attachment;
 
 };
 

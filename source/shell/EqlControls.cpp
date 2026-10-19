@@ -1,29 +1,16 @@
 #include "Editor.h"
+#include "EqlActions.h"
 #include "FilterSection.h"
 #include "../modules/eql/FilterSupport.h"
 #include "../modules/eql/Processor.h"
-#include "../modules/eql/ProcessorBank.h"
+#include "../modules/eql/RangeBank.h"
 
 #include <cmath>
 #include <utility>
 
 namespace
 {
-int parseFilterDeleteActionIndex(const juce::String& action)
-{
-    constexpr auto prefix = "filter-";
-    constexpr auto suffix = "_delete.hidden";
 
-    if (! action.startsWith(prefix) || ! action.endsWith(suffix))
-        return -1;
-
-    const auto numberText = action.substring(juce::String(prefix).length(),
-                                             action.length() - juce::String(suffix).length());
-    if (numberText.isEmpty() || ! numberText.containsOnly("0123456789"))
-        return -1;
-
-    return numberText.getIntValue() - 1;
-}
 }
 
 void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeState& initialEqlState)
@@ -32,11 +19,11 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
 
     for (int filterIndex = 0; filterIndex < EqlModuleProcessor::maxFilterCount; ++filterIndex)
     {
-        auto orderLabel = std::make_unique<BoxTextButton>(uiGrey500);
+        auto orderLabel = std::make_unique<BoxTextButton>(uiGreyLight);
         orderLabel->setButtonText(juce::String::formatted("%02d", filterIndex + 1));
         orderLabel->setTextJustification(juce::Justification::centred);
         orderLabel->setFillVisible(false);
-        orderLabel->setPressFillEnabled(false);
+        orderLabel->setInteractionOutlineEnabled(false);
         orderLabel->onClick = [this, filterIndex]
         {
             if (! juce::isPositiveAndBelow(filterMoveSourceIndex, getActiveFilterCount()))
@@ -47,26 +34,20 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
 
             for (const auto& label : filterOrderLabels)
                 if (label != nullptr)
-                    label->setDragTargetOutlineVisible(false);
+                {
+                    label->setDragTargetHighlighted(false);
+                    label->setMoveTargetAvailable(false);
+                }
 
             moveFilterSectionTo(sourceIndex, filterIndex);
 
             if (auto* label = filterOrderLabels[static_cast<size_t>(filterIndex)].get())
-                label->flashConfirmationOutline();
+                label->flashConfirmationFill();
 
             clearKeyboardFocus(*this);
         };
 
         auto section = std::make_unique<FilterSection>(initialEqlState, filterIndex);
-        section->placeControl->onTitleClick = [this, filterIndex]
-        {
-            auto* filterSection = filterSections[static_cast<size_t>(filterIndex)].get();
-
-            if (filterSection == nullptr)
-                return;
-
-            filterSection->placeControl->setSelectedChoiceIndex(0, true);
-        };
         section->frequencyControl->onTitleClick = [this, filterIndex]
         {
             auto* filterSection = filterSections[static_cast<size_t>(filterIndex)].get();
@@ -125,7 +106,13 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
                 updateSectionStates();
         };
         section->frequencyControl->onValueChanged = updateStateOnValueChange;
-        section->placeControl->onValueChanged = updateStateOnValueChange;
+        section->phaseButton->onClick = updateStateOnValueChange;
+        section->phaseButton->setLongPressPromptActions({}, [this, filterIndex]
+        {
+            const auto id = EqlModuleProcessor::getFilterPhaseParamId(filterIndex);
+            if (auto* parameter = findHostAssignableParameter(id))
+                handleHostSlotAssignRequest(id, "PHASE", parameter->getValue());
+        });
         section->bandwidthControl->onValueChanged = updateStateOnValueChange;
         section->orderControl->onValueChanged = [this, filterIndex]
         {
@@ -179,7 +166,11 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
 
             for (const auto& label : filterOrderLabels)
                 if (label != nullptr)
-                    label->setDragTargetOutlineVisible(label.get() == filterOrderLabels[static_cast<size_t>(sourceOrderPosition)].get());
+                {
+                    const auto isSource = label.get() == filterOrderLabels[static_cast<size_t>(sourceOrderPosition)].get();
+                    label->setDragTargetHighlighted(isSource);
+                    label->setMoveTargetAvailable(!isSource);
+                }
         };
         const auto assignBypassToHostSlot = [this, filterIndex]
         {
@@ -195,14 +186,28 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
             updateSectionStates();
             clearKeyboardFocus(*this);
         };
+        section->disclosure.onUpdate = [safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this), filterIndex]
+        {
+            if (safeEditor != nullptr)
+            {
+                auto* animated = safeEditor->filterSections[static_cast<size_t>(filterIndex)].get();
+                if (animated == nullptr) return;
+                const auto opacity = static_cast<float>(animated->disclosure.value());
+                animated->body.setAlpha(opacity);
+                animated->accentFrame.setAlpha(opacity);
+                if (! animated->disclosure.isRunning()) safeEditor->updateSectionStates();
+                safeEditor->resized();
+            }
+        };
+        filterContent.addChildComponent(section->body);
+        filterContent.addChildComponent(section->accentFrame);
         filterContent.addAndMakeVisible(*orderLabel);
         filterContent.addAndMakeVisible(*section->header);
-        filterContent.addAndMakeVisible(*section->typeControl);
-        filterContent.addAndMakeVisible(*section->placeControl);
-        filterContent.addAndMakeVisible(*section->frequencyControl);
-        filterContent.addAndMakeVisible(*section->bandwidthControl);
-        filterContent.addAndMakeVisible(*section->orderControl);
-        filterContent.addAndMakeVisible(*section->gainControl);
+        section->body.addAndMakeVisible(*section->typeControl);
+        section->body.addAndMakeVisible(*section->frequencyControl);
+        section->body.addAndMakeVisible(*section->bandwidthControl);
+        section->body.addAndMakeVisible(*section->orderControl);
+        section->body.addAndMakeVisible(*section->gainControl);
         filterContent.addAndMakeVisible(*section->bypassButton);
         filterOrderLabels[static_cast<size_t>(filterIndex)] = std::move(orderLabel);
         filterSections[static_cast<size_t>(filterIndex)] = std::move(section);
@@ -210,8 +215,8 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
         normalizeOrderForType(filterIndex);
     }
 
-    addFilterButton = std::make_unique<BoxTextButton>(uiGrey500);
-    addFilterButton->setButtonText("ADD");
+    addFilterButton = std::make_unique<BoxTextButton>(uiGreyLight);
+    addFilterButton->setButtonText("ADD-FILTER");
     addFilterButton->onClick = [this]
     {
         const juce::ScopedValueSetter<bool> suppressHandlers(suppressFilterSectionValueChangeHandlers, true);
@@ -252,7 +257,7 @@ bool AvaAudioProcessorEditor::handleOscEqlAction(const size_t bandIndex,
         return false;
 
     const auto selectedBand = bandIndex == audioProcessor.getSelectedCrossoverRange();
-    const auto filterDeleteIndex = parseFilterDeleteActionIndex(action);
+    const auto filterDeleteIndex = parseEqlFilterDeleteActionIndex(action);
 
     if (filterDeleteIndex >= 0)
     {
@@ -316,13 +321,12 @@ bool AvaAudioProcessorEditor::handleOscEqlAction(const size_t bandIndex,
 
     if (action == "preset")
     {
-        const auto presetNumber = juce::roundToInt(value);
         const auto presetNames = eqlProcessor->getFilterPresetNames();
-        if (! juce::isPositiveAndBelow(presetNumber - 1, presetNames.size())
-            || std::abs(value - static_cast<float>(presetNumber)) > 1.0e-6f)
+        const auto presetIndex = getOscChoiceIndex(value, presetNames.size());
+        if (presetIndex < 0)
             return false;
 
-        const auto presetName = presetNames[presetNumber - 1];
+        const auto presetName = presetNames[presetIndex];
         if (! eqlProcessor->loadFilterPreset(presetName))
             return false;
 

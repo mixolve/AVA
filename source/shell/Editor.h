@@ -1,6 +1,10 @@
 #pragma once
 
 #include "Processor.h"
+#include "AnimationSettings.h"
+#include "../modules/tls/BlockOrder.h"
+#include "../modules/tls/GainOrder.h"
+#include "SvgExport.h"
 #include "../modules/eql/Processor.h"
 
 #include <JuceHeader.h>
@@ -10,7 +14,7 @@
 #include <vector>
 
 class BoxTextButton;
-class FourLinePlaceholder;
+class BurningFilmArtwork;
 class ChoiceControl;
 class LocalChoiceControl;
 class LocalParameterControl;
@@ -18,22 +22,18 @@ class ParameterControl;
 class RoutingPanel;
 class OscPanel;
 
-namespace shell_parameter_focus
-{
-void clearFocus() noexcept;
-void clearFocus(juce::Component& owner) noexcept;
-}
-
-class ParameterFocusClearingComponent : public juce::Component
+class BackgroundClickComponent : public juce::Component
 {
 public:
     void mouseDown(const juce::MouseEvent&) override
     {
-        shell_parameter_focus::clearFocus(*this);
+        if (onBackgroundClick != nullptr) onBackgroundClick();
     }
+    std::function<void()> onBackgroundClick;
 };
 
 class AvaAudioProcessorEditor final : public juce::AudioProcessorEditor,
+                                      public svg_export::ExpandableContent,
                                       private juce::Timer,
                                       private juce::AudioProcessorValueTreeState::Listener,
                                       private juce::ValueTree::Listener
@@ -42,6 +42,10 @@ public:
     explicit AvaAudioProcessorEditor(AvaAudioProcessor&, int routingInstanceId = 0);
     ~AvaAudioProcessorEditor() override;
 
+    void prepareForProcessorStateRestore() { detachModuleEditorBindings(); }
+    void showAnimationSettings();
+    void setAnimationSettings(std::shared_ptr<AnimationSettings>);
+    bool keyPressed(const juce::KeyPress& key) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
     void paint(juce::Graphics& g) override;
@@ -71,6 +75,13 @@ private:
     bool renameFilterPreset(const juce::String& sourcePresetName, const juce::String& newPresetName);
     void setDefaultFilterPreset();
     void deleteSelectedFilterPreset();
+    void requestSvgExport();
+    static bool isSvgExportGesture(const juce::ModifierKeys& modifiers);
+    void expandContentForSvgExport() override;
+    void restoreContentAfterSvgExport() override;
+    int getSvgExportCanvasHeight() const override;
+    void prepareSvgExportLayout(int canvasHeight) override;
+    void finishSvgExportLayout() override;
 
 public:
     bool handleHostSlotAssignRequest(const juce::String& parameterId,
@@ -80,8 +91,13 @@ public:
                         std::function<bool(const juce::String&)> onCommit,
                         juce::Rectangle<int> anchorBounds = {},
                         std::function<void()> onClose = {},
-                        std::function<void()> onDismiss = {});
+                        std::function<void()> onDismiss = {},
+                        bool uppercaseInput = true);
     void showInfoPrompt(const juce::String& markdownText);
+    void showBlockArrangePrompt(juce::AudioProcessorValueTreeState& state, size_t range, tls::blocks::Order order,
+                                std::function<void(const tls::blocks::Order&)> preview,
+                                std::function<void(const tls::blocks::Order&)> commit,
+                                std::function<void()> dismiss);
     void setReturnToRoutingAction(std::function<void()> action);
     void showChoicePrompt(const juce::Rectangle<int>& anchorBounds,
                           const juce::StringArray& choices,
@@ -90,21 +106,26 @@ public:
                           juce::Justification itemJustification,
                           std::function<void(int)> onSelect,
                           std::function<void()> onClose = {},
-                          std::function<void()> onDismiss = {});
+                          std::function<void()> onDismiss = {},
+                          bool commitBeforeFade = false);
+    void showGainArrangePrompt(juce::AudioProcessorValueTreeState& state, size_t range, tls::gain::Order order,
+                               std::function<void(const tls::gain::Order&)> preview,
+                               std::function<void(const tls::gain::Order&)> commit,
+                               std::function<void()> dismiss);
     juce::Rectangle<int> getInfoPromptAnchorBounds() const noexcept;
     juce::Rectangle<int> getInfoPromptVisibleBounds() const noexcept;
     bool handleOscGlobalAction(const juce::String& actionId, float value);
     bool handleOscEqlAction(size_t bandIndex, const juce::String& action, float value);
 private:
     void dismissTextPrompt();
+    static std::function<void()> makeScrollPreservingPromptClose(AvaAudioProcessorEditor& editor,
+                                                                 std::function<void()> closeHandler);
     void timerCallback() override;
     void normalizeOrderForType(int filterIndex);
-    void sortFilterSectionsByPlace();
-    void sortFilterSectionsByFrequency();
-    void sortFilterSectionsByDuo();
+    void sortFilterSections();
     void clearAllFilters();
-    void performUndo();
-    void performRedo();
+    enum class HistoryAction { undo, redo };
+    void performHistoryStep(HistoryAction action);
     void switchABState();
     void captureCurrentABState();
     void copyCurrentABStateToOtherSlot();
@@ -118,6 +139,8 @@ private:
     void restoreFilterDisplayOrderFromValueTree();
     void storeFilterDisplayOrderToValueTree() noexcept;
     void storeEditorStateToValueTree() noexcept;
+    void storeEditorUiState();
+    void restoreEditorUiState();
     void setLoadedModuleFlags(AvaAudioProcessor::ActiveModule activeModule) noexcept;
     juce::Point<int> getRestoredEditorSize() const noexcept;
     juce::Rectangle<int> getFilterSectionBounds(int filterIndex) const;
@@ -129,18 +152,15 @@ private:
     void setPresetsVisible(bool shouldShow);
     void setEqlFilterSectionsVisible(bool shouldShow);
     void setEqlControlsVisible(bool shouldShow);
-    void setFftControlsVisible(bool shouldShow);
     void updateEqlSectionStates(int activeFilterCount);
     void syncEditorWidthToBounds();
-    void refreshFftAnalyserResponse();
-    void syncFocusedParameterControl();
-    double getFocusedParameterControlValueForTarget() const noexcept;
-    double getFocusedParameterTargetValueForControl() const noexcept;
+    bool updateEditorResizeLimits();
     void parameterChanged(const juce::String& parameterID, float newValue) override;
     void valueTreePropertyChanged(juce::ValueTree& treeWhosePropertyHasChanged,
                                   const juce::Identifier& property) override;
     void valueTreeRedirected(juce::ValueTree& treeWhichHasBeenChanged) override;
     void scheduleProcessorStateResync();
+    void scheduleModuleControlsRefresh(bool rebind);
     void resyncEditorFromProcessorState();
     void registerParameterListeners();
     void unregisterParameterListeners();
@@ -153,10 +173,6 @@ private:
     void rebindActiveModuleEditors();
     void setupShellControls();
     void setupPresetControls();
-    void setupFftControls(juce::AudioProcessorValueTreeState& fftState,
-                          FftModuleProcessor& fftProcessor);
-    void rebindFftModeControls(FftModuleProcessor& fftProcessor);
-    void refreshFftAnalyserControls(FftModuleProcessor& fftProcessor);
     void setupEqlControls(juce::AudioProcessorValueTreeState& initialEqlState);
     EqlModuleProcessor* getActiveEqlProcessor() noexcept;
     const EqlModuleProcessor* getActiveEqlProcessor() const noexcept;
@@ -166,21 +182,23 @@ private:
     void updateUndoRedoButtons();
     int getActiveFilterContentHeight() const;
     int getFilterContentHeight() const;
-    int getFftMainContentHeight() const;
+    int getFlatFilterContentHeight() const;
     int getActiveFilterCount() const noexcept;
-    void resetAnalyserPanelBounds();
     void layoutGlobalControlsSection(juce::Rectangle<int>& bounds);
     void layoutBottomControlsSection(juce::Rectangle<int>& bounds);
-    void layoutFooter(juce::Rectangle<int>& bounds);
     void layoutCrossoverSection(juce::Rectangle<int>& bounds);
     void finalizeLayout() noexcept;
     void layoutModuleEditorContent(juce::Rectangle<int>& bounds);
-    void layoutFftModuleSections(juce::Rectangle<int>& bounds);
     void layoutEqlModuleSections(juce::Rectangle<int>& bounds);
     void ensureModuleTitle();
     void clearHostSlot(int slotIndex);
     void moveHostSlotAssignment(int slotIndex, int direction);
     void refreshHostSlotButtons();
+    void armHostSlotMove(int slotIndex, bool controlDrag = false);
+    void cancelHostSlotMove();
+    void updateHostSlotMoveTargets();
+    void applyHostSlotMove(int destinationIndex);
+    void handleHostSlotControlDrag(const juce::MouseEvent& event, bool released);
 
     struct ObservedModuleParameterListeners
     {
@@ -202,66 +220,38 @@ private:
     std::unique_ptr<juce::Component> crossoverEditor;
     std::unique_ptr<BoxTextButton> addFilterButton;
     std::unique_ptr<PresetsSection> presetsSection;
-    std::unique_ptr<BoxTextButton> fftGeneralProcessorHeader;
-    std::unique_ptr<BoxTextButton> fftDynamicProcessorHeader;
-    std::unique_ptr<ChoiceControl> fftDynamicModeControl;
-    std::unique_ptr<ChoiceControl> fftCorrelationTypeControl;
-    std::unique_ptr<ChoiceControl> fftDynamicDirectionControl;
-    std::unique_ptr<ParameterControl> fftCorrelationSmoothingControl;
-    std::unique_ptr<ParameterControl> fftAttackControl;
-    std::unique_ptr<ParameterControl> fftReleaseControl;
-    std::unique_ptr<ParameterControl> fftKneeControl;
-    std::unique_ptr<ParameterControl> fftRatioControl;
-    std::unique_ptr<ParameterControl> fftFloorControl;
-    std::unique_ptr<ChoiceControl> fftDspFftSizeControl;
-    std::unique_ptr<ParameterControl> fftDspSlopeControl;
-    std::unique_ptr<ParameterControl> fftCorrelationImpactControl;
-    std::unique_ptr<BoxTextButton> fftDeltaButton;
-    std::unique_ptr<ButtonAttachment> fftDeltaAttachment;
-    std::unique_ptr<ParameterControl> fftDualMonoLeftThresholdControl;
-    std::unique_ptr<ParameterControl> fftDualMonoLeftAdaptiveControl;
-    std::unique_ptr<ParameterControl> fftDualMonoRightThresholdControl;
-    std::unique_ptr<ParameterControl> fftDualMonoRightAdaptiveControl;
-    std::unique_ptr<BoxTextButton> fftDualMonoLinkButton;
-    std::unique_ptr<ButtonAttachment> fftDualMonoLinkAttachment;
-    std::unique_ptr<BoxTextButton> fftAdaptiveSettingsHeader;
-    std::unique_ptr<ParameterControl> fftAdaptiveOffsetControl;
-    std::unique_ptr<ParameterControl> fftAdaptiveAttackControl;
-    std::unique_ptr<ParameterControl> fftAdaptiveHoldControl;
-    std::unique_ptr<ParameterControl> fftAdaptiveReleaseControl;
-    std::unique_ptr<BoxTextButton> fftDetectorRangeHeader;
-    std::unique_ptr<ParameterControl> fftDetectorLowCutControl;
-    std::unique_ptr<ParameterControl> fftDetectorHighCutControl;
-    std::unique_ptr<ChoiceControl> fftDspOverlapControl;
-    std::unique_ptr<LocalParameterControl> fftAnalyserTimeControl;
-    std::unique_ptr<LocalParameterControl> fftAnalyserHighControl;
-    std::unique_ptr<LocalParameterControl> fftAnalyserLowControl;
+    bool restoringEditorUiState = true;
+    std::unique_ptr<juce::Label> globalSpacer;
     std::unique_ptr<BoxTextButton> globalBypassButton;
     std::unique_ptr<ButtonAttachment> globalBypassAttachment;
-    std::unique_ptr<FourLinePlaceholder> topLines;
-    std::unique_ptr<FourLinePlaceholder> bottomLines;
+    std::shared_ptr<AnimationSettings> animationSettings = std::make_shared<AnimationSettings>();
+    std::unique_ptr<juce::DocumentWindow> animationSettingsWindow;
+    std::unique_ptr<BurningFilmArtwork> topLines;
+    std::unique_ptr<BurningFilmArtwork> bottomLines;
     std::unique_ptr<BoxTextButton> undoButton;
     std::unique_ptr<BoxTextButton> redoButton;
     std::unique_ptr<BoxTextButton> abSlotAButton;
     std::unique_ptr<BoxTextButton> abSwitchButton;
     std::unique_ptr<BoxTextButton> abSlotBButton;
-    std::unique_ptr<BoxTextButton> sortPlaceButton;
-    std::unique_ptr<BoxTextButton> sortFreqButton;
-    std::unique_ptr<BoxTextButton> sortDuoButton;
+    std::unique_ptr<BoxTextButton> sortFiltersButton;
     std::array<std::unique_ptr<BoxTextButton>, AvaAudioProcessor::hostAutomationSlotCount> hostSlotNameFields;
     std::array<std::unique_ptr<BoxTextButton>, AvaAudioProcessor::hostAutomationSlotCount> hostSlotButtons;
     std::array<std::unique_ptr<BoxTextButton>, EqlModuleProcessor::maxFilterCount> filterOrderLabels;
     std::array<std::unique_ptr<FilterSection>, EqlModuleProcessor::maxFilterCount> filterSections;
     juce::AudioProcessorValueTreeState* boundEqlState = nullptr;
     juce::Viewport hostParametersViewport;
-    ParameterFocusClearingComponent hostParametersContent;
+    BackgroundClickComponent hostParametersContent;
     juce::Viewport filterViewport;
-    ParameterFocusClearingComponent filterContent;
-    std::unique_ptr<juce::Slider> focusedParameterControl;
+    BackgroundClickComponent filterContent;
+#if JUCE_MAC
+    void* svgExportKeyboardMonitor = nullptr;
+#endif
     std::unique_ptr<BoxTextButton> footerTab;
     std::unique_ptr<juce::Component> verticalResizeHandle;
     std::unique_ptr<juce::Component> horizontalResizeHandle;
-    std::unique_ptr<juce::Component> fftAnalyserComponent;
+    std::unique_ptr<juce::Component> cornerResizeHandle;
+    std::unique_ptr<juce::Component> topResizeHandle;
+    std::unique_ptr<juce::Component> leftResizeHandle;
     std::unique_ptr<juce::Component> textPromptOverlay;
     std::unique_ptr<juce::DocumentWindow> oscParameterListWindow;
     std::unique_ptr<RoutingPanel> routingPanel;
@@ -273,31 +263,32 @@ private:
     std::unique_ptr<OscPanel> oscPanel;
     std::unique_ptr<juce::Component> tlsModuleEditor;
     std::unique_ptr<juce::Component> dynModuleEditor;
-    std::unique_ptr<juce::Component> trsModuleEditor;
     bool eqlModuleLoaded = false;
-    bool fftModuleLoaded = false;
     bool tlsModuleLoaded = false;
     bool dynModuleLoaded = false;
-    bool trsModuleLoaded = false;
     bool hostParametersExpanded = false;
     bool routingExpanded = false;
     bool oscExpanded = false;
     std::vector<int> filterDisplayOrder;
     bool suppressFilterSectionValueChangeHandlers = false;
-    bool suppressFftAnalyserControlChangeHandlers = false;
-    bool suppressFocusedParameterControlChangeHandlers = false;
     bool suppressHostSlotAutomationSync = false;
     bool suppressProcessorStateResync = false;
     bool suppressEditorSizeStateSave = true;
     bool suppressHistorySnapshots = false;
+    std::vector<bool> svgExportFilterExpandedStates;
+    std::vector<juce::Viewport*> svgExportViewports;
+    std::vector<juce::Point<int>> svgExportViewportPositions;
+    juce::Rectangle<int> svgExportLayoutBounds;
+    bool svgExportLayoutActive = false;
     bool shellStateListenerRegistered = false;
     std::atomic<bool> processorStateResyncPending { false };
+    std::atomic<bool> moduleControlsRefreshPending { false };
+    std::atomic<bool> moduleControlsRebindPending { false };
     juce::MemoryBlock committedHistorySnapshot;
     std::vector<juce::MemoryBlock> undoHistory;
     std::vector<juce::MemoryBlock> redoHistory;
     std::atomic<bool> pendingHistorySnapshot { false };
     std::atomic<uint32_t> lastHistoryChangeTimeMs { 0 };
-    juce::Slider* focusedParameterTargetSlider = nullptr;
     uint32_t lastClipIndicatorTimeMs = 0;
 
     struct HostSlotAssignment
@@ -307,6 +298,8 @@ private:
     };
     std::array<HostSlotAssignment, AvaAudioProcessor::hostAutomationSlotCount> hostSlotAssignments;
     int hostSlotMoveSourceIndex = -1;
+    bool hostSlotControlDrag = false;
+    bool hostSlotControlDragCancelled = false;
     int filterMoveSourceIndex = -1;
 
     int getFilterIndexForOrderPosition(int orderIndex) const noexcept;

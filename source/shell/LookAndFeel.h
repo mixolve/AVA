@@ -3,7 +3,6 @@
 #include "Controls.h"
 #include "Editor.h"
 
-
 class AvaAudioProcessorEditor::AvaLookAndFeel final : public juce::LookAndFeel_V4
 {
 public:
@@ -13,6 +12,7 @@ public:
     juce::Font getComboBoxFont(juce::ComboBox&) override;
     juce::Label* createComboBoxTextBox(juce::ComboBox&) override;
     juce::Font getPopupMenuFont() override;
+    void drawTextEditorOutline(juce::Graphics&,int width,int height,juce::TextEditor&) override;
     void drawPopupMenuBackgroundWithOptions(juce::Graphics& g,
                                             int width,
                                             int height,

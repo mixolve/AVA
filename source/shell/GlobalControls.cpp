@@ -1,4 +1,5 @@
 #include "Editor.h"
+#include "WindowDragHandle.h"
 #include "ChoiceControl.h"
 #include "LocalParameterControl.h"
 #include "ParameterControl.h"
@@ -28,33 +29,46 @@ juce::String getListNameForHostTarget(AvaAudioProcessor& processor,
     if (const auto exactName = findName(trimmedParameterId); exactName.isNotEmpty())
         return exactName;
 
-    if ((processor.getActiveModule() == AvaAudioProcessor::ActiveModule::eql
-         || processor.getActiveModule() == AvaAudioProcessor::ActiveModule::fft)
+    if ((processor.getActiveModule() == AvaAudioProcessor::ActiveModule::eql)
         && ! trimmedParameterId.startsWith("band-"))
     {
         const auto bandParameterId = "band-"
             + juce::String(static_cast<int>(processor.getSelectedCrossoverRange() + 1))
             + "_" + trimmedParameterId;
-        return findName(bandParameterId);
+        if (const auto name = findName(bandParameterId); name.isNotEmpty()) return name;
+        return getOscDisplayName(bandParameterId);
     }
 
-    return {};
+    return getOscDisplayName(trimmedParameterId);
 }
 }
 
 void AvaAudioProcessorEditor::setupShellControls()
 {
-    topLines = std::make_unique<FourLinePlaceholder>();
+    topLines = std::make_unique<BurningFilmArtwork>();
+    topLines->setName("film-top");
+    topLines->setGpuRenderingEnabled(true);
+    topLines->setPreviewEnabled(true);
+    topLines->setAnimationSettings(animationSettings);
+    topLines->onSettingsRequested = [this] { showAnimationSettings(); };
     addAndMakeVisible(*topLines);
 
-    bottomLines = std::make_unique<FourLinePlaceholder>();
+    bottomLines = std::make_unique<BurningFilmArtwork>();
+    bottomLines->setName("film-bottom");
+    bottomLines->setGpuRenderingEnabled(true);
+    bottomLines->setPreviewEnabled(true);
+    bottomLines->setBottomAnimation(true);
+    bottomLines->setSynchronizationSource(*topLines);
+    bottomLines->setAnimationSettings(animationSettings);
+    bottomLines->onSettingsRequested = [this] { showAnimationSettings(); };
     addAndMakeVisible(*bottomLines);
 
     routingButton = std::make_unique<BoxTextButton>(uiAccent);
+    routingButton->setName("routing");
     routingButton->setButtonText({});
     routingButton->setTablerIcon("load-balancer");
     routingButton->setClickingTogglesState(true);
-    routingButton->setToggleAccentVisible(true);
+    routingButton->setToggleActiveFillEnabled(true);
     routingButton->onClick = [this]
     {
         if (returnToRoutingAction != nullptr)
@@ -66,16 +80,24 @@ void AvaAudioProcessorEditor::setupShellControls()
     addAndMakeVisible(*routingButton);
 
     oscButton = std::make_unique<BoxTextButton>(uiAccent);
+    oscButton->setName("osc");
     oscButton->setButtonText({});
     oscButton->setTablerIcon("affiliate");
     oscButton->setClickingTogglesState(true);
-    oscButton->setToggleAccentVisible(true);
+    oscButton->setToggleActiveFillEnabled(true);
     oscButton->onClick = [this]
     {
         toggleOscSection();
         clearKeyboardFocus(*this);
     };
     addAndMakeVisible(*oscButton);
+
+    globalSpacer = std::make_unique<WindowDragHandle>(*this);
+    globalSpacer->setName("drag-handle");
+    globalSpacer->setColour(juce::Label::backgroundColourId, uiGreyDark);
+    globalSpacer->setColour(juce::Label::outlineColourId, uiGreyLight);
+    globalSpacer->setInterceptsMouseClicks(true, false);
+    addAndMakeVisible(*globalSpacer);
 
     globalBypassButton = std::make_unique<BoxTextButton>(uiAccent);
     globalBypassButton->getProperties().set(juce::Identifier("oscParameterId"), AvaAudioProcessor::paramGlobalBypassId);
@@ -100,26 +122,26 @@ void AvaAudioProcessorEditor::setupShellControls()
     if (clipButton != nullptr)
         clipButton->getProperties().set(juce::Identifier("oscParameterId"), AvaAudioProcessor::oscGlobalClipId);
 
-    undoButton = std::make_unique<BoxTextButton>(uiGrey500);
+    undoButton = std::make_unique<BoxTextButton>(uiGreyLight);
     undoButton->getProperties().set(juce::Identifier("oscParameterId"), AvaAudioProcessor::oscGlobalUndoId);
     undoButton->setButtonText("U");
     undoButton->setTextJustification(juce::Justification::centred);
     undoButton->setTablerIcon("arrow-back-up");
     undoButton->onClick = [this]
     {
-        performUndo();
+        performHistoryStep(HistoryAction::undo);
         clearKeyboardFocus(*this);
     };
     addAndMakeVisible(*undoButton);
 
-    redoButton = std::make_unique<BoxTextButton>(uiGrey500);
+    redoButton = std::make_unique<BoxTextButton>(uiGreyLight);
     redoButton->getProperties().set(juce::Identifier("oscParameterId"), AvaAudioProcessor::oscGlobalRedoId);
     redoButton->setButtonText("R");
     redoButton->setTextJustification(juce::Justification::centred);
     redoButton->setTablerIcon("arrow-forward-up");
     redoButton->onClick = [this]
     {
-        performRedo();
+        performHistoryStep(HistoryAction::redo);
         clearKeyboardFocus(*this);
     };
     addAndMakeVisible(*redoButton);
@@ -129,7 +151,7 @@ void AvaAudioProcessorEditor::setupShellControls()
     abSlotAButton->setButtonText("A");
     abSlotAButton->setTextJustification(juce::Justification::centred);
     abSlotAButton->setClickingTogglesState(false);
-    abSlotAButton->setToggleAccentVisible(true);
+    abSlotAButton->setToggleActiveFillEnabled(true);
     abSlotAButton->onClick = [this]
     {
         if (audioProcessor.getABCompareActiveSlot() != 0)
@@ -139,12 +161,12 @@ void AvaAudioProcessorEditor::setupShellControls()
     };
     addAndMakeVisible(*abSlotAButton);
 
-    abSwitchButton = std::make_unique<BoxTextButton>(uiGrey500);
+    abSwitchButton = std::make_unique<BoxTextButton>(uiGreyLight);
     abSwitchButton->getProperties().set(juce::Identifier("oscParameterId"), AvaAudioProcessor::oscGlobalAbSwitchId);
     abSwitchButton->setButtonText({});
     abSwitchButton->setTextJustification(juce::Justification::centred);
     abSwitchButton->setClickingTogglesState(false);
-    abSwitchButton->setHorizontalBidirectionalArrowVisible(true);
+    abSwitchButton->setTablerIcon("layers-difference");
     abSwitchButton->setLongPressPromptActions([this]
     {
         copyCurrentABStateToOtherSlot();
@@ -162,7 +184,7 @@ void AvaAudioProcessorEditor::setupShellControls()
     abSlotBButton->setButtonText("B");
     abSlotBButton->setTextJustification(juce::Justification::centred);
     abSlotBButton->setClickingTogglesState(false);
-    abSlotBButton->setToggleAccentVisible(true);
+    abSlotBButton->setToggleActiveFillEnabled(true);
     abSlotBButton->onClick = [this]
     {
         if (audioProcessor.getABCompareActiveSlot() != 1)
@@ -172,51 +194,31 @@ void AvaAudioProcessorEditor::setupShellControls()
     };
     addAndMakeVisible(*abSlotBButton);
 
+    hostParametersContent.onBackgroundClick = [this] { cancelHostSlotMove(); };
+
     for (int slotIndex = 0; slotIndex < static_cast<int>(hostSlotButtons.size()); ++slotIndex)
     {
-        auto slotNameField = std::make_unique<BoxTextButton>(uiGrey500);
+        auto slotNameField = std::make_unique<BoxTextButton>(uiGreyLight);
         slotNameField->setButtonText(juce::String::formatted("%02d-", slotIndex + 1)
                                      + AvaAudioProcessor::getHostSlotLetterLabel(slotIndex));
         slotNameField->setTextJustification(juce::Justification::centred);
-        slotNameField->setClearsParameterFocusOnMouseDown(false);
         slotNameField->setFillVisible(false);
-        slotNameField->setPressFillEnabled(false);
-        slotNameField->onClick = [this, slotIndex]
-        {
-            if (! juce::isPositiveAndBelow(hostSlotMoveSourceIndex,
-                                           static_cast<int>(hostSlotAssignments.size())))
-            {
-                return;
-            }
+        slotNameField->setInteractionOutlineEnabled(false);
+        slotNameField->onClick = [this, slotIndex] { applyHostSlotMove(slotIndex); };
 
-            const auto sourceIndex = hostSlotMoveSourceIndex;
-            hostSlotMoveSourceIndex = -1;
-
-            for (const auto& field : hostSlotNameFields)
-                if (field != nullptr)
-                    field->setDragTargetOutlineVisible(false);
-
-            moveHostSlotAssignment(sourceIndex, slotIndex - sourceIndex);
-
-            if (sourceIndex != slotIndex)
-                if (auto* field = hostSlotNameFields[static_cast<size_t>(slotIndex)].get())
-                    field->flashConfirmationOutline();
-
-            clearKeyboardFocus(*this);
-        };
-
-        auto slotButton = std::make_unique<BoxTextButton>(uiGrey500);
+        auto slotButton = std::make_unique<BoxTextButton>(uiGreyLight);
         slotButton->setTextJustification(juce::Justification::centredLeft);
         slotButton->setButtonText({});
-        slotButton->setClearsParameterFocusOnMouseDown(false);
-        slotButton->onMoveArmed = [this, slotIndex]
+        slotButton->onClick = [this, slotIndex] { applyHostSlotMove(slotIndex); };
+        slotButton->onMoveArmed = [this, slotIndex] { armHostSlotMove(slotIndex); };
+        for (auto* button : { slotNameField.get(), slotButton.get() })
         {
-            hostSlotMoveSourceIndex = slotIndex;
-
-            for (int index = 0; index < static_cast<int>(hostSlotNameFields.size()); ++index)
-                if (auto* field = hostSlotNameFields[static_cast<size_t>(index)].get())
-                    field->setDragTargetOutlineVisible(index == slotIndex);
-        };
+            button->onControlDragStarted = [this, slotIndex] { armHostSlotMove(slotIndex, true); };
+            button->onControlDrag = [this] (const juce::MouseEvent& event, const bool released)
+            {
+                handleHostSlotControlDrag(event, released);
+            };
+        }
 
         hostParametersContent.addAndMakeVisible(*slotNameField);
         hostParametersContent.addAndMakeVisible(*slotButton);
@@ -224,35 +226,15 @@ void AvaAudioProcessorEditor::setupShellControls()
         hostSlotButtons[static_cast<size_t>(slotIndex)] = std::move(slotButton);
     }
 
-    sortPlaceButton = std::make_unique<BoxTextButton>(uiGrey500);
-    sortPlaceButton->setButtonText("SP");
-    sortPlaceButton->setTextJustification(juce::Justification::centred);
-    sortPlaceButton->onClick = [this]
+    sortFiltersButton = std::make_unique<BoxTextButton>(uiGreyLight);
+    sortFiltersButton->setButtonText("SORT");
+    sortFiltersButton->setTextJustification(juce::Justification::centred);
+    sortFiltersButton->onClick = [this]
     {
-        sortFilterSectionsByPlace();
+        sortFilterSections();
         clearKeyboardFocus(*this);
     };
-    addAndMakeVisible(*sortPlaceButton);
-
-    sortFreqButton = std::make_unique<BoxTextButton>(uiGrey500);
-    sortFreqButton->setButtonText("SF");
-    sortFreqButton->setTextJustification(juce::Justification::centred);
-    sortFreqButton->onClick = [this]
-    {
-        sortFilterSectionsByFrequency();
-        clearKeyboardFocus(*this);
-    };
-    addAndMakeVisible(*sortFreqButton);
-
-    sortDuoButton = std::make_unique<BoxTextButton>(uiGrey500);
-    sortDuoButton->setButtonText("SD");
-    sortDuoButton->setTextJustification(juce::Justification::centred);
-    sortDuoButton->onClick = [this]
-    {
-        sortFilterSectionsByDuo();
-        clearKeyboardFocus(*this);
-    };
-    addAndMakeVisible(*sortDuoButton);
+    addAndMakeVisible(*sortFiltersButton);
 
 }
 
@@ -268,12 +250,12 @@ void AvaAudioProcessorEditor::toggleOscSection()
     resized();
 }
 
-
 void AvaAudioProcessorEditor::clearHostSlot(const int slotIndex)
 {
     if (! juce::isPositiveAndBelow(slotIndex, static_cast<int>(hostSlotAssignments.size())))
         return;
 
+    if (hostSlotMoveSourceIndex == slotIndex) cancelHostSlotMove();
     auto& assignment = hostSlotAssignments[static_cast<size_t>(slotIndex)];
     assignment.parameterId.clear();
     assignment.parameterName.clear();
@@ -318,6 +300,7 @@ void AvaAudioProcessorEditor::moveHostSlotAssignment(const int slotIndex, const 
               hostSlotAssignments[static_cast<size_t>(destinationIndex)]);
 
     const juce::ScopedValueSetter<bool> syncGuard(suppressHostSlotAutomationSync, true);
+    storeEditorStateToValueTree();
     sourceParameter->beginChangeGesture();
     sourceParameter->setValueNotifyingHost(destinationValue);
     sourceParameter->endChangeGesture();
@@ -326,9 +309,94 @@ void AvaAudioProcessorEditor::moveHostSlotAssignment(const int slotIndex, const 
     destinationParameter->endChangeGesture();
 
     refreshHostSlotButtons();
-    storeEditorStateToValueTree();
     updateSectionStates();
     scheduleHistorySnapshot();
+}
+
+void AvaAudioProcessorEditor::armHostSlotMove(const int slotIndex, const bool controlDrag)
+{
+    if (! juce::isPositiveAndBelow(slotIndex, static_cast<int>(hostSlotAssignments.size()))
+        || hostSlotAssignments[static_cast<size_t>(slotIndex)].parameterId.isEmpty())
+    {
+        cancelHostSlotMove();
+        return;
+    }
+    hostSlotMoveSourceIndex = slotIndex;
+    hostSlotControlDrag = controlDrag;
+    hostSlotControlDragCancelled = false;
+    grabKeyboardFocus();
+    updateHostSlotMoveTargets();
+}
+
+void AvaAudioProcessorEditor::updateHostSlotMoveTargets()
+{
+    for (int index = 0; index < static_cast<int>(hostSlotButtons.size()); ++index)
+    {
+        const auto target = hostSlotMoveSourceIndex >= 0 && index != hostSlotMoveSourceIndex;
+        const auto assigned = hostSlotAssignments[static_cast<size_t>(index)].parameterId.isNotEmpty();
+        if (auto* field = hostSlotNameFields[static_cast<size_t>(index)].get())
+        {
+            field->setDragTargetHighlighted(target);
+            field->setMoveTargetAvailable(target);
+            field->setInteractionOutlineEnabled(target);
+            field->setState(juce::Button::buttonNormal);
+        }
+        if (auto* button = hostSlotButtons[static_cast<size_t>(index)].get())
+        {
+            button->setEnabled(assigned || target);
+            button->setDragTargetHighlighted(target);
+            button->setMoveTargetAvailable(target);
+            button->setState(juce::Button::buttonNormal);
+        }
+    }
+}
+
+void AvaAudioProcessorEditor::cancelHostSlotMove()
+{
+    hostSlotMoveSourceIndex = -1;
+    hostSlotControlDrag = false;
+    hostSlotControlDragCancelled = true;
+    updateHostSlotMoveTargets();
+}
+
+void AvaAudioProcessorEditor::applyHostSlotMove(const int destinationIndex)
+{
+    const auto sourceIndex = hostSlotMoveSourceIndex;
+    if (sourceIndex < 0) return;
+    cancelHostSlotMove();
+    if (sourceIndex != destinationIndex)
+        moveHostSlotAssignment(sourceIndex, destinationIndex - sourceIndex);
+    clearKeyboardFocus(*this);
+}
+
+void AvaAudioProcessorEditor::handleHostSlotControlDrag(const juce::MouseEvent& event, const bool released)
+{
+    if (hostSlotControlDragCancelled || hostSlotMoveSourceIndex < 0) return;
+    if (! event.mods.isCtrlDown())
+    {
+        cancelHostSlotMove();
+        return;
+    }
+    const auto position = hostParametersContent.getLocalPoint(event.eventComponent, event.position);
+    const auto inViewport = hostParametersViewport.getLocalBounds().toFloat().contains(
+        hostParametersViewport.getLocalPoint(event.eventComponent, event.position));
+    auto destination = -1;
+    for (int index = 0; index < static_cast<int>(hostSlotButtons.size()); ++index)
+    {
+        auto* field = hostSlotNameFields[static_cast<size_t>(index)].get();
+        auto* button = hostSlotButtons[static_cast<size_t>(index)].get();
+        if (field == nullptr || button == nullptr) continue;
+        const auto hovered = inViewport && index != hostSlotMoveSourceIndex
+            && field->getBounds().getUnion(button->getBounds()).toFloat().contains(position);
+        field->setState(hovered ? juce::Button::buttonOver : juce::Button::buttonNormal);
+        button->setState(hovered ? juce::Button::buttonOver : juce::Button::buttonNormal);
+        if (hovered) destination = index;
+    }
+    if (released)
+    {
+        if (destination >= 0) applyHostSlotMove(destination);
+        else cancelHostSlotMove();
+    }
 }
 
 void AvaAudioProcessorEditor::refreshHostSlotButtons()
@@ -345,7 +413,6 @@ void AvaAudioProcessorEditor::refreshHostSlotButtons()
 
         const auto& assignment = hostSlotAssignments[static_cast<size_t>(slotIndex)];
         const auto isAssigned = assignment.parameterId.isNotEmpty();
-        slotNameField->setLongPressAction({});
 
         if (isAssigned)
         {
@@ -360,7 +427,7 @@ void AvaAudioProcessorEditor::refreshHostSlotButtons()
         {
             slotButton->setLongPressPromptActions({});
         }
-        slotButton->setEnabled(isAssigned);
+        slotButton->setLongPressMovePromptEnabled(isAssigned);
         slotButton->setAlpha(1.0f);
 
         if (assignment.parameterId.isEmpty())
@@ -374,9 +441,10 @@ void AvaAudioProcessorEditor::refreshHostSlotButtons()
             if (parameterName.isEmpty())
                 parameterName = assignment.parameterId;
 
-            slotButton->setButtonText(parameterName);
+            slotButton->setButtonText(parameterName.toUpperCase());
         }
     }
+    updateHostSlotMoveTargets();
 }
 
 bool AvaAudioProcessorEditor::handleHostSlotAssignRequest(const juce::String& parameterId,
@@ -424,7 +492,7 @@ bool AvaAudioProcessorEditor::handleHostSlotAssignRequest(const juce::String& pa
                                                        trimmedParameterId);
 
     if (assignment.parameterName.isEmpty())
-        assignment.parameterName = trimmedParameterId;
+        assignment.parameterName = trimmedParameterId.toUpperCase();
 
     if (auto* slotParameter = valueTreeState.getParameter(AvaAudioProcessor::getHostSlotParameterId(targetSlot));
         slotParameter != nullptr)
@@ -474,30 +542,27 @@ bool AvaAudioProcessorEditor::handleOscGlobalAction(const juce::String& actionId
 
     if (actionId == AvaAudioProcessor::oscGlobalUndoId)
     {
-        performUndo();
+        performHistoryStep(HistoryAction::undo);
         return true;
     }
 
     if (actionId == AvaAudioProcessor::oscGlobalRedoId)
     {
-        performRedo();
+        performHistoryStep(HistoryAction::redo);
         return true;
     }
 
     if (actionId == AvaAudioProcessor::oscAddModuleId)
     {
-        static constexpr std::array moduleOrder {
-            AvaAudioProcessor::ActiveModule::tls,
-            AvaAudioProcessor::ActiveModule::eql,
-            AvaAudioProcessor::ActiveModule::fft,
-            AvaAudioProcessor::ActiveModule::dyn,
-            AvaAudioProcessor::ActiveModule::trs
-        };
-        const auto selectedIndex = juce::roundToInt(value) - 1;
+        const auto& modules = AvaAudioProcessor::availableModules;
+        const auto selectedIndex = getOscChoiceIndex(value, static_cast<int>(modules.size()));
+
+        if (selectedIndex < 0)
+            return false;
 
         if (audioProcessor.getActiveModule() == AvaAudioProcessor::ActiveModule::none
-            && juce::isPositiveAndBelow(selectedIndex, static_cast<int>(moduleOrder.size())))
-            loadModule(moduleOrder[static_cast<size_t>(selectedIndex)]);
+            && juce::isPositiveAndBelow(selectedIndex, static_cast<int>(modules.size())))
+            loadModule(modules[static_cast<size_t>(selectedIndex)]);
 
         return true;
     }
