@@ -2,7 +2,7 @@ MADE BY MIXOLVE
 
 [WEB](https://mixolve.cc/)
 
-VIBECODED. V:07
+VIBECODED. V:08
 
 [MANUAL](ava-manual://open)
 
