@@ -26,8 +26,8 @@ bool isMouseHovering(const juce::Component& component) noexcept
 juce::Typeface::Ptr getUiTypeface()
 {
 #if JUCE_TARGET_HAS_BINARY_DATA
-    static const auto typeface = juce::Typeface::createSystemTypefaceFor(BinaryData::IosevkaCharonMonoMedium_ttf,
-                                                                         BinaryData::IosevkaCharonMonoMedium_ttfSize);
+    static const auto typeface = juce::Typeface::createSystemTypefaceFor(BinaryData::IosevkaCharonMonoBold_ttf,
+                                                                         BinaryData::IosevkaCharonMonoBold_ttfSize);
     return typeface;
 #else
     return {};
@@ -41,7 +41,7 @@ juce::FontOptions makeUiFontOptions()
         return juce::FontOptions(typeface).withHeight(uiFontSize);
 #endif
 
-    return juce::FontOptions("Iosevka Charon Mono", "Medium", uiFontSize);
+    return juce::FontOptions("Iosevka Charon Mono", "Bold", uiFontSize);
 }
 
 juce::Font makeUiFont()
