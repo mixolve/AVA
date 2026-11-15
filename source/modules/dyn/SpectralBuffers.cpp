@@ -1,5 +1,4 @@
 #include "SpectralProcessor.h"
-#include "ProgressionTransfer.h"
 #include "SpectralConstants.h"
 
 #include <algorithm>
@@ -53,9 +52,6 @@ void DynSpectralProcessor::DynamicProcessor::reconfigure(int channelsToUse, int 
     currentHopSize = hopSize;
     hopFill = 0;
     linkedAdaptiveReferenceDb = 0.0f;
-    correlationAdaptiveReference = -1.0f;
-    linkedAdaptiveHoldRemainingMs = 0.0f;
-    correlationAdaptiveHoldRemainingMs = 0.0f;
     correlationDetector.fill(0.0f);
     detectedCorrelation.fill(0.0f);
     correlationRmsDetector.fill(0.0f);
@@ -69,28 +65,11 @@ void DynSpectralProcessor::DynamicProcessor::reconfigure(int channelsToUse, int 
         values.fill(0.0f);
     for (auto& values : sidechainFrequencyData)
         values.fill({});
-    for (auto& bank : thresholdHysteresis)
-        bank.fill({});
-    for (auto& bank : tensionThresholdHysteresis)
-        bank.fill({});
-    for (auto& bank : spectralEnvelopes)
-        bank.fill({});
-    for (auto& bank : correlationEnvelopes)
-        bank.fill({});
-    for (auto& bank : tensionEnvelopes)
-        bank.fill({});
-    for (auto& bank : tensionDirections)
-        bank.fill({});
-    for (auto& bank : correlationResponseDistances)
-        bank.fill({});
-    for (auto& bank : correlationActionDistances)
-        bank.fill({});
-    smoothedTension = 0.0f;
-    correlationRmsCrossPower.fill(0.0f);
-    correlationRmsPower.fill(0.0f);
-    correlationAdaptiveCrossPower = correlationAdaptivePower = 0.0;
-    spectralAdaptivePower = 0.0f;
+    for (auto& bank : spectralEnvelopes) bank.fill({});
+    resetCorrelationState();
+    adaptiveFrameWindow.reset();
     spectralRmsPower.fill(0.0f);
+    for (auto& curve : lookaheadGainCurves) curve.reset();
     outputPrimed = false;
     lastWasCorrelationMode = false;
     for (auto channel = 0; channel < maxChannels; ++channel)
@@ -132,10 +111,8 @@ int DynSpectralProcessor::DynamicProcessor::getFftIndexForSize(int fftSize) cons
     }
 }
 
-float DynSpectralProcessor::calculateReduction(float detectorValue, float threshold, float ratio, float knee, float progression, float span) noexcept
+float DynSpectralProcessor::calculateReduction(float detectorValue, float threshold, float ratio, float knee) noexcept
 {
-    if (progression != 0.0f)
-        return static_cast<float>(dyn::transfer::reduction(detectorValue - threshold, ratio, progression, span, knee));
     const auto safeRatio = juce::jmax(1.0f, ratio);
     const auto safeKnee = juce::jmax(0.0f, knee);
     const auto ratioFactor = 1.0f - (1.0f / safeRatio);
@@ -165,4 +142,25 @@ float DynSpectralProcessor::calculateTimeCoefficient(float timeMs, float frameDu
 
     const auto timeSeconds = timeMs * 0.001f;
     return std::exp(-frameDurationSeconds / timeSeconds);
+}
+
+void DynSpectralProcessor::DynamicProcessor::resetCorrelationState() noexcept
+{
+    for (auto& bank : thresholdHysteresis)
+        bank.fill({});
+    for (auto& bank : tensionThresholdHysteresis)
+        bank.fill({});
+    for (auto& bank : correlationEnvelopes)
+        bank.fill({});
+    for (auto& bank : tensionEnvelopes)
+        bank.fill({});
+    for (auto& bank : tensionDirections)
+        bank.fill({});
+    for (auto& bank : correlationResponseDistances)
+        bank.fill({});
+    for (auto& bank : correlationActionDistances)
+        bank.fill({});
+    correlationRmsCrossPower.fill(0.0f);
+    correlationRmsPower.fill(0.0f);
+    correlationAdaptiveReference = -1.0f;
 }

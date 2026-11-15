@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <memory>
 
@@ -37,12 +38,13 @@ public:
             if (prepared)
                 processor->prepare(preparedSampleRate, preparedBlockSize, preparedChannelCount);
 
-            processor->setParameters(parameters[createdRangeCount]);
-            rangeProcessors[createdRangeCount++] = std::move(processor);
+            const auto index = createdRangeCount.load(std::memory_order_relaxed);
+            processor->setParameters(Parameters {});
+            rangeProcessors[index] = std::move(processor);
+            createdRangeCount.store(index + 1, std::memory_order_release);
         }
 
-        updateRangeLatencies();
-        return createdRangeCount;
+        return createdRangeCount.load(std::memory_order_acquire);
     }
 
     size_t getCreatedRangeCount() const noexcept
@@ -106,7 +108,11 @@ public:
     void processRange(const size_t rangeIndex, juce::AudioBuffer<float>& buffer)
     {
         const auto* processor = getProcessor(rangeIndex);
-        if (processor == nullptr || processor->isNeutral()) return;
+        if (processor == nullptr) return;
+        if (processor->isNeutral()) {
+            if constexpr (requires { rangeProcessors[rangeIndex]->noteProcessedBlock(); }) rangeProcessors[rangeIndex]->noteProcessedBlock();
+            return;
+        }
         processRange(rangeIndex, buffer, [](double, double, const auto&) {});
     }
 
@@ -142,22 +148,24 @@ public:
 
     RangeLatencies getRangeLatencies() const noexcept
     {
-        return rangeLatencies;
+        RangeLatencies result {};
+        for (size_t i = 0; i < result.size(); ++i) result[i] = rangeLatencies[i].load(std::memory_order_acquire);
+        return result;
     }
 
 private:
     void updateRangeLatencies() noexcept
     {
-        rangeLatencies = {};
+        for (auto& latency : rangeLatencies) latency.store(0, std::memory_order_relaxed);
 
         for (size_t rangeIndex = 0; rangeIndex < createdRangeCount; ++rangeIndex)
-            rangeLatencies[rangeIndex] = rangeProcessors[rangeIndex]->getLatencySamples();
+            rangeLatencies[rangeIndex].store(rangeProcessors[rangeIndex]->getLatencySamples(), std::memory_order_release);
     }
 
     RangeParameters parameters {};
     std::array<std::unique_ptr<DspCore>, numRanges> rangeProcessors;
-    RangeLatencies rangeLatencies {};
-    size_t createdRangeCount = 0;
+    std::array<std::atomic<int>, numRanges> rangeLatencies {};
+    std::atomic<size_t> createdRangeCount { 0 };
     double preparedSampleRate = 44100.0;
     int preparedBlockSize = 1;
     int preparedChannelCount = 2;

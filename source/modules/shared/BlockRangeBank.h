@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -41,7 +42,9 @@ public:
             if (prepared)
                 processor->prepareToPlay(preparedSampleRate, preparedSamplesPerBlock);
 
-            processors[createdRangeCount++] = std::move(processor);
+            const auto index = createdRangeCount.load(std::memory_order_relaxed);
+            processors[index] = std::move(processor);
+            createdRangeCount.store(index + 1, std::memory_order_release);
         }
 
         return createdRangeCount;
@@ -110,42 +113,41 @@ public:
 
     void setSelectedRange(const size_t rangeIndex) noexcept
     {
-        selectedRange = createdRangeCount == 0 ? 0 : std::min(rangeIndex, createdRangeCount - 1);
+        selectedRange = createdRangeCount == 0 ? 0 : std::min(rangeIndex, createdRangeCount.load() - 1);
     }
 
     ModuleProcessor* getProcessor(const size_t rangeIndex) noexcept
     {
-        return rangeIndex < createdRangeCount ? processors[rangeIndex].get() : nullptr;
+        return rangeIndex < createdRangeCount.load(std::memory_order_acquire) ? processors[rangeIndex].get() : nullptr;
     }
 
     const ModuleProcessor* getProcessor(const size_t rangeIndex) const noexcept
     {
-        return rangeIndex < createdRangeCount ? processors[rangeIndex].get() : nullptr;
+        return rangeIndex < createdRangeCount.load(std::memory_order_acquire) ? processors[rangeIndex].get() : nullptr;
     }
 
     ModuleProcessor* getSelectedProcessor() noexcept
     {
-        return selectedRange < processors.size() ? processors[selectedRange].get() : nullptr;
+        return selectedRange.load() < createdRangeCount.load() ? processors[selectedRange.load()].get() : nullptr;
     }
 
     const ModuleProcessor* getSelectedProcessor() const noexcept
     {
-        return selectedRange < processors.size() ? processors[selectedRange].get() : nullptr;
+        return selectedRange.load() < createdRangeCount.load() ? processors[selectedRange.load()].get() : nullptr;
     }
 
     template <typename Visitor>
     void forEachProcessor(Visitor&& visitor)
     {
-        for (auto& processor : processors)
-            if (processor != nullptr)
-                visitor(*processor);
+        const auto count = createdRangeCount.load(std::memory_order_acquire);
+        for (size_t i = 0; i < count; ++i) visitor(*processors[i]);
     }
 
 private:
     std::function<std::unique_ptr<ModuleProcessor>()> processorFactory;
     std::array<std::unique_ptr<ModuleProcessor>, numRanges> processors;
-    size_t createdRangeCount = 0;
-    size_t selectedRange = 0;
+    std::atomic<size_t> createdRangeCount { 0 };
+    std::atomic<size_t> selectedRange { 0 };
     double preparedSampleRate = 0.0;
     int preparedSamplesPerBlock = 0;
     bool prepared = false;

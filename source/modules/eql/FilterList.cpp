@@ -1,4 +1,5 @@
 #include "FilterSupport.h"
+#include "../shared/StateValidation.h"
 #include "ParameterIds.h"
 
 #include <memory>
@@ -101,47 +102,30 @@ bool EqlModuleProcessor::addFilter() noexcept
     if (currentCount >= maxFilterCount)
         return false;
 
+    const ModelEdit edit(*this);
     const auto newIndex = currentCount;
     setFilterParameterValues(parameters, newIndex, makeDefaultFilterParameterValues(FilterType::bell));
     setActiveFilterCount(currentCount + 1);
     return true;
 }
 
-bool EqlModuleProcessor::removeFilter(const int filterIndex) noexcept
+std::optional<EqlModuleProcessor::FilterIndexMap> EqlModuleProcessor::removeFilter(const int filterIndex) noexcept
 {
     const auto currentCount = getActiveFilterCount();
+    if (currentCount <= 1 || !juce::isPositiveAndBelow(filterIndex, currentCount)) return std::nullopt;
 
-    if (currentCount <= 0 || filterIndex < 0 || filterIndex >= currentCount)
-        return false;
-
-    for (int sourceIndex = filterIndex + 1; sourceIndex < currentCount; ++sourceIndex)
-    {
-        const auto destinationIndex = sourceIndex - 1;
-        setFilterParameterValues(parameters, destinationIndex, readFilterParameterValues(parameters, sourceIndex));
-    }
-
+    const ModelEdit edit(*this);
+    FilterIndexMap mapping;
+    for (int index = 0; index < maxFilterCount; ++index)
+        mapping[size_t(index)] = index == filterIndex ? -1 : index > filterIndex ? index - 1 : index;
+    for (int source = filterIndex + 1; source < currentCount; ++source)
+        setFilterParameterValues(parameters, mapping[size_t(source)], readFilterParameterValues(parameters, source));
     resetFilterParameterValues(parameters, currentCount - 1);
-
     setActiveFilterCount(currentCount - 1);
-    resetFilters();
-    updateFilters();
-    return true;
-}
-
-bool EqlModuleProcessor::clearFilters() noexcept
-{
-    const auto currentCount = getActiveFilterCount();
-
-    if (currentCount <= 0)
-        return false;
-
-    for (int filterIndex = 0; filterIndex < currentCount; ++filterIndex)
-        resetFilterParameterValues(parameters, filterIndex);
-
-    setActiveFilterCount(0);
-    resetFilters();
-    updateFilters();
-    return true;
+    resetRequested.store(true, std::memory_order_release);
+    restoreGainsRequested.store(true, std::memory_order_release);
+    if (onFilterRemapped) onFilterRemapped(mapping);
+    return mapping;
 }
 
 bool EqlModuleProcessor::applyFilterOrder(const std::vector<int>& orderedFilterIndices) noexcept
@@ -151,18 +135,8 @@ bool EqlModuleProcessor::applyFilterOrder(const std::vector<int>& orderedFilterI
     if (currentCount <= 1 || static_cast<int>(orderedFilterIndices.size()) != currentCount)
         return false;
 
-    std::vector<bool> used(static_cast<size_t>(currentCount), false);
-
-    for (const auto sourceIndex : orderedFilterIndices)
-    {
-        if (! juce::isPositiveAndBelow(sourceIndex, currentCount))
-            return false;
-
-        if (used[static_cast<size_t>(sourceIndex)])
-            return false;
-
-        used[static_cast<size_t>(sourceIndex)] = true;
-    }
+    if (!ava::modules::state::isPermutation(orderedFilterIndices, currentCount))
+        return false;
 
     auto alreadyInOrder = true;
 
@@ -178,6 +152,7 @@ bool EqlModuleProcessor::applyFilterOrder(const std::vector<int>& orderedFilterI
     if (alreadyInOrder)
         return false;
 
+    const ModelEdit edit(*this);
     std::vector<FilterParameterValues> snapshots(static_cast<size_t>(currentCount));
 
     for (int sourceIndex = 0; sourceIndex < currentCount; ++sourceIndex)
@@ -191,18 +166,34 @@ bool EqlModuleProcessor::applyFilterOrder(const std::vector<int>& orderedFilterI
                                  snapshots[static_cast<size_t>(sourceIndex)]);
     }
 
-    resetFilters();
-    updateFilters();
+    resetRequested.store(true, std::memory_order_release);
+    restoreGainsRequested.store(true, std::memory_order_release);
+    FilterIndexMap mapping;
+    for (int i = 0; i < maxFilterCount; ++i) mapping[size_t(i)] = i;
+    for (int destination = 0; destination < currentCount; ++destination)
+        mapping[size_t(orderedFilterIndices[size_t(destination)])] = destination;
+    if (onFilterRemapped) onFilterRemapped(mapping);
     return true;
 }
 
 void EqlModuleProcessor::setActiveFilterCount(const int newCount) noexcept
 {
-    activeFilterCount.store(clampActiveFilterCount(newCount), std::memory_order_relaxed);
+    const auto count = clampActiveFilterCount(newCount);
+    prepareFilterStorage(count);
+    activeFilterCount.store(count, std::memory_order_release);
     markEqlFiltersDirty();
+    if (onLayoutChanged) onLayoutChanged();
 }
 
 void EqlModuleProcessor::markEqlFiltersDirty() noexcept
 {
     eqlFiltersDirty.store(true, std::memory_order_release);
+}
+
+void EqlModuleProcessor::prepareFilterStorage(int count)
+{
+    // Called only by a model transaction before publishing the new active count.
+    // Slots are never removed while this processor can still be rendered.
+    bellOrderFilters.ensure(count); shelfOrderFilters.ensure(count);
+    tiltFilters.ensure(count); cutBlendFilters.ensure(count); phaseFirFilters.ensure(count);
 }

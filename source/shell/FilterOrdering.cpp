@@ -3,12 +3,10 @@
 #include "../modules/eql/Processor.h"
 
 #include <algorithm>
+#include <utility>
 
 void AvaAudioProcessorEditor::selectFilterSection(const int filterIndex)
 {
-    if (! eqlModuleLoaded)
-        return;
-
     if (! juce::isPositiveAndBelow(filterIndex, getActiveFilterCount()))
         return;
 
@@ -17,9 +15,13 @@ void AvaAudioProcessorEditor::selectFilterSection(const int filterIndex)
 
     if (filterSections[static_cast<size_t>(filterIndex)] != nullptr)
     {
-        const auto sectionBounds = getFilterSectionBounds(filterIndex);
+        // The EQL editor now uses one shared grid; filter bodies cover the
+        // entire module, so scroll to the selected filter's actual controls.
+        const auto* section = filterSections[size_t(filterIndex)].get();
+        const auto sectionBounds = moduleContent.getLocalArea(section->typeControl.get(),
+            section->typeControl->getLocalBounds());
         const auto currentY = filterViewport.getViewPositionY();
-        const auto viewportHeight = filterViewport.getHeight();
+        const auto viewportHeight = filterViewport.getViewArea().getHeight();
         auto targetY = currentY;
 
         if (sectionBounds.getY() < currentY)
@@ -27,47 +29,26 @@ void AvaAudioProcessorEditor::selectFilterSection(const int filterIndex)
         else if (sectionBounds.getBottom() > currentY + viewportHeight)
             targetY = sectionBounds.getBottom() - viewportHeight;
 
-        const auto maxOffset = juce::jmax(0, getFilterContentHeight() - viewportHeight);
+        const auto maxOffset = juce::jmax(0, getActiveFilterContentHeight() - viewportHeight);
         filterViewport.setViewPosition(0, juce::jlimit(0, maxOffset, targetY));
     }
 
 }
 
-juce::Rectangle<int> AvaAudioProcessorEditor::getFilterSectionBounds(const int filterIndex) const
-{
-    if (! juce::isPositiveAndBelow(filterIndex, getActiveFilterCount()))
-        return {};
-
-    const auto* section = filterSections[static_cast<size_t>(filterIndex)].get();
-
-    if (section == nullptr || section->header == nullptr)
-        return {};
-
-    auto bounds = filterContent.getLocalArea(section->header.get(), section->header->getLocalBounds());
-
-    auto includeVisibleComponent = [this, &bounds] (const juce::Component* component)
-    {
-        if (component == nullptr || ! component->isVisible() || component->getBounds().isEmpty())
-            return;
-
-        bounds = bounds.getUnion(filterContent.getLocalArea(component, component->getLocalBounds()));
-    };
-
-    includeVisibleComponent(&section->accentFrame);
-    includeVisibleComponent(section->typeControl.get());
-    includeVisibleComponent(section->orderControl.get());
-    includeVisibleComponent(section->frequencyControl.get());
-    includeVisibleComponent(section->bandwidthControl.get());
-    includeVisibleComponent(section->gainControl.get());
-    includeVisibleComponent(section->bypassButton.get());
-
-    return bounds;
-}
-
 void AvaAudioProcessorEditor::enforceSingleExpandedFilterSection(const int preferredFilterIndex)
 {
     const auto activeCount = getActiveFilterCount();
-    const auto targetFilterIndex = juce::isPositiveAndBelow(preferredFilterIndex, activeCount) ? preferredFilterIndex : -1;
+    auto targetFilterIndex = preferredFilterIndex;
+    if (!juce::isPositiveAndBelow(targetFilterIndex, activeCount))
+    {
+        targetFilterIndex = activeCount > 0 ? getFilterIndexForOrderPosition(0) : -1;
+        for (int index = 0; index < activeCount; ++index)
+            if (filterSections[size_t(index)] != nullptr && filterSections[size_t(index)]->expanded)
+            {
+                targetFilterIndex = index;
+                break;
+            }
+    }
 
     for (int filterIndex = 0; filterIndex < static_cast<int>(filterSections.size()); ++filterIndex)
     {
@@ -176,27 +157,6 @@ void AvaAudioProcessorEditor::applyFilterSortOrder(const std::vector<int>& order
     scheduleHistorySnapshot();
 }
 
-void AvaAudioProcessorEditor::moveFilterSectionTo(const int filterIndex, const int destinationOrderPosition)
-{
-    const auto activeCount = getActiveFilterCount();
-    const auto sourceOrderPosition = getFilterOrderPositionForIndex(filterIndex);
-
-    if (activeCount <= 1 || ! juce::isPositiveAndBelow(sourceOrderPosition, activeCount))
-        return;
-
-    const auto destination = juce::jlimit(0, activeCount - 1, destinationOrderPosition);
-
-    if (sourceOrderPosition == destination)
-        return;
-
-    std::vector<int> orderedIndices(filterDisplayOrder.begin(), filterDisplayOrder.begin() + activeCount);
-
-    const auto movedFilterIndex = orderedIndices[static_cast<size_t>(sourceOrderPosition)];
-    orderedIndices.erase(orderedIndices.begin() + sourceOrderPosition);
-    orderedIndices.insert(orderedIndices.begin() + destination, movedFilterIndex);
-    applyFilterSortOrder(orderedIndices);
-}
-
 int AvaAudioProcessorEditor::getFilterIndexForOrderPosition(const int orderIndex) const noexcept
 {
     if (! juce::isPositiveAndBelow(orderIndex, getActiveFilterCount()))
@@ -219,4 +179,43 @@ int AvaAudioProcessorEditor::getFilterOrderPositionForIndex(const int filterInde
     }
 
     return -1;
+}
+
+void AvaAudioProcessorEditor::cancelFilterDrag()
+{
+    if (std::exchange(filterDragSourceIndex, -1) < 0) return;
+    juce::Component::beginDragAutoRepeat(0);
+    for (auto& section : filterSections)
+        if (section != nullptr) section->header->setDragTargetHighlighted(false);
+}
+
+void AvaAudioProcessorEditor::handleFilterDrag(const int filterIndex, juce::Point<float> screenPosition, const bool released)
+{
+    const auto activeCount = getActiveFilterCount();
+    if (aboutExpanded
+        || !juce::isPositiveAndBelow(filterIndex, activeCount)) { cancelFilterDrag(); return; }
+    if (released && filterDragSourceIndex != filterIndex) return;
+    if (!released && filterDragSourceIndex < 0) filterDragSourceIndex = filterIndex;
+    auto viewportPoint = filterViewport.getLocalPoint(nullptr, screenPosition);
+    if (!released) filterViewport.autoScroll(juce::roundToInt(viewportPoint.x), juce::roundToInt(viewportPoint.y),
+        2 * getUiGap(*this), getUiGap(*this));
+    const auto inViewport = filterViewport.getLocalBounds().toFloat().contains(viewportPoint);
+    const auto point = filterContent.getLocalPoint(nullptr, screenPosition);
+    int destination = -1;
+    for (int index = 0; index < activeCount; ++index) {
+        auto& header = *filterSections[size_t(index)]->header;
+        const auto over = inViewport && header.getBounds().toFloat().contains(point);
+        header.setDragTargetHighlighted(over && index != filterDragSourceIndex);
+        if (over) destination = index;
+    }
+    if (!released) return;
+    const auto source = filterDragSourceIndex;
+    cancelFilterDrag();
+    if (destination < 0 || destination == source) return;
+    const auto from = getFilterOrderPositionForIndex(source), to = getFilterOrderPositionForIndex(destination);
+    if (from < 0 || to < 0) return;
+    std::vector<int> order(filterDisplayOrder.begin(), filterDisplayOrder.begin() + activeCount);
+    order.erase(order.begin() + from);
+    order.insert(order.begin() + to, source);
+    applyFilterSortOrder(order);
 }

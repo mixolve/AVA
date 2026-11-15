@@ -1,6 +1,8 @@
 #include "SvgExport.h"
 #include "ChoiceControl.h"
 #include "ParameterControl.h"
+#include <algorithm>
+#include <unordered_set>
 #include <vector>
 #include <unordered_map>
 
@@ -19,7 +21,7 @@ juce::String parameterIdFor(juce::Component& component)
 }
 juce::String sanitizeSvgId(juce::String text)
 {
-    text=text.replace(" ","-").replace("/","-");
+    text=text.toLowerCase().replaceCharacters(" _./", "----");
     text=text.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-");
     while (text.contains("--")) text=text.replace("--","-");
     while (text.startsWithChar('-')) text=text.substring(1);
@@ -27,13 +29,14 @@ juce::String sanitizeSvgId(juce::String text)
     if (text.isEmpty()||juce::CharacterFunctions::isDigit(text[0])) text="p-"+text;
     return text;
 }
-juce::String componentKind(juce::Component& component)
+bool isParameterRow(juce::Component& component)
 {
-    if (dynamic_cast<juce::Slider*>(&component)!=nullptr) return "slider";
-    if (dynamic_cast<juce::Button*>(&component)!=nullptr) return "button";
-    if (dynamic_cast<juce::Label*>(&component)!=nullptr) return "label";
-    if (dynamic_cast<juce::ComboBox*>(&component)!=nullptr) return "combo";
-    return "part";
+    return dynamic_cast<ParameterField*>(&component) != nullptr;
+}
+juce::String rowTitle(juce::Component& component)
+{
+    if (auto* field = dynamic_cast<ParameterField*>(&component)) return field->getTitleText();
+    return {};
 }
 juce::String matrix(const juce::AffineTransform& t)
 {
@@ -57,6 +60,90 @@ juce::String pathData(const juce::Path& path)
     }
     return result;
 }
+bool isRectanglePath(const juce::Path& path)
+{
+    const auto bounds = path.getBounds();
+    if (bounds.isEmpty()) return false;
+    int starts = 0, corners = 0;
+    juce::Point<float> first, previous;
+    for (juce::Path::Iterator it(path); it.next();)
+    {
+        if (it.elementType == juce::Path::Iterator::closePath)
+        {
+            if (std::abs(previous.x-first.x) > 0.0001f && std::abs(previous.y-first.y) > 0.0001f) return false;
+            continue;
+        }
+        if (it.elementType == juce::Path::Iterator::startNewSubPath) { ++starts; first = {it.x1,it.y1}; }
+        else if (it.elementType != juce::Path::Iterator::lineTo) return false;
+        else if (std::abs(previous.x-it.x1) > 0.0001f && std::abs(previous.y-it.y1) > 0.0001f) return false;
+        previous = {it.x1,it.y1};
+        const auto left = std::abs(it.x1 - bounds.getX()) < 0.0001f;
+        const auto right = std::abs(it.x1 - bounds.getRight()) < 0.0001f;
+        const auto top = std::abs(it.y1 - bounds.getY()) < 0.0001f;
+        const auto bottom = std::abs(it.y1 - bounds.getBottom()) < 0.0001f;
+        if ((!left && !right) || (!top && !bottom)) return false;
+        corners |= 1 << ((right ? 1 : 0) + (bottom ? 2 : 0));
+    }
+    return starts == 1 && corners == 15;
+}
+
+// Clip filled polygons themselves instead of exporting a clipping group for every paint call.
+bool clipPolygons(const juce::Path& source, juce::Rectangle<float> clip, juce::Path& result)
+{
+    std::vector<juce::Point<float>> polygon;
+    result.setUsingNonZeroWinding(source.isUsingNonZeroWinding());
+    const auto flush = [&]
+    {
+        for (int edge = 0; edge < 4 && !polygon.empty(); ++edge)
+        {
+            const auto coordinate = [edge](juce::Point<float> p) { return edge < 2 ? p.x : p.y; };
+            const auto boundary = edge == 0 ? clip.getX() : edge == 1 ? clip.getRight()
+                : edge == 2 ? clip.getY() : clip.getBottom();
+            const auto inside = [&](juce::Point<float> p)
+            { return edge % 2 == 0 ? coordinate(p) >= boundary : coordinate(p) <= boundary; };
+            std::vector<juce::Point<float>> output;
+            auto previous = polygon.back();
+            for (const auto current : polygon)
+            {
+                if (inside(previous) != inside(current))
+                {
+                    const auto ratio = (boundary - coordinate(previous)) / (coordinate(current) - coordinate(previous));
+                    output.push_back(previous + (current - previous) * ratio);
+                }
+                if (inside(current)) output.push_back(current);
+                previous = current;
+            }
+            polygon = std::move(output);
+        }
+        float area = 0.0f;
+        for (size_t i = 0; i < polygon.size(); ++i)
+        {
+            const auto a = polygon[i], b = polygon[(i + 1) % polygon.size()];
+            area += a.x * b.y - b.x * a.y;
+        }
+        if (polygon.size() >= 3 && std::abs(area) > 0.0001f)
+        {
+            result.startNewSubPath(polygon.front());
+            for (size_t i = 1; i < polygon.size(); ++i) result.lineTo(polygon[i]);
+            result.closeSubPath();
+        }
+        polygon.clear();
+    };
+    for (juce::Path::Iterator it(source); it.next();)
+    {
+        switch (it.elementType)
+        {
+            case juce::Path::Iterator::startNewSubPath: flush(); polygon.push_back({it.x1, it.y1}); break;
+            case juce::Path::Iterator::lineTo: polygon.push_back({it.x1, it.y1}); break;
+            case juce::Path::Iterator::closePath: flush(); break;
+            case juce::Path::Iterator::quadraticTo:
+            case juce::Path::Iterator::cubicTo: return false;
+        }
+    }
+    flush();
+    return true;
+}
+
 class Context final : public juce::LowLevelGraphicsContext
 {
 public:
@@ -79,52 +166,57 @@ public:
         const auto contentStart=content.length();
         const auto defsStart=defs.length();
         const auto clipsStart=rectClipCache.size();
-        const auto parameterId=parameterIdFor(component);
-        const auto parameterContext=parameterId.isNotEmpty() ? parameterId : parentParameterId;
-        juce::String identifier=parameterId;
-        if (identifier.isEmpty()) identifier=component.getName();
-        if (identifier.isEmpty()) identifier=component.getComponentID();
-        if (identifier.isEmpty() && parameterContext.isNotEmpty())
-            identifier=parameterContext+"-"+componentKind(component);
-        if (identifier.isEmpty())
+        const auto parameterId = parameterIdFor(component);
+        const auto row = isParameterRow(component);
+        const auto parentIsRow = component.getParentComponent() != nullptr && isParameterRow(*component.getParentComponent());
+        const auto value = dynamic_cast<ValueBoxComponent*>(&component) != nullptr;
+        auto parameterContext = parameterId.isNotEmpty() ? parameterId : parentParameterId;
+        if (row && parameterContext.isEmpty()) parameterContext = rowTitle(component);
+        juce::String identifier = parameterId;
+        juce::String role;
+        if (row) { identifier = parameterContext; role = "control"; }
+        else if (value && parameterContext.isNotEmpty()) { identifier = parameterContext + "-value"; role = "value"; }
+        else if (auto* button = dynamic_cast<juce::Button*>(&component))
         {
-            if (auto* button=dynamic_cast<juce::Button*>(&component)) identifier=button->getButtonText();
-            else if (auto* label=dynamic_cast<juce::Label*>(&component)) identifier=label->getText();
+            role = parentIsRow && parameterId.isEmpty() ? "label" : "button";
+            if (role == "label") identifier = parameterContext + "-label";
+            if (identifier.isEmpty()) identifier = component.getName();
+            if (identifier.isEmpty()) identifier = component.getComponentID();
+            if (identifier.isEmpty()) identifier = button->getButtonText();
+            if (identifier.isEmpty()) identifier = "button";
         }
+        else if (auto* label = dynamic_cast<juce::Label*>(&component); label != nullptr)
+        {
+            role = "label";
+            identifier = component.getName().isNotEmpty() ? component.getName() : label->getText();
+        }
+        else if (parentParameterId.isEmpty())
+        {
+            identifier = component.getName();
+            if (identifier.isEmpty()) identifier = component.getComponentID();
+        }
+        const auto generic = role.isEmpty();
+        const auto structuralContainer = identifier.isEmpty()
+            || (generic && isStructuralIdentifier(identifier));
         juce::XmlElement group("g");
-        bool structuralContainer=false;
-        group.setAttribute("id", identifier.isNotEmpty()
-            ? uniqueId(sanitizeSvgId(identifier))
-            : uniqueId("component-" + juce::String(++componentSerial)));
-        juce::String label=component.getName();
-        if (auto* button=dynamic_cast<juce::Button*>(&component))
+        if (!structuralContainer)
         {
-            group.setAttribute("data-component", "button");
-            if (label.isEmpty()) label=button->getButtonText();
+            group.setAttribute("id", uniqueId(sanitizeSvgId(identifier)));
+            group.setAttribute("data-role", generic ? "artwork" : role);
+            if (parameterId.isNotEmpty()) group.setAttribute("data-parameter", parameterId);
+            if (row) parameterContext = group.getStringAttribute("id");
         }
-        else if (auto* text=dynamic_cast<juce::Label*>(&component))
-        {
-            group.setAttribute("data-component", "label");
-            if (label.isEmpty()) label=text->getText();
-        }
-        else if (parameterId.isNotEmpty()) group.setAttribute("data-component", "parameter");
-        else
-        {
-            group.setAttribute("data-component", "container");
-            structuralContainer=isStructuralIdentifier(identifier);
-        }
-        if (parameterId.isNotEmpty()) group.setAttribute("data-parameter", parameterId);
-        if (label.isEmpty()) label=component.getComponentID();
-        if (label.isEmpty()) label=parameterId;
-        if (label.isEmpty()) label=identifier;
-        if (label.isNotEmpty()) group.setAttribute("data-name",label);
-        auto opening=group.toString(juce::XmlElement::TextFormat().withoutHeader());
-        opening=opening.replace("/>",">");
-        if (structuralContainer) opening={};
+        auto opening = structuralContainer ? juce::String()
+            : group.toString(juce::XmlElement::TextFormat().withoutHeader()).replace("/>", ">");
         content += opening;
         {
             const juce::Graphics::ScopedSaveState saved(graphics);
             component.paint(graphics);
+        }
+        if (generic && content.length() == contentStart + opening.length())
+        {
+            content = content.substring(0, contentStart);
+            opening.clear();
         }
         for (int i=0;i<component.getNumChildComponents();++i)
         {
@@ -198,8 +290,9 @@ public:
     }
     void clipToPath(const juce::Path& path,const juce::AffineTransform& t) override
     {
-        state.onlyRectClips=false;
         auto p=path;p.applyTransform(t.followedBy(state.transform));
+        if (isRectanglePath(p)) { pushClipRectangle(p.getBounds()); return; }
+        state.onlyRectClips=false;
         state.clipBounds=state.clipBounds.getIntersection(p.getBounds());
         const auto id=nextId();
         defs += "<clipPath id=\""+id+"\" clipPathUnits=\"userSpaceOnUse\"><path d=\""+pathData(p)
@@ -213,6 +306,10 @@ public:
         defs += "<mask id=\""+id+"\" maskUnits=\"userSpaceOnUse\" maskContentUnits=\"userSpaceOnUse\" style=\"mask-type:alpha\">"
             +imageElement(image,t.followedBy(state.transform),true)+"</mask>\n";
         state.clips.push_back("mask=\"url(#"+id+")\"");
+        state.vectorMask = image.getProperties()->getWithDefault("ava-source-svg", {}).toString();
+        state.vectorMaskTransform = t.followedBy(state.transform);
+        state.vectorMaskSize = image.getBounds().toFloat();
+        state.vectorMaskClip = state.clips.back();
         state.clipBounds=state.clipBounds.getIntersection(image.getBounds().toFloat().transformedBy(t.followedBy(state.transform)));
     }
     bool clipRegionIntersects(const juce::Rectangle<int>& r) override
@@ -232,17 +329,41 @@ public:
     void fillRectList(const juce::RectangleList<float>& list) override {for(auto r:list)fillRect(r);}
     void fillPath(const juce::Path& path,const juce::AffineTransform& t) override
     {
-        if(isClipEmpty())return;
-        emit("<path d=\""+pathData(path)+"\" transform=\""+matrix(t.followedBy(state.transform))
-            +"\" fill-rule=\""+(path.isUsingNonZeroWinding()?"nonzero":"evenodd")+"\" "+fillAttributes()+"/>\n");
+        if (isClipEmpty() || path.isEmpty() || state.fill.getOpacity() <= 0.0f) return;
+        auto world = path;
+        const auto transform = t.followedBy(state.transform);
+        world.applyTransform(transform);
+        if (!state.clipBounds.intersects(world.getBounds())) return;
+        if (state.vectorMask.isNotEmpty() && state.fill.isColour()
+            && world.getBounds().contains(state.vectorMaskSize.transformedBy(state.vectorMaskTransform)))
+        {
+            const auto clips = state.clips;
+            state.clips.erase(std::remove(state.clips.begin(), state.clips.end(), state.vectorMaskClip), state.clips.end());
+            emit(vectorMaskElement(), state.vectorMaskSize.transformedBy(state.vectorMaskTransform));
+            state.clips = clips;
+            return;
+        }
+        juce::Path clipped;
+        if (state.fill.isColour() && clipPolygons(world, state.clipBounds, clipped))
+        {
+            if (!clipped.isEmpty()) emit("<path d=\"" + pathData(clipped) + "\" fill-rule=\""
+                + (path.isUsingNonZeroWinding() ? "nonzero" : "evenodd") + "\" " + fillAttributes() + "/>\n", clipped.getBounds());
+        }
+        else emit("<path d=\""+pathData(path)+"\" transform=\""+matrix(transform)
+            +"\" fill-rule=\""+(path.isUsingNonZeroWinding()?"nonzero":"evenodd")+"\" "+fillAttributes()+"/>\n", world.getBounds());
     }
     void drawImage(const juce::Image& image,const juce::AffineTransform& t) override
-    {emit("<g opacity=\""+number(state.fill.getOpacity())+"\">"+imageElement(image,t.followedBy(state.transform),false)+"</g>\n");}
+    {
+        if (!image.isValid() || state.fill.getOpacity() <= 0.0f) return;
+        emit("<g opacity=\""+number(state.fill.getOpacity())+"\">"+imageElement(image,t.followedBy(state.transform),false)+"</g>\n",
+            image.getBounds().toFloat().transformedBy(t.followedBy(state.transform)));
+    }
     void drawLine(const juce::Line<float>& line) override {drawLineWithThickness(line,1.f);}
     void setFont(const juce::Font& font) override {state.font=font;}
     const juce::Font& getFont() override {return state.font;}
     void drawGlyphs(juce::Span<const uint16_t> glyphs,juce::Span<const juce::Point<float>> positions,const juce::AffineTransform& t) override
     {
+        if (glyphs.size() == 0 || isClipEmpty() || state.fill.getOpacity() <= 0.0f) return;
         const auto typeface=state.font.getTypefacePtr();
         auto& characters = glyphCharacters[typeface.get()];
         if (characters.empty())
@@ -256,13 +377,26 @@ public:
         }
         juce::String text, xPositions, yPositions;
         const auto horizontalScale=state.font.getHorizontalScale();
+        juce::Rectangle<float> inkBounds;
+        bool hasInk = false;
         for(size_t i=0;i<glyphs.size();++i)
         {
+            juce::Path outline;
+            typeface->getOutlineForGlyph(state.font.getMetricsKind(), glyphs[i], outline);
+            if (!outline.isEmpty())
+            {
+                const auto bounds = outline.getBoundsTransformed(juce::AffineTransform::scale(
+                    state.font.getHeight() * horizontalScale, state.font.getHeight())
+                    .translated(positions[i]).followedBy(t).followedBy(state.transform));
+                inkBounds = hasInk ? inkBounds.getUnion(bounds) : bounds;
+                hasInk = true;
+            }
             const auto found=characters.find(glyphs[i]);
             text += juce::String::charToString(found!=characters.end() ? found->second : 0xfffd);
             xPositions += number(positions[i].x / horizontalScale) + " ";
             yPositions += number(positions[i].y) + " ";
         }
+        if (!hasInk || !inkBounds.intersects(state.clipBounds)) return;
         juce::XmlElement element("text");
         element.setAttribute("xml:space", "preserve");
         element.setAttribute("font-family", typeface->getName());
@@ -276,7 +410,7 @@ public:
         element.addTextElement(text);
         auto markup=element.toString(juce::XmlElement::TextFormat().withoutHeader());
         markup=markup.replaceFirstOccurrenceOf("<text ", "<text " + fillAttributes() + " ");
-        emit(markup);
+        emit(markup, inkBounds);
 
     }
     std::unique_ptr<juce::ImageType> getPreferredImageTypeForTemporaryImages() const override
@@ -290,12 +424,14 @@ private:
         juce::FillType fill;
         juce::Font font {juce::FontOptions()};
         std::vector<juce::String> clips;
+        juce::String vectorMask, vectorMaskClip;
+        juce::AffineTransform vectorMaskTransform;
+        juce::Rectangle<float> vectorMaskSize;
         bool onlyRectClips=true;
         bool hasRectClip=false;
     } state;
     std::vector<State> stack;
     std::unordered_map<const juce::Typeface*, std::unordered_map<uint32_t, juce::juce_wchar>> glyphCharacters;
-    int componentSerial=0;
     int serial=0;
     std::unordered_map<std::string,int> usedIds;
     std::vector<std::pair<std::string,juce::String>> rectClipCache;
@@ -330,10 +466,11 @@ private:
             rectClipCache.pop_back();
         }
     }
-    void emit(const juce::String& element)
+    void emit(const juce::String& element, juce::Rectangle<float> bounds)
     {
-        if(isClipEmpty())return;
-        const auto rectWrapper = state.hasRectClip ? rectClipAttribute(state.clipBounds) : juce::String();
+        if(isClipEmpty() || element.isEmpty() || !state.clipBounds.intersects(bounds))return;
+        const auto rectWrapper = state.hasRectClip && !state.clipBounds.contains(bounds)
+            ? rectClipAttribute(state.clipBounds) : juce::String();
         if(state.onlyRectClips)
         {
             if(rectWrapper.isEmpty()) content += element;
@@ -368,6 +505,31 @@ private:
         }
         return "fill=\"#"+state.fill.colour.toDisplayString(false)+"\" "+opacity;
     }
+    juce::String vectorMaskElement()
+    {
+        auto xml = juce::parseXML(state.vectorMask);
+        if (xml == nullptr) return {};
+        const auto viewBox = juce::StringArray::fromTokens(xml->getStringAttribute("viewBox"), " ,", "");
+        if (viewBox.size() != 4 || viewBox[2].getFloatValue() <= 0 || viewBox[3].getFloatValue() <= 0) return {};
+        const auto transform = juce::AffineTransform::translation(-viewBox[0].getFloatValue(), -viewBox[1].getFloatValue())
+            .scaled(state.vectorMaskSize.getWidth() / viewBox[2].getFloatValue(),
+                    state.vectorMaskSize.getHeight() / viewBox[3].getFloatValue())
+            .followedBy(state.vectorMaskTransform);
+        const auto colour = "#" + state.fill.colour.toDisplayString(false);
+        const auto recolour = [&colour](auto&& self, juce::XmlElement& node) -> void
+        {
+            for (const auto* attribute : {"stroke", "fill"})
+                if (node.hasAttribute(attribute) && node.getStringAttribute(attribute) != "none")
+                    node.setAttribute(attribute, colour);
+            for (auto* child : node.getChildIterator()) self(self, *child);
+        };
+        recolour(recolour, *xml);
+        xml->setTagName("g");
+        for (const auto* attribute : {"xmlns", "xmlns:xlink", "width", "height", "viewBox", "version"}) xml->removeAttribute(attribute);
+        xml->setAttribute("transform", matrix(transform));
+        xml->setAttribute("opacity", number(state.fill.getOpacity()));
+        return xml->toString(juce::XmlElement::TextFormat().withoutHeader());
+    }
     juce::String imageElement(const juce::Image& image,const juce::AffineTransform& t,bool mask)
     {
         if(!image.isValid())return {};
@@ -382,76 +544,141 @@ private:
     }
 };
 
-class ViewportExportLayout
+void compactGroups(juce::XmlElement& parent)
 {
-public:
-    explicit ViewportExportLayout(juce::Component& rootIn) : root(rootIn), originalBounds(root.getBounds())
+    for (int index = 0; index < parent.getNumChildElements();)
     {
-        collect(root);
-        int extra = 0;
-        for (const auto& item : views)
-            if (auto* content = item.viewport->getViewedComponent())
-                extra = juce::jmax(extra, content->getHeight() - item.viewport->getHeight());
-        // Editors/windows provide a virtual export layout: never resize their native peer.
-        if (extra > 0 && dynamic_cast<ExpandableContent*>(&root) == nullptr && !root.isOnDesktop())
-            root.setSize(root.getWidth(), root.getHeight() + extra);
-        for (const auto& item : views)
-            if (item.viewport != nullptr) item.viewport->setViewPosition(0, 0);
+        auto* child = parent.getChildElement(index);
+        compactGroups(*child);
+        if (child->getStringAttribute("transform") == "matrix(1.00000 0.00000 0.00000 1.00000 0.00000 0.00000)")
+            child->removeAttribute("transform");
+        if (child->getDoubleAttribute("opacity", 1.0) == 1.0) child->removeAttribute("opacity");
+        const auto empty = (child->hasTagName("g") && child->getNumChildElements() == 0)
+            || (child->hasTagName("path") && child->getStringAttribute("d").trim().isEmpty())
+            || (child->hasTagName("text") && child->getAllSubText().trim().isEmpty())
+            || child->getDoubleAttribute("opacity", 1.0) <= 0.0;
+        if (empty) { parent.removeChildElement(child, true); continue; }
+        if (child->hasTagName("g") && !child->hasAttribute("id"))
+        {
+            if (child->getNumAttributes() == 0)
+            {
+                auto at = index;
+                while (auto* item = child->getFirstChildElement())
+                {
+                    child->removeChildElement(item, false);
+                    parent.insertChildElement(item, at++);
+                }
+                parent.removeChildElement(child, true);
+                continue;
+            }
+            auto* item = child->getFirstChildElement();
+            auto mergeable = child->getNumChildElements() == 1;
+            for (int attribute = 0; attribute < child->getNumAttributes(); ++attribute)
+            {
+                const auto name = child->getAttributeName(attribute);
+                if (name != "transform" && name != "opacity" && name != "clip-path" && name != "mask") mergeable = false;
+                if ((name == "clip-path" || name == "mask")
+                    && (item->hasAttribute("transform") || item->hasAttribute(name) || item->hasTagName("svg"))) mergeable = false;
+            }
+            if (mergeable)
+            {
+                for (int attribute = 0; attribute < child->getNumAttributes(); ++attribute)
+                {
+                    const auto name = child->getAttributeName(attribute);
+                    auto value = child->getAttributeValue(attribute);
+                    if (name == "transform" && item->hasAttribute(name)) value += " " + item->getStringAttribute(name);
+                    if (name == "opacity") value = number(static_cast<float>(value.getDoubleValue() * item->getDoubleAttribute(name, 1.0)));
+                    item->setAttribute(name, value);
+                }
+                child->removeChildElement(item, false);
+                parent.replaceChildElement(child, item);
+                continue;
+            }
+        }
+        ++index;
     }
-    ~ViewportExportLayout()
-    {
-        if (root.getBounds() != originalBounds) root.setBounds(originalBounds);
-        for (const auto& item : views)
-            if (item.viewport != nullptr) item.viewport->setViewPosition(item.position);
-    }
-private:
-    void collect(juce::Component& component)
-    {
-        if (auto* viewport = dynamic_cast<juce::Viewport*>(&component))
-            views.push_back({viewport, viewport->getViewPosition()});
-        for (auto* child : component.getChildren())
-            if (child->isVisible()) collect(*child);
-    }
-    struct View { juce::Component::SafePointer<juce::Viewport> viewport; juce::Point<int> position; };
-    juce::Component& root;
-    juce::Rectangle<int> originalBounds;
-    std::vector<View> views;
-};
-
-void collectExpandableContent(juce::Component& component,std::vector<ExpandableContent*>& result)
-{
-    if(auto* expandable=dynamic_cast<ExpandableContent*>(&component))
-        result.push_back(expandable);
-    for(int index=0;index<component.getNumChildComponents();++index)
-        if(auto* child=component.getChildComponent(index))
-            if(child->isVisible())
-                collectExpandableContent(*child,result);
 }
+
+void replaceDefinitionReferences(juce::XmlElement& node, const juce::String& from, const juce::String& to)
+{
+    for (int i = 0; i < node.getNumAttributes(); ++i)
+    {
+        const auto name = node.getAttributeName(i);
+        auto value = node.getAttributeValue(i).replace("url(#" + from + ")", "url(#" + to + ")");
+        if ((name == "href" || name == "xlink:href") && value == "#" + from) value = "#" + to;
+        node.setAttribute(name, value);
+    }
+    for (auto* child : node.getChildIterator()) replaceDefinitionReferences(*child, from, to);
+}
+
+void collectDefinitionReferences(const juce::XmlElement& node, std::unordered_set<std::string>& result)
+{
+    for (int i = 0; i < node.getNumAttributes(); ++i)
+    {
+        const auto name = node.getAttributeName(i);
+        auto value = node.getAttributeValue(i);
+        if ((name == "href" || name == "xlink:href") && value.startsWithChar('#')) result.insert(value.substring(1).toStdString());
+        while (value.contains("url(#"))
+        {
+            value = value.fromFirstOccurrenceOf("url(#", false, false);
+            result.insert(value.upToFirstOccurrenceOf(")", false, false).toStdString());
+            value = value.fromFirstOccurrenceOf(")", false, false);
+        }
+    }
+    for (const auto* child : node.getChildIterator()) collectDefinitionReferences(*child, result);
+}
+
+juce::String compactSvg(const juce::String& source)
+{
+    auto svg = juce::parseXML(source);
+    if (svg == nullptr) return source;
+    compactGroups(*svg);
+    if (auto* definitions = svg->getChildByName("defs"))
+    {
+        std::unordered_map<std::string, juce::String> canonical;
+        for (int index = 0; index < definitions->getNumChildElements();)
+        {
+            auto* definition = definitions->getChildElement(index);
+            juce::XmlElement shape(*definition);
+            shape.removeAttribute("id");
+            const auto key = shape.toString(juce::XmlElement::TextFormat().singleLine().withoutHeader()).toStdString();
+            const auto id = definition->getStringAttribute("id");
+            if (const auto found = canonical.find(key); found != canonical.end())
+            {
+                replaceDefinitionReferences(*svg, id, found->second);
+                definitions->removeChildElement(definition, true);
+            }
+            else { canonical.emplace(key, id); ++index; }
+        }
+        std::unordered_set<std::string> referenced;
+        for (const auto* child : svg->getChildIterator())
+            if (child != definitions) collectDefinitionReferences(*child, referenced);
+        for (size_t before = 0; before != referenced.size();)
+        {
+            before = referenced.size();
+            for (const auto* definition : definitions->getChildIterator())
+                if (referenced.count(definition->getStringAttribute("id").toStdString()) != 0)
+                    collectDefinitionReferences(*definition, referenced);
+        }
+        for (int index = definitions->getNumChildElements(); --index >= 0;)
+            if (referenced.count(definitions->getChildElement(index)->getStringAttribute("id").toStdString()) == 0)
+                definitions->removeChildElement(definitions->getChildElement(index), true);
+        if (definitions->getNumChildElements() == 0) svg->removeChildElement(definitions, true);
+    }
+    return svg->toString();
+}
+
 }
 juce::String render(juce::Component& component)
 {
-    ViewportExportLayout viewportLayout(component);
-    std::vector<ExpandableContent*> expandableContent;
-    collectExpandableContent(component,expandableContent);
-    for(auto* expandable:expandableContent)
-        expandable->expandContentForSvgExport();
+    const auto canvasHeight = component.getHeight();
+    Context context(component.getLocalBounds());
+    juce::Graphics graphics(context);
+    context.paintComponent(component, graphics);
 
-    auto canvasHeight=component.getHeight();
-    for(auto* expandable:expandableContent)
-        canvasHeight=juce::jmax(canvasHeight,expandable->getSvgExportCanvasHeight());
-    for(auto* expandable:expandableContent)
-        expandable->prepareSvgExportLayout(canvasHeight);
-
-    Context context({0,0,component.getWidth(),canvasHeight});juce::Graphics graphics(context);
-    context.paintComponent(component,graphics);
-
-    for(auto* expandable:expandableContent)
-        expandable->finishSvgExportLayout();
-    for(auto* expandable:expandableContent)
-        expandable->restoreContentAfterSvgExport();
-    return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" version=\"1.1\" width=\""
+    return compactSvg("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" version=\"1.1\" width=\""
         +juce::String(component.getWidth())+"\" height=\""+juce::String(canvasHeight)+"\" viewBox=\"0 0 "
-        +juce::String(component.getWidth())+" "+juce::String(canvasHeight)+"\">\n<defs>"+context.defs+"</defs>\n"+context.content+"</svg>\n";
+        +juce::String(component.getWidth())+" "+juce::String(canvasHeight)+"\">\n<defs>"+context.defs+"</defs>\n"+context.content+"</svg>\n");
 }
 void chooseFile(juce::Component& component)
 {
@@ -463,7 +690,7 @@ void chooseFile(juce::Component& component)
             const auto file=dialog.getResult();if(file==juce::File())return;
             const auto target=file.withFileExtension("svg");
             if(!target.replaceWithText(svg))
-                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"SVG export","Unable to save SVG.");
+                juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::NoIcon,"SVG export","Unable to save SVG.");
         });
 }
 }

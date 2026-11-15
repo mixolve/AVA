@@ -1,432 +1,259 @@
 #include "ChoiceControl.h"
-#include "ParameterEditing.h"
+#include "ParameterControl.h"
 
-#include <utility>
-
-ChoiceControl::ChoiceControl(juce::AudioProcessorValueTreeState& state,
-                             const juce::String& parameterIdIn,
-                             const juce::String& titleText,
-                             std::vector<int> displayOrderIn)
-    : parameterId(parameterIdIn),
-      parameter(dynamic_cast<juce::AudioParameterChoice*>(state.getParameter(parameterIdIn)))
+ChoiceField::ChoiceField(const juce::String& title) : titleText(title)
 {
-    jassert(parameter != nullptr);
-
     setWantsKeyboardFocus(false);
     setMouseClickGrabsKeyboardFocus(false);
-
-    titleButton = std::make_unique<BoxTextButton>(uiAccent);
-    titleButton->setButtonText(titleText);
-    titleButton->setTextJustification(juce::Justification::centredLeft);
-    titleButton->onClick = [this]
+    parameter_control_support::configureHiddenSlider(choiceSlider);
+    choiceSlider.setRange(0, 1, 1);
+    valueBox = std::make_unique<ValueBoxComponent>(choiceSlider);
+    valueBox->setNumericControlEnabled(false);
+    valueBox->isDiscreteChoiceEnabled = [this](int index)
     {
-        clearKeyboardFocus(*this);
+        return juce::isPositiveAndBelow(index, int(itemEnabled.size()))
+            && itemEnabled[static_cast<size_t>(index)];
     };
-    titleButton->setLongPressPromptActions([this]
+    valueBox->displayTextProvider = [this]
     {
-        if (onTitleClick)
-        {
-            onTitleClick();
-        }
-        else if (parameter != nullptr)
-        {
-            auto& rangedParameter = static_cast<juce::RangedAudioParameter&>(*parameter);
-            setSelectedChoiceIndex(juce::roundToInt(rangedParameter.convertFrom0to1(rangedParameter.getDefaultValue())),
-                                   true);
-        }
-
-        clearKeyboardFocus(*this);
-    }, [this]
-    {
-        parameter_control_support::assignTitleToHostSlot(*this, titleButton.get(), parameterId, parameter);
-        clearKeyboardFocus(*this);
-    });
-    titleButton->setLongPressPrimaryPromptIcon("refresh");
-
-    comboBox.setEditableText(false);
-    comboBox.setJustificationType(juce::Justification::centred);
-    comboBox.setColour(juce::ComboBox::backgroundColourId, uiGreyDark);
-    comboBox.setColour(juce::ComboBox::outlineColourId, uiGreyLight);
-    comboBox.setColour(juce::ComboBox::textColourId, uiWhite);
-    comboBox.setColour(juce::ComboBox::arrowColourId, uiWhite);
-    comboBox.setColour(juce::ComboBox::buttonColourId, uiGreyDark);
-    comboBox.setWantsKeyboardFocus(false);
-    comboBox.setMouseClickGrabsKeyboardFocus(false);
-    comboBox.setName(titleText);
-    comboBox.setPromptStylePopupEnabled(true);
-
-    if (parameter != nullptr)
-    {
-        choices = parameter->choices;
-
-        if (displayOrderIn.empty())
-        {
-            displayOrderIn.reserve(static_cast<size_t>(choices.size()));
-
-            for (int choiceIndex = 0; choiceIndex < choices.size(); ++choiceIndex)
-                displayOrderIn.push_back(choiceIndex);
-        }
-
-        displayOrder = std::move(displayOrderIn);
-        choiceToDisplayIndex.resize(static_cast<size_t>(choices.size()), 0);
-
-        for (int displayIndex = 0; displayIndex < static_cast<int>(displayOrder.size()); ++displayIndex)
-        {
-            const auto choiceIndex = displayOrder[static_cast<size_t>(displayIndex)];
-
-            if (! juce::isPositiveAndBelow(choiceIndex, choices.size()))
-                continue;
-
-            comboBox.addItem(choices[choiceIndex], displayIndex + 1);
-            choiceToDisplayIndex[static_cast<size_t>(choiceIndex)] = displayIndex;
-        }
-    }
-
-    comboBox.onChange = [this]
-    {
-        if (ignoreCallbacks || parameter == nullptr)
-            return;
-
-        const auto displayIndex = comboBox.getSelectedItemIndex();
-
-        if (! juce::isPositiveAndBelow(displayIndex, static_cast<int>(displayOrder.size())))
-            return;
-
-        attachment->setValueAsCompleteGesture(static_cast<float>(displayOrder[static_cast<size_t>(displayIndex)]));
-
-        if (onValueChanged)
-            onValueChanged();
+        const auto index = juce::roundToInt(valueBox->getDisplayedValue());
+        const auto text = overrideText.isNotEmpty() ? overrideText
+            : juce::isPositiveAndBelow(index, items.size()) ? items[index] : juce::String();
+        return displayFormatter != nullptr ? displayFormatter(index, text) : text;
     };
-
-    if (parameter != nullptr)
+    valueBox->setIdleTextProvider([this] { return titleText; });
+    valueBox->onResetRequested = [this] { resetSelection(); };
+    choiceSlider.onValueChange = [this]
     {
-        attachment = std::make_unique<Attachment>(*parameter,
-                                                  [this] (float newValue)
-                                                  {
-                                                      const auto choiceIndex = juce::roundToInt(newValue);
-
-                                                      if (! juce::isPositiveAndBelow(choiceIndex, static_cast<int>(choiceToDisplayIndex.size())))
-                                                          return;
-
-                                                      const auto displayIndex = choiceToDisplayIndex[static_cast<size_t>(choiceIndex)];
-                                                      const juce::ScopedValueSetter<bool> scopedIgnore(ignoreCallbacks, true);
-                                                      comboBox.setSelectedItemIndex(displayIndex, juce::dontSendNotification);
-                                                  },
-                                                  state.undoManager);
-        attachment->sendInitialUpdate();
-    }
-
-    addAndMakeVisible(*titleButton);
-    addAndMakeVisible(comboBox);
+        auto index = getDisplayIndex();
+        const auto previous = previousIndex;
+        if (updatingSelection) { previousIndex = index; return; }
+        if (!juce::isPositiveAndBelow(index, items.size())) return;
+        if (!itemEnabled[static_cast<size_t>(index)])
+        {
+            const auto direction = index >= previousIndex ? 1 : -1;
+            while (juce::isPositiveAndBelow(index, items.size()) && !itemEnabled[static_cast<size_t>(index)])
+                index += direction;
+            if (!juce::isPositiveAndBelow(index, items.size()))
+            {
+                index = getDisplayIndex();
+                while (juce::isPositiveAndBelow(index, items.size()) && !itemEnabled[static_cast<size_t>(index)])
+                    index -= direction;
+                if (!juce::isPositiveAndBelow(index, items.size())) index = previous;
+            }
+            const juce::ScopedValueSetter<bool> guard(updatingSelection, true);
+            choiceSlider.setValue(index, juce::sendNotificationSync);
+        }
+        if (index == previous) return;
+        previousIndex = index;
+        if (selectionChanged != nullptr) selectionChanged(index);
+    };
+    addChildComponent(choiceSlider);
+    addAndMakeVisible(*valueBox);
 }
 
-int ChoiceControl::getPreferredHeight() const noexcept
+void ChoiceField::setItems(const juce::StringArray& newItems)
 {
-    return rowHeight;
+    items = newItems;
+    itemEnabled.assign(static_cast<size_t>(items.size()), true);
+    const juce::ScopedValueSetter<bool> guard(updatingSelection, true);
+    choiceSlider.setRange(0, juce::jmax(1, items.size() - 1), 1);
+    valueBox->setDiscreteChoiceIndicator(items.size());
 }
+
+void ChoiceField::setDisplayIndex(int index)
+{
+    const juce::ScopedValueSetter<bool> guard(updatingSelection, true);
+    choiceSlider.setValue(juce::jlimit(0, juce::jmax(0, items.size() - 1), index), juce::sendNotificationSync);
+    previousIndex = getDisplayIndex();
+    valueBox->repaint();
+}
+
+int ChoiceField::getDisplayIndex() const noexcept { return juce::roundToInt(choiceSlider.getValue()); }
+
+void ChoiceField::setDisplayItemEnabled(int index, bool enabled)
+{
+    if (juce::isPositiveAndBelow(index, int(itemEnabled.size()))) itemEnabled[static_cast<size_t>(index)] = enabled;
+}
+
+void ChoiceField::resetSelection()
+{
+    if (!interactionEnabled) return;
+    if (onResetRequested != nullptr) { onResetRequested(); return; }
+    setDisplayIndex(defaultDisplayIndex);
+    if (selectionChanged != nullptr) selectionChanged(getDisplayIndex());
+}
+
+void ChoiceField::setInteractionEnabled(bool enabled)
+{
+    interactionEnabled = enabled;
+    valueBox->setInteractionEnabled(enabled);
+}
+
+void ChoiceField::resized()
+{
+    valueBox->setBounds(getLocalBounds());
+    choiceSlider.setBounds(valueBox->getBounds());
+    layoutBottomAccessory(valueBox->getBounds());
+}
+
+void ChoiceField::setIdleLabelVisible(bool visible)
+{
+    if (visible) valueBox->setIdleTextProvider([this] { return titleText; });
+    else valueBox->setIdleTextProvider({});
+}
+
+void ChoiceField::setTitleText(const juce::String& text)
+{
+    if (titleText == text) return;
+    titleText = text;
+    valueBox->repaint();
+}
+
+
+
+void ChoiceField::bindParameterIndicators(juce::AudioProcessorValueTreeState* state, const juce::String& parameterId)
+{
+    if (state != nullptr)
+    {
+        parameter_control_support::bindParameterIndicators(*valueBox, *this, [parameterId] { return parameterId; },
+            [state, parameterId] { return state->getParameter(parameterId); }, *state);
+        getProperties().set(juce::Identifier("oscParameterId"), parameterId);
+    }
+    else
+    {
+        valueBox->bottomIndicators = {};
+        getProperties().remove(juce::Identifier("oscParameterId"));
+    }
+}
+
+ChoiceControl::ChoiceControl(juce::AudioProcessorValueTreeState& state, const juce::String& id,
+                             const juce::String& title)
+    : ChoiceField(title), parameterId(id)
+{
+    selectionChanged = [this] (int index) { commitSelection(index); };
+    choiceSlider.onDragStart = [this]
+    {
+        if (attachment != nullptr) { attachment->beginGesture(); gestureActive = true; }
+    };
+    choiceSlider.onDragEnd = [this]
+    {
+        if (gestureActive && attachment != nullptr) attachment->endGesture();
+        gestureActive = false;
+    };
+    rebind(state);
+    valueBox->setIdleTextProvider([this] { return titleText; });
+}
+
+ChoiceControl::~ChoiceControl() { detach(); }
 
 void ChoiceControl::detach() noexcept
 {
+    valueBox->setInteractionEnabled(false);
+    valueBox->bottomIndicators = {};
+    if (gestureActive && attachment != nullptr) attachment->endGesture();
+    gestureActive = false;
     attachment.reset();
     parameter = nullptr;
+    boundState = nullptr;
 }
 
 void ChoiceControl::rebind(juce::AudioProcessorValueTreeState& state)
 {
-    attachment.reset();
+    detach();
+    boundState = &state;
     parameter = dynamic_cast<juce::AudioParameterChoice*>(state.getParameter(parameterId));
+    parameter_control_support::bindParameterIndicators(*valueBox, *this,
+        [this] { return parameterId; }, [this] { return parameter; }, state);
     jassert(parameter != nullptr);
-
-    if (parameter == nullptr)
-        return;
-
-    if (displayOrder.empty())
+    if (parameter == nullptr) return;
+    choices = parameter->choices;
+    setItems(choices);
+    const auto defaultIndex = juce::roundToInt(parameter->convertFrom0to1(static_cast<juce::RangedAudioParameter&>(*parameter).getDefaultValue()));
+    defaultDisplayIndex = defaultIndex;
+    attachment = std::make_unique<Attachment>(*parameter, [this] (float value)
     {
-        displayOrder.reserve(static_cast<size_t>(parameter->choices.size()));
-
-        for (int choiceIndex = 0; choiceIndex < parameter->choices.size(); ++choiceIndex)
-            displayOrder.push_back(choiceIndex);
-    }
-
-    if (choices.size() != parameter->choices.size())
-        choices = parameter->choices;
-
-    choiceToDisplayIndex.assign(static_cast<size_t>(parameter->choices.size()), 0);
-
-    const juce::ScopedValueSetter<bool> scopedIgnore(ignoreCallbacks, true);
-    comboBox.clear(juce::dontSendNotification);
-
-    for (int displayIndex = 0; displayIndex < static_cast<int>(displayOrder.size()); ++displayIndex)
-    {
-        const auto choiceIndex = displayOrder[static_cast<size_t>(displayIndex)];
-
-        if (! juce::isPositiveAndBelow(choiceIndex, parameter->choices.size()))
-            continue;
-
-        comboBox.addItem(choices[choiceIndex], displayIndex + 1);
-        choiceToDisplayIndex[static_cast<size_t>(choiceIndex)] = displayIndex;
-    }
-
-    attachment = std::make_unique<Attachment>(*parameter,
-                                              [this] (float newValue)
-                                              {
-                                                  const auto choiceIndex = juce::roundToInt(newValue);
-
-                                                  if (! juce::isPositiveAndBelow(choiceIndex, static_cast<int>(choiceToDisplayIndex.size())))
-                                                      return;
-
-                                                  const auto displayIndex = choiceToDisplayIndex[static_cast<size_t>(choiceIndex)];
-                                                  const juce::ScopedValueSetter<bool> scopedAttachmentIgnore(ignoreCallbacks, true);
-                                                  comboBox.setSelectedItemIndex(displayIndex, juce::dontSendNotification);
-                                              },
-                                              state.undoManager);
+        setDisplayIndex(juce::roundToInt(value));
+    }, state.undoManager);
     attachment->sendInitialUpdate();
-    repaint();
+    valueBox->setInteractionEnabled(interactionEnabled);
 }
 
 int ChoiceControl::getSelectedChoiceIndex() const noexcept
 {
-    const auto displayIndex = comboBox.getSelectedItemIndex();
-
-    if (! juce::isPositiveAndBelow(displayIndex, static_cast<int>(displayOrder.size())))
-        return 0;
-
-    return displayOrder[static_cast<size_t>(displayIndex)];
+    return getDisplayIndex();
 }
 
-void ChoiceControl::setSelectedChoiceIndex(const int choiceIndex, const bool sendNotification)
+void ChoiceControl::commitSelection(int displayIndex)
 {
-    if (! juce::isPositiveAndBelow(choiceIndex, static_cast<int>(choiceToDisplayIndex.size())))
-        return;
-
-    const auto displayIndex = choiceToDisplayIndex[static_cast<size_t>(choiceIndex)];
-    const juce::ScopedValueSetter<bool> scopedIgnore(ignoreCallbacks, true);
-    comboBox.setSelectedItemIndex(displayIndex,
-                                  sendNotification ? juce::sendNotificationSync
-                                                   : juce::dontSendNotification);
-
-    if (sendNotification && attachment != nullptr)
-        attachment->setValueAsCompleteGesture(static_cast<float>(choiceIndex));
-
-    if (sendNotification && onValueChanged)
-        onValueChanged();
+    if (attachment == nullptr || !juce::isPositiveAndBelow(displayIndex, choices.size())) return;
+    const auto index = static_cast<float>(displayIndex);
+    if (gestureActive) attachment->setValueAsPartOfGesture(index);
+    else attachment->setValueAsCompleteGesture(index);
+    if (onValueChanged != nullptr) onValueChanged();
 }
 
-void ChoiceControl::setChoices(const juce::StringArray& choicesIn)
+void ChoiceControl::setSelectedChoiceIndex(int index, bool sendNotification)
 {
-    if (parameter == nullptr || choicesIn.size() != choices.size())
-        return;
-
-    const auto selectedChoiceIndex = getSelectedChoiceIndex();
-    choices = choicesIn;
-
-    const juce::ScopedValueSetter<bool> scopedIgnore(ignoreCallbacks, true);
-    comboBox.clear(juce::dontSendNotification);
-
-    for (int displayIndex = 0; displayIndex < static_cast<int>(displayOrder.size()); ++displayIndex)
-    {
-        const auto choiceIndex = displayOrder[static_cast<size_t>(displayIndex)];
-
-        if (! juce::isPositiveAndBelow(choiceIndex, choices.size()))
-            continue;
-
-        comboBox.addItem(choices[choiceIndex], displayIndex + 1);
-    }
-
-    if (juce::isPositiveAndBelow(selectedChoiceIndex, static_cast<int>(choiceToDisplayIndex.size())))
-        comboBox.setSelectedItemIndex(choiceToDisplayIndex[static_cast<size_t>(selectedChoiceIndex)], juce::dontSendNotification);
+    if (!juce::isPositiveAndBelow(index, choices.size())) return;
+    setDisplayIndex(index);
+    if (sendNotification) commitSelection(index);
 }
 
-void ChoiceControl::setChoiceEnabled(const int choiceIndex, const bool shouldEnable)
+void ChoiceControl::setChoices(const juce::StringArray& newChoices)
 {
-    if (! juce::isPositiveAndBelow(choiceIndex, static_cast<int>(choiceToDisplayIndex.size())))
-        return;
-
-    const auto displayIndex = choiceToDisplayIndex[static_cast<size_t>(choiceIndex)];
-
-    if (! juce::isPositiveAndBelow(displayIndex, static_cast<int>(displayOrder.size())))
-        return;
-
-    comboBox.setItemEnabled(displayIndex + 1, shouldEnable);
+    if (newChoices == choices || newChoices.size() != choices.size()) return;
+    const auto selected = getSelectedChoiceIndex();
+    choices = newChoices;
+    setItems(choices);
+    setSelectedChoiceIndex(selected, false);
 }
 
-void ChoiceControl::setInteractionEnabled(const bool shouldEnable)
+void ChoiceControl::setChoiceEnabled(int index, bool enabled)
 {
-    interactionEnabled = shouldEnable;
-
-    if (titleButton != nullptr)
-    {
-        titleButton->setEnabled(shouldEnable);
-        titleButton->setInteractionOutlineEnabled(shouldEnable);
-    }
-
-    comboBox.setEnabled(true);
-    comboBox.setAlpha(1.0f);
-    comboBox.setInterceptsMouseClicks(shouldEnable, shouldEnable);
-    const auto displayText = overrideText.isNotEmpty() ? overrideText : comboBox.getText();
-    comboBox.setColour(juce::ComboBox::textColourId,
-                       shouldEnable ? getDisplayTextColour(displayText) : uiGreyLight);
+    setDisplayItemEnabled(index, enabled);
 }
 
 void ChoiceControl::setOverrideText(const juce::String& text)
 {
-    overrideText = text.trim().isNotEmpty() ? text.trim() : juce::String("OFF");
-    comboBox.setColour(juce::ComboBox::textColourId, getDisplayTextColour(overrideText));
-
-    const juce::ScopedValueSetter<bool> scopedIgnore(ignoreCallbacks, true);
-    comboBox.setText(overrideText, juce::dontSendNotification);
+    overrideText = text.trim().isEmpty() ? juce::String("OFF") : text.trim();
+    valueBox->repaint();
 }
 
-void ChoiceControl::clearOverrideText()
+void ChoiceControl::clearOverrideText() { overrideText.clear(); valueBox->repaint(); }
+
+LocalChoiceControl::LocalChoiceControl(const juce::String& title, const juce::StringArray& choices, int defaultIndex)
+    : ChoiceField(title)
 {
-    if (overrideText.isEmpty())
-        return;
-
-    overrideText.clear();
-    comboBox.setColour(juce::ComboBox::textColourId, uiWhite);
-
-    if (parameter == nullptr)
-        return;
-
-    const auto choiceIndex = parameter->getIndex();
-
-    if (! juce::isPositiveAndBelow(choiceIndex, static_cast<int>(choiceToDisplayIndex.size())))
-        return;
-
-    const auto displayIndex = choiceToDisplayIndex[static_cast<size_t>(choiceIndex)];
-    const juce::ScopedValueSetter<bool> scopedIgnore(ignoreCallbacks, true);
-    comboBox.setSelectedItemIndex(displayIndex, juce::dontSendNotification);
+    setItems(choices);
+    defaultDisplayIndex = defaultIndex;
+    setDisplayIndex(defaultIndex);
+    selectionChanged = [this] (int) { if (onValueChanged != nullptr) onValueChanged(); };
+    valueBox->setIdleTextProvider([this] { return titleText; });
 }
 
-void ChoiceControl::setTitleWidthOverride(const int width) noexcept
+void LocalChoiceControl::setSelectedChoiceIndex(int index, bool sendNotification)
 {
-    titleWidthOverride = width;
-    resized();
+    setDisplayIndex(index);
+    if (sendNotification && onValueChanged != nullptr) onValueChanged();
 }
 
-void ChoiceControl::setValueLeadingInset(const int width) noexcept
+void LocalChoiceControl::setChoices(const juce::StringArray& choices)
 {
-    valueLeadingInset = juce::jmax(0, width);
-    resized();
+    if (items == choices) return;
+    const auto index = getDisplayIndex();
+    setItems(choices);
+    setDisplayIndex(index);
 }
 
-void ChoiceControl::setTitleAccessory(juce::Component* accessory)
+PushControl::PushControl(const juce::String& title, bool showStateIndicators) : ChoiceField(title)
 {
-    titleAccessory = accessory;
-    if (titleAccessory != nullptr) addAndMakeVisible(*titleAccessory);
-    resized();
-}
-
-void ChoiceControl::resized()
-{
-    auto row = getLocalBounds();
-    const auto titleWidth = titleWidthOverride >= 0 ? juce::jmin(titleWidthOverride, row.getWidth())
-        : getScaledParameterNameWidth(row.getWidth());
-    auto titleBounds = row.removeFromLeft(titleWidth);
-    if (titleAccessory != nullptr)
+    setItems({ "OFF", "ON" });
+    if (!showStateIndicators) valueBox->setDiscreteChoiceIndicator(0);
+    setDisplayIndex(0);
+    valueBox->setMomentaryAction([this]
     {
-        titleAccessory->setBounds(titleBounds.removeFromRight(juce::jmin(iconControlSize, titleBounds.getWidth())));
-        titleBounds.removeFromRight(juce::jmin(parameterGap, titleBounds.getWidth()));
-    }
-    titleButton->setBounds(titleBounds);
-    if (titleWidth > 0) row.removeFromLeft(parameterGap);
-    row.removeFromLeft(juce::jmin(valueLeadingInset, row.getWidth()));
-    comboBox.setBounds(row);
-}
-
-LocalChoiceControl::LocalChoiceControl(const juce::String& titleText,
-                                       const juce::StringArray& choices,
-                                       const int defaultChoiceIndexIn)
-    : defaultChoiceIndex(defaultChoiceIndexIn)
-{
-    setWantsKeyboardFocus(false);
-    setMouseClickGrabsKeyboardFocus(false);
-
-    titleButton = std::make_unique<BoxTextButton>(uiAccent);
-    titleButton->setButtonText(titleText);
-    titleButton->setTextJustification(juce::Justification::centredLeft);
-    titleButton->onClick = [this]
-    {
-        clearKeyboardFocus(*this);
-    };
-    titleButton->setLongPressPromptActions([this]
-    {
-        setSelectedChoiceIndex(defaultChoiceIndex, true);
+        const auto trigger = onTrigger;
+        if (trigger != nullptr) trigger();
     });
-    titleButton->setLongPressPrimaryPromptIcon("refresh");
-
-    comboBox.setEditableText(false);
-    comboBox.setJustificationType(juce::Justification::centred);
-    comboBox.setColour(juce::ComboBox::backgroundColourId, uiGreyDark);
-    comboBox.setColour(juce::ComboBox::outlineColourId, uiGreyLight);
-    comboBox.setColour(juce::ComboBox::textColourId, uiWhite);
-    comboBox.setColour(juce::ComboBox::arrowColourId, uiWhite);
-    comboBox.setColour(juce::ComboBox::buttonColourId, uiGreyDark);
-    comboBox.setWantsKeyboardFocus(false);
-    comboBox.setMouseClickGrabsKeyboardFocus(false);
-    comboBox.setName(titleText);
-    comboBox.setPromptStylePopupEnabled(true);
-
-    for (auto choiceIndex = 0; choiceIndex < choices.size(); ++choiceIndex)
-        comboBox.addItem(choices[choiceIndex], choiceIndex + 1);
-
-    comboBox.setSelectedItemIndex(juce::jlimit(0, juce::jmax(0, choices.size() - 1), defaultChoiceIndex),
-                                  juce::dontSendNotification);
-    comboBox.onChange = [this]
-    {
-        if (! ignoreCallbacks && onValueChanged)
-            onValueChanged();
-    };
-
-    addAndMakeVisible(*titleButton);
-    addAndMakeVisible(comboBox);
-}
-
-int LocalChoiceControl::getPreferredHeight() const noexcept
-{
-    return rowHeight;
-}
-
-int LocalChoiceControl::getSelectedChoiceIndex() const noexcept
-{
-    return juce::jmax(0, comboBox.getSelectedItemIndex());
-}
-
-void LocalChoiceControl::setSelectedChoiceIndex(const int choiceIndex, const bool sendNotification)
-{
-    const auto clampedChoiceIndex = juce::jlimit(0, juce::jmax(0, comboBox.getNumItems() - 1), choiceIndex);
-    const juce::ScopedValueSetter<bool> scopedIgnore(ignoreCallbacks, true);
-    comboBox.setSelectedItemIndex(clampedChoiceIndex, juce::dontSendNotification);
-
-    if (sendNotification && onValueChanged)
-        onValueChanged();
-}
-
-void LocalChoiceControl::setInteractionEnabled(const bool shouldEnable)
-{
-    titleButton->setEnabled(shouldEnable);
-    comboBox.setEnabled(true);
-    comboBox.setAlpha(1.0f);
-    comboBox.setInterceptsMouseClicks(shouldEnable, shouldEnable);
-    comboBox.setColour(juce::ComboBox::textColourId, shouldEnable ? uiWhite : uiGreyLight);
-    comboBox.setColour(juce::ComboBox::arrowColourId, shouldEnable ? uiWhite : uiGreyLight);
-}
-
-void LocalChoiceControl::resized()
-{
-    auto row = getLocalBounds();
-    const auto titleWidth = getScaledParameterNameWidth(row.getWidth());
-    titleButton->setBounds(row.removeFromLeft(titleWidth));
-    row.removeFromLeft(parameterGap);
-    comboBox.setBounds(row);
-}
-
-void LocalChoiceControl::setChoicePromptPresenter(ChoicePromptPresenter presenter)
-{
-    comboBox.setChoicePromptPresenter(std::move(presenter));
-}
-
-juce::Rectangle<int> LocalChoiceControl::getValueBounds() const noexcept
-{
-    return getLocalArea(&comboBox, comboBox.getLocalBounds());
 }

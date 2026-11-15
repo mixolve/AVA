@@ -157,10 +157,10 @@ void DynSpectralProcessor::DynamicProcessor::processLinkedSpectrum(
             auto tensionGainDb = 0.0f;
 
             auto targetGainDb = 0.0f;
-            if (std::abs(smoothedTension) >= 0.005f && level < threshold)
+            if (std::abs(settings.tension) >= 0.005f && level < threshold)
             {
                 const auto floor = juce::jmin(settings.tensionFloorDb, threshold);
-                const auto shapedLevel = dyn_spectral_tension::shape(level, threshold, floor, smoothedTension);
+                const auto shapedLevel = dyn_spectral_tension::shape(level, threshold, floor, settings.tension);
                 targetGainDb = shapedLevel - level;
                 if (level <= floor)
                     targetGainDb += juce::Decibels::gainToDecibels(settings.tensionHysteresis, -240.0f);
@@ -169,7 +169,7 @@ void DynSpectralProcessor::DynamicProcessor::processLinkedSpectrum(
             auto& direction = tensionDirections[path][static_cast<size_t>(bin)];
             auto& tensionLatch = tensionThresholdHysteresis[path][static_cast<size_t>(bin)];
             targetGainDb = tensionLatch.process(targetGainDb,
-                threshold - level, std::abs(smoothedTension) >= 0.005f ? settings.thresholdHysteresisDb : 0.0f);
+                threshold - level, std::abs(settings.tension) >= 0.005f ? settings.thresholdHysteresisDb : 0.0f);
             const auto currentTensionGainDb = tensionEnvelope.value * 240.0f * direction;
             if (tensionLatch.active && level > threshold && std::abs(currentTensionGainDb) > std::abs(targetGainDb))
                 targetGainDb = currentTensionGainDb;
@@ -181,11 +181,11 @@ void DynSpectralProcessor::DynamicProcessor::processLinkedSpectrum(
                 direction = nextDirection;
             }
             const auto amount = tensionEnvelope.advance(
-                juce::jmin(1.0f, std::abs(targetGainDb) / 240.0f), frameMs, settings.delayMs, settings.attackMs,
-                settings.holdMs, releaseMs, settings.attackCurve, settings.releaseCurve, settings.releaseType, settings.autoRelease, memoryCoefficient, settings.releaseDepth, std::abs(targetGainDb) / 12.0f);
+                juce::jmin(1.0f, std::abs(targetGainDb) / 240.0f), frameMs, settings.attackMs,
+                settings.holdMs, releaseMs, settings.attackCurve, settings.releaseCurve, settings.autoRelease, memoryCoefficient, settings.releaseDepth, std::abs(targetGainDb) / 12.0f);
             tensionGainDb = amount * 240.0f * direction;
 
-            const auto requestedReduction = calculateReduction(level + tensionGainDb, threshold, settings.ratio, settings.kneeDb, settings.progression, settings.progressionSpan);
+            const auto requestedReduction = calculateReduction(level + tensionGainDb, threshold, settings.ratio, settings.kneeDb);
             auto& envelope = spectralEnvelopes[path][static_cast<size_t>(bin)];
             auto& thresholdLatch = thresholdHysteresis[path][static_cast<size_t>(bin)];
             const auto thresholdDistance = level + tensionGainDb - (threshold - settings.kneeDb * 0.5f);
@@ -198,28 +198,26 @@ void DynSpectralProcessor::DynamicProcessor::processLinkedSpectrum(
             if (increasing)
             {
                 envelope.holdMs = settings.holdMs;
+                envelope.holdConfiguredMs = settings.holdMs;
                 if (!envelope.attacking)
                 {
                     envelope.start = envelope.value;
                     envelope.elapsedMs = 0.0f;
-                    envelope.delayMs = settings.delayMs;
                 }
                 envelope.attacking = true;
                 envelope.target = desired;
-                envelope.delayMs = juce::jmax(0.0f, envelope.delayMs - frameMs);
-                if (envelope.delayMs <= 0.0f)
-                {
-                    envelope.elapsedMs += frameMs;
-                    const auto position =
-                        settings.attackMs <= 0.0f ? 1.0f : juce::jlimit(0.0f, 1.0f, envelope.elapsedMs / settings.attackMs);
-                    const auto shape = std::pow(position, std::exp2(-settings.attackCurve * 0.03f));
-                    envelope.value = envelope.start + (envelope.target - envelope.start) * shape;
-                }
+                envelope.elapsedMs += frameMs;
+                const auto position =
+                    settings.attackMs <= 0.0f ? 1.0f : juce::jlimit(0.0f, 1.0f, envelope.elapsedMs / settings.attackMs);
+                const auto shape = std::pow(position, std::exp2(-settings.attackCurve * 0.03f));
+                envelope.value = envelope.start + (envelope.target - envelope.start) * shape;
             }
             else if (std::abs(desired - envelope.value) > 0.00001f)
             {
-                envelope.delayMs = 0.0f;
-                if (envelope.attacking || std::abs(envelope.target - desired) > 0.00001f)
+                // A moving detector target is NOT a new release event.
+                // Restarting elapsedMs at every FFT hop makes HOLD/RELEASE
+                // depend on bin fluctuations and causes discontinuous timing.
+                if (envelope.attacking)
                 {
                     envelope.start = envelope.value;
                     envelope.elapsedMs = 0.0f;
@@ -227,6 +225,12 @@ void DynSpectralProcessor::DynamicProcessor::processLinkedSpectrum(
                 }
                 envelope.attacking = false;
                 envelope.target = desired;
+                // Retarget the active HOLD countdown when the user edits HOLD.
+                // Do not start a new hold if this release has already begun.
+                if (envelope.holdMs > 0.0f)
+                    envelope.holdMs = juce::jmax(0.0f,
+                        envelope.holdMs + settings.holdMs - envelope.holdConfiguredMs);
+                envelope.holdConfiguredMs = settings.holdMs;
                 if (envelope.holdMs > 0.0f)
                     envelope.holdMs = juce::jmax(0.0f, envelope.holdMs - frameMs);
                 else
@@ -237,8 +241,7 @@ void DynSpectralProcessor::DynamicProcessor::processLinkedSpectrum(
                                               ? 1.0f
                                               : juce::jlimit(0.0f, 1.0f, envelope.elapsedMs / duration);
                     const auto shape = std::pow(position, std::exp2(-settings.releaseCurve * 0.03f));
-                    const auto destination = envelope.target * settings.releaseType;
-                    const auto released = envelope.start + (destination - envelope.start) * shape;
+                    const auto released = envelope.start - envelope.start * shape;
                     envelope.value =
                         std::copysign(juce::jmax(std::abs(envelope.target), std::abs(released)), envelope.start);
                 }
@@ -247,20 +250,24 @@ void DynSpectralProcessor::DynamicProcessor::processLinkedSpectrum(
             {
                 // A sustained signal reloads HOLD, so its timer starts when the detector falls.
                 envelope.holdMs = settings.holdMs;
+                envelope.holdConfiguredMs = settings.holdMs;
                 envelope.attacking = false;
-                envelope.delayMs = 0.0f;
             }
             detectorGains[path] = juce::Decibels::decibelsToGain(
                 -limitReductionDb(envelope.value - tensionGainDb, settings.rangeDb, settings.rangeCurve));
         }
-        const auto gain = dyn::detector::mix(detectorGains[dyn::detector::peak], detectorGains[dyn::detector::rms], settings.rmsMix);
+        auto gain = dyn::detector::mix(detectorGains[dyn::detector::peak], detectorGains[dyn::detector::rms], settings.rmsMix);
+        const auto lookaheadFrames = juce::jmax(0, juce::roundToInt(
+            settings.lookaheadMs * 0.001 * sampleRate / juce::jmax(1, currentHopSize)));
+        const auto alignedGain = static_cast<float>(lookaheadGainCurves[size_t(bin)].process(
+            gain, lookaheadFrames, settings.lookaheadCurve * 0.01f));
 
         for (int channel = 0; channel < channelsToUse; ++channel)
         {
             auto& bins = channelStates[static_cast<size_t>(channel)].frequencyData;
-            bins[static_cast<size_t>(bin)] *= gain;
+            bins[static_cast<size_t>(bin)] *= alignedGain;
             if (bin > 0 && bin < fftSize / 2)
-                bins[static_cast<size_t>(fftSize - bin)] *= gain;
+                bins[static_cast<size_t>(fftSize - bin)] *= alignedGain;
         }
     }
 }
@@ -336,7 +343,7 @@ void DynSpectralProcessor::DynamicProcessor::processCorrelationSpectrum(
                     dyn::detector::effectiveCrest(settings.correlationPeakCrest, settings.rmsMix)) : commonThreshold;
             const auto detectorDistance = threshold - keyCorrelation;
             const auto desiredCorrelationChange = threshold <= -1.0f ? 0.0f
-                : calculateReduction(detectorDistance, 0.0f, settings.ratio, settings.correlationKnee, settings.progression, settings.progressionSpan);
+                : calculateReduction(detectorDistance, 0.0f, settings.ratio, settings.correlationKnee);
             const auto releaseMs = path == dyn::detector::peak ? settings.releasePeakMs : settings.releaseRmsMs;
             auto& envelope = correlationEnvelopes[path][static_cast<size_t>(bin)];
             const auto openingCorrelation = juce::jlimit(-1.0f, 1.0f, threshold + settings.correlationKnee * 0.5f);
@@ -352,16 +359,16 @@ void DynSpectralProcessor::DynamicProcessor::processCorrelationSpectrum(
             if (detectorDistance > 1.0e-7f && desiredAmount >= envelope.value - 1.0e-5f)
                 referenceDistance = detectorDistance;
             const auto amount = envelope.advance(desiredAmount, 1000.0f * static_cast<float>(currentHopSize / sampleRate),
-                                                 settings.delayMs, settings.attackMs, settings.holdMs, releaseMs,
-                                                 settings.attackCurve, settings.releaseCurve, settings.releaseType, settings.autoRelease, memoryCoefficient, settings.releaseDepth, std::abs(desiredCorrelationChange));
+                                                 settings.attackMs, settings.holdMs, releaseMs,
+                                                 settings.attackCurve, settings.releaseCurve, settings.autoRelease, memoryCoefficient, settings.releaseDepth, std::abs(desiredCorrelationChange));
             const auto response = juce::jlimit(0.0f, 1.0f, 2.0f * amount / juce::jmax(1.0e-7f, referenceDistance));
             const auto shapedKey = dyn_spectral_tension::correlation(
-                keyCorrelation, threshold, settings.correlationTensionFloor, smoothedTension, settings.tensionHysteresis);
+                keyCorrelation, threshold, settings.correlationTensionFloor, settings.tension, settings.tensionHysteresis);
             auto& tensionEnvelope = tensionEnvelopes[path][static_cast<size_t>(bin)];
             auto& direction = tensionDirections[path][static_cast<size_t>(bin)];
             auto keyChange = tensionThresholdHysteresis[path][static_cast<size_t>(bin)].process(
                 shapedKey - keyCorrelation, threshold - keyCorrelation,
-                std::abs(smoothedTension) >= 0.005f ? juce::jmin(settings.correlationThresholdHysteresis, 1.0f - threshold) : 0.0f);
+                std::abs(settings.tension) >= 0.005f ? juce::jmin(settings.correlationThresholdHysteresis, 1.0f - threshold) : 0.0f);
             const auto currentTensionChange = tensionEnvelope.value * 2.0f * direction;
             if (tensionThresholdHysteresis[path][static_cast<size_t>(bin)].active && keyCorrelation > threshold
                 && std::abs(currentTensionChange) > std::abs(keyChange))
@@ -375,8 +382,8 @@ void DynSpectralProcessor::DynamicProcessor::processCorrelationSpectrum(
             }
             const auto tensionAmount = tensionEnvelope.advance(
                 std::abs(keyChange) * 0.5f, 1000.0f * static_cast<float>(currentHopSize / sampleRate),
-                settings.delayMs, settings.attackMs, settings.holdMs, releaseMs, settings.attackCurve,
-                settings.releaseCurve, settings.releaseType, settings.autoRelease, memoryCoefficient, settings.releaseDepth, std::abs(keyChange));
+                settings.attackMs, settings.holdMs, releaseMs, settings.attackCurve,
+                settings.releaseCurve, settings.autoRelease, memoryCoefficient, settings.releaseDepth, std::abs(keyChange));
             const auto baseCorrelation = juce::jlimit(-1.0f, 1.0f, signedCorrelation + 2.0f * tensionAmount * direction);
             auto baseDistance = juce::jmax(0.0f, threshold - baseCorrelation);
             auto& retainedDistance = correlationActionDistances[path][static_cast<size_t>(bin)];
@@ -394,7 +401,14 @@ void DynSpectralProcessor::DynamicProcessor::processCorrelationSpectrum(
         }
         const auto envelopedTarget = dyn::detector::mix(
             detectorTargets[dyn::detector::peak], detectorTargets[dyn::detector::rms], settings.rmsMix);
-        const auto appliedRotation = currentAngle - 0.5f * std::acos(envelopedTarget);
+        // Correlation moves toward -1 instead of reducing linear gain. Map
+        // [-1,+1] onto [0,1], shape with the same lookahead envelope, then
+        // map back for the existing correlation rotation.
+        const auto lookaheadFrames = juce::jmax(0, juce::roundToInt(
+            settings.lookaheadMs * 0.001 * sampleRate / juce::jmax(1, currentHopSize)));
+        const auto alignedTarget = 2.0f * static_cast<float>(lookaheadGainCurves[size_t(bin)].process(
+            0.5f * (envelopedTarget + 1.0f), lookaheadFrames, settings.lookaheadCurve * 0.01f)) - 1.0f;
+        const auto appliedRotation = currentAngle - 0.5f * std::acos(juce::jlimit(-1.0f, 1.0f, alignedTarget));
 
         if (std::abs(appliedRotation) <= 1.0e-7f || midSidePower <= 1.0e-12f)
             continue;
@@ -468,63 +482,28 @@ void DynSpectralProcessor::DynamicProcessor::updateAdaptiveReferences(
     const std::array<double, maxChannels>& accumulatedDetectorPower, const double accumulatedCorrelation,
     const double accumulatedCorrelationWeight) noexcept
 {
-    const auto frameDurationSeconds = static_cast<float>(hopSize) / static_cast<float>(sampleRate);
-    const auto frameDurationMs = 1000.0f * frameDurationSeconds;
-    const auto adaptiveAttackCoefficient = calculateTimeCoefficient(settings.adaptiveAttackMs, frameDurationSeconds);
-    const auto adaptiveReleaseCoefficient = calculateTimeCoefficient(settings.adaptiveReleaseMs, frameDurationSeconds);
     const auto processedBinCount = juce::jmax(1, (fftSize / 2) + 1);
-    const auto updateAdaptiveReference =
-        [adaptiveAttackCoefficient, adaptiveReleaseCoefficient, frameDurationMs,
-         holdMs = settings.adaptiveHoldMs](float& current, const float desired, float& holdRemainingMs)
-    {
-        if (desired >= current)
-        {
-            current = adaptiveAttackCoefficient * current + (1.0f - adaptiveAttackCoefficient) * desired;
-            holdRemainingMs = holdMs;
-            return;
-        }
+    const auto detectorPower = !settings.correlationMode && channelsToUse > 1
+                                   ? juce::jmax(accumulatedDetectorPower[0], accumulatedDetectorPower[1])
+                                   : accumulatedDetectorPower[0];
 
-        if (holdRemainingMs > 0.0f)
-        {
-            holdRemainingMs = juce::jmax(0.0f, holdRemainingMs - frameDurationMs);
-            return;
-        }
+    // One FFT frame advances the RMS window by hopSize samples. Round the
+    // requested duration to the closest whole hop (the spectral time resolution).
+    const auto durationMs = juce::jlimit(50.0f, 10000.0f, settings.adaptiveTimeMs);
+    const auto requestedFrames = static_cast<std::size_t>(std::max(1.0,
+        std::round(static_cast<double>(durationMs) * 0.001 * sampleRate / juce::jmax(1, hopSize))));
+    const auto averaged = adaptiveFrameWindow.push(
+        {detectorPower, settings.correlationMode ? accumulatedCorrelation : 0.0,
+         settings.correlationMode ? accumulatedCorrelationWeight : 0.0}, requestedFrames);
 
-        current = adaptiveReleaseCoefficient * current + (1.0f - adaptiveReleaseCoefficient) * desired;
-    };
-
-    auto detectorPower = !settings.correlationMode && channelsToUse > 1
-                             ? juce::jmax(accumulatedDetectorPower[0], accumulatedDetectorPower[1])
-                             : accumulatedDetectorPower[0];
-
-    {
-        const auto coefficient = calculateTimeCoefficient(settings.adaptiveTimeMs, frameDurationSeconds);
-        spectralAdaptivePower =
-            coefficient * spectralAdaptivePower + (1.0f - coefficient) * static_cast<float>(detectorPower);
-    }
-    detectorPower = spectralAdaptivePower;
-
-    const auto detectorRms = std::sqrt(detectorPower / static_cast<double>(processedBinCount));
-    const auto desiredReferenceDb =
+    const auto detectorRms = std::sqrt(juce::jmax(0.0, averaged.power) / static_cast<double>(processedBinCount));
+    linkedAdaptiveReferenceDb =
         juce::Decibels::gainToDecibels(static_cast<float>(detectorRms), detectorMinDecibels);
-    updateAdaptiveReference(linkedAdaptiveReferenceDb, desiredReferenceDb, linkedAdaptiveHoldRemainingMs);
 
-    if (settings.correlationMode && accumulatedCorrelationWeight > 1.0e-12)
-    {
-        auto crossPower = accumulatedCorrelation;
-        auto totalPower = accumulatedCorrelationWeight;
+    if (settings.correlationMode && averaged.correlationWeight > 1.0e-12)
+        correlationAdaptiveReference = juce::jlimit(-1.0f, 1.0f,
+            static_cast<float>(averaged.correlationCross / averaged.correlationWeight));
 
-        const auto coefficient = calculateTimeCoefficient(settings.adaptiveTimeMs, frameDurationSeconds);
-        correlationAdaptiveCrossPower = coefficient * correlationAdaptiveCrossPower + (1.0f - coefficient) * crossPower;
-        correlationAdaptivePower = coefficient * correlationAdaptivePower + (1.0f - coefficient) * totalPower;
-        crossPower = correlationAdaptiveCrossPower;
-        totalPower = correlationAdaptivePower;
-
-        const auto desiredCorrelationReference =
-            juce::jlimit(-1.0f, 1.0f, static_cast<float>(crossPower / juce::jmax(1.0e-12, totalPower)));
-        updateAdaptiveReference(correlationAdaptiveReference, desiredCorrelationReference,
-                                correlationAdaptiveHoldRemainingMs);
-    }
 }
 
 void DynSpectralProcessor::DynamicProcessor::processFrame(const int channelsToUse, const ProcessingSettings& settings,
@@ -534,33 +513,13 @@ void DynSpectralProcessor::DynamicProcessor::processFrame(const int channelsToUs
 
     if (settings.correlationMode != lastWasCorrelationMode)
     {
-        for (auto& bank : thresholdHysteresis)
-            bank.fill({});
-        for (auto& bank : tensionThresholdHysteresis)
-            bank.fill({});
-        for (auto& bank : correlationEnvelopes)
-            bank.fill({});
-        for (auto& bank : tensionEnvelopes)
-            bank.fill({});
-        for (auto& bank : tensionDirections)
-            bank.fill({});
-        for (auto& bank : correlationResponseDistances)
-            bank.fill({});
-        for (auto& bank : correlationActionDistances)
-            bank.fill({});
-        smoothedTension = 0.0f;
-        correlationRmsCrossPower.fill(0.0f);
-        correlationRmsPower.fill(0.0f);
-        correlationAdaptiveCrossPower = correlationAdaptivePower = 0.0;
-        correlationAdaptiveReference = -1.0f;
-        correlationAdaptiveHoldRemainingMs = 0.0f;
+        resetCorrelationState();
+        adaptiveFrameWindow.reset();
+        for (auto& curve : lookaheadGainCurves) curve.reset();
+        // FREQ and CORR have distinct envelope semantics. Do not carry a
+        // previous FREQ sustain ramp into a later FREQ session.
         lastWasCorrelationMode = settings.correlationMode;
     }
-
-    const auto frameDurationSeconds = static_cast<float>(hopSize) / static_cast<float>(sampleRate);
-
-    const auto coefficient = calculateTimeCoefficient(5.0f, frameDurationSeconds);
-    smoothedTension = coefficient * smoothedTension + (1.0f - coefficient) * settings.tension;
 
     const auto publishedThreshold = calculatePublishedThreshold(settings);
 

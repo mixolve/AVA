@@ -1,40 +1,242 @@
 #pragma once
 
 #include "Processor.h"
-#include "AnimationSettings.h"
-#include "../modules/tls/BlockOrder.h"
-#include "../modules/tls/GainOrder.h"
+#include "../modules/shared/BlockCatalog.h"
+#include "../modules/gain/GainOrder.h"
 #include "SvgExport.h"
+#include "Style.h"
+#include "Controls.h"
+#include "ControlSearch.h"
 #include "../modules/eql/Processor.h"
 
 #include <JuceHeader.h>
 #include <array>
+#include <cmath>
 #include <functional>
 #include <memory>
+#include <map>
 #include <vector>
 
 class BoxTextButton;
-class BurningFilmArtwork;
 class ChoiceControl;
 class LocalChoiceControl;
-class LocalParameterControl;
+class PushControl;
 class ParameterControl;
 class RoutingPanel;
 class OscPanel;
+class ModuleList;
 
-class BackgroundClickComponent : public juce::Component
+// Implemented by the zoom/DPI wrapper that owns the host-facing editor window.
+class DockWindowResizer
 {
 public:
-    void mouseDown(const juce::MouseEvent&) override
+    virtual ~DockWindowResizer() = default;
+    virtual void resizeDockContent(int width, int height) = 0;
+};
+
+class BackgroundClickComponent : public ControlBlockComponent
+{
+public:
+    void mouseDown(const juce::MouseEvent& event) override
     {
-        if (onBackgroundClick != nullptr) onBackgroundClick();
+        if (onBackgroundClick != nullptr) onBackgroundClick(event);
+        ControlBlockComponent::mouseDown(event);
     }
-    std::function<void()> onBackgroundClick;
+    void paint(juce::Graphics& graphics) override
+    {
+        if (isOpaque())
+        {
+            paintPluginBackground(graphics);
+            
+        }
+    }
+    std::function<void(const juce::MouseEvent&)> onBackgroundClick;
+};
+
+class DockSlotContent final : public juce::Component
+{
+public:
+    void setEmptySlots(std::vector<juce::Rectangle<int>> slots)
+    {
+        if (emptySlots == slots) return;
+        emptySlots = std::move(slots);
+        repaint();
+    }
+    void paint(juce::Graphics& graphics) override
+    {
+        for (const auto bounds : emptySlots)
+            paintUiFrame(graphics, bounds.toFloat(), uiGreyLight,
+                ControlAppearance::pixelThickness(graphics, 1.0f), 0.0f);
+    }
+private:
+    std::vector<juce::Rectangle<int>> emptySlots;
+};
+
+class QuickAccessStrip final : public juce::Component
+{
+public:
+    std::function<void(const juce::MouseWheelDetails&)> onScroll;
+    void paint(juce::Graphics& g) override
+    {
+        g.setColour(uiPanelBackground);
+        g.fillAll();
+    }
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
+    {
+        if (onScroll) onScroll(wheel);
+    }
+};
+
+class DockSortToggle final : public juce::Button
+{
+public:
+    DockSortToggle() : juce::Button("dock-sort")
+    {
+        setClickingTogglesState(true);
+        setWantsKeyboardFocus(false);
+    }
+    void paintButton(juce::Graphics& g, bool hovered, bool held) override
+    {
+        g.setColour(held ? uiWhite : isHoverInversionReady(*this, hovered && isEnabled(), "dock.button")
+            ? uiGreyDark : getToggleState() ? uiWhite : uiGreyLight);
+        g.fillRect(getLocalBounds());
+    }
+};
+
+class StatusIndicator final : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    StatusIndicator() { setName("status-indicator"); setInterceptsMouseClicks(false, false); }
+    void setActive(bool activeIn) { if (active != activeIn) { active = activeIn; repaint(); } }
+    void paint(juce::Graphics& g) override
+    {
+        g.setColour(active ? uiWhite : uiGreyLight);
+        g.fillRect(getLocalBounds());
+    }
+private:
+    bool active = false;
+};
+
+class DockSortOverlay final : public juce::Component
+{
+public:
+    DockSortOverlay() { setMouseCursor(juce::MouseCursor::NormalCursor); }
+    ~DockSortOverlay() override { if (dragging) beginDragAutoRepeat(0); }
+    std::function<void(const juce::MouseEvent&, int)> onGesture;
+    std::function<void(const juce::MouseWheelDetails&)> onScroll;
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        if (!event.mods.isLeftButtonDown()) return;
+        dragging = true;
+        beginDragAutoRepeat(40);
+        if (onGesture) onGesture(event, 0);
+    }
+    void mouseDrag(const juce::MouseEvent& event) override
+    {
+        if (!dragging || event.getDistanceFromDragStart() < 4) return;
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        if (onGesture) onGesture(event, 1);
+    }
+    void mouseUp(const juce::MouseEvent& event) override
+    {
+        dragging = false;
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        beginDragAutoRepeat(0);
+        if (onGesture) onGesture(event, 2);
+    }
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
+    { if (onScroll) onScroll(wheel); }
+private:
+    bool dragging = false;
+};
+
+// Never jump to a new position when the user clicks the empty scrollbar track.
+// Mouse-down and subsequent drag/up are forwarded only for gestures on the thumb.
+class DragOnlyScrollBar final : public juce::ScrollBar
+{
+public:
+    explicit DragOnlyScrollBar(bool vertical) : juce::ScrollBar(vertical), verticalBar(vertical) {}
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        thumbDragging = event.mods.isLeftButtonDown() && isInsideThumb(event.getPosition());
+        if (thumbDragging) juce::ScrollBar::mouseDown(event);
+    }
+    void mouseDrag(const juce::MouseEvent& event) override
+    {
+        if (thumbDragging) juce::ScrollBar::mouseDrag(event);
+    }
+    void mouseUp(const juce::MouseEvent& event) override
+    {
+        if (thumbDragging) juce::ScrollBar::mouseUp(event);
+        thumbDragging = false;
+    }
+private:
+    bool isInsideThumb(juce::Point<int> point) const
+    {
+        const auto total = getRangeLimit().getLength();
+        const auto size = getCurrentRangeSize();
+        const auto length = verticalBar ? getHeight() : getWidth();
+        if (total <= 0.0 || size >= total || length <= 0) return false;
+        const auto thumbLength = juce::jmin(length, juce::jmax(8, juce::roundToInt(length * size / total)));
+        const auto span = total - size;
+        const auto offset = juce::roundToInt((length - thumbLength)
+            * (getCurrentRangeStart() - getMinimumRangeLimit()) / span);
+        const auto axis = verticalBar ? point.y : point.x;
+        return axis >= offset && axis < offset + thumbLength;
+    }
+    bool verticalBar = true;
+    bool thumbDragging = false;
+};
+
+// Fixed routing ribbon. Each 80px-wide tile has a white outer frame, a dark
+// body and a 72x44 text zone; the ribbon itself has no shared border.
+// Wheel and trackpad motion scroll horizontally by pixels, never by whole tabs.
+class RoutingTabsViewport final : public juce::Viewport
+{
+public:
+    void paint(juce::Graphics& graphics) override
+    {
+        // Cover the scrolling editor underneath, using its normal background.
+        graphics.fillAll(uiPanelBackground);
+    }
+
+    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
+    {
+        const bool horizontalGesture = std::abs(wheel.deltaX) > std::abs(wheel.deltaY);
+        const auto* viewed = getViewedComponent();
+        const int maxX = viewed != nullptr ? juce::jmax(0, viewed->getWidth() - getWidth()) : 0;
+        if (maxX == 0)
+        {
+            // Horizontal movement stays in the ribbon; only vertical wheel
+            // gestures may scroll the page beneath an empty ribbon.
+            if (!horizontalGesture) juce::Component::mouseWheelMove(event, wheel);
+            return;
+        }
+
+        const float delta = std::abs(wheel.deltaX) > std::abs(wheel.deltaY)
+            ? wheel.deltaX : wheel.deltaY;
+        // Keep fractional trackpad movement instead of snapping to tile edges.
+        wheelRemainderPixels -= delta * 200.0f;
+        const int step = int(std::trunc(wheelRemainderPixels));
+        wheelRemainderPixels -= float(step);
+        if (step == 0) return;
+
+        const int current = getViewPositionX();
+        const int target = juce::jlimit(0, maxX, current + step);
+        if (target != current)
+            setViewPosition(target, 0);
+        else if (!horizontalGesture)
+            juce::Component::mouseWheelMove(event, wheel);
+    }
+
+private:
+    float wheelRemainderPixels = 0.0f;
 };
 
 class AvaAudioProcessorEditor final : public juce::AudioProcessorEditor,
-                                      public svg_export::ExpandableContent,
                                       private juce::Timer,
+                                      private juce::ScrollBar::Listener,
                                       private juce::AudioProcessorValueTreeState::Listener,
                                       private juce::ValueTree::Listener
 {
@@ -43,31 +245,42 @@ public:
     ~AvaAudioProcessorEditor() override;
 
     void prepareForProcessorStateRestore() { detachModuleEditorBindings(); }
-    void showAnimationSettings();
-    void setAnimationSettings(std::shared_ptr<AnimationSettings>);
+    void requestStructureRestoreResync() { scheduleProcessorStateResync(); }
+    // Capture the *visible* viewport position before DAW Undo replaces APVTS.
+    // Scroll metadata can lag behind the viewport (e.g. thumb dragging).
+    void captureLiveViewBeforeHostRestore();
+    void cancelLiveViewHostRestore();
     bool keyPressed(const juce::KeyPress& key) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
     void paint(juce::Graphics& g) override;
+    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
+    juce::ValueTree& getRootWindowState() const;
+    bool isDockOnly() const;
+    int getMinimumEditorHeight() const;
+    int getMaximumEditorHeight() const;
+    void setDockOnly(bool dockOnly);
+    void applyDockWindowSize(int width, int height);
+    void applyDockVisibility();
+    bool isControlManuallySelected(const juce::Component& component) const;
+    void toggleControlManualSelection(juce::Component& component);
+    void refreshQuickAccessControls();
+    bool allowsViewportScroll(const juce::Component& viewport) const;
 
 private:
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     class AvaLookAndFeel;
     struct PresetsSection;
     struct FilterSection;
+    class EqlCopyEditor;
 
-    void toggleHostParametersSection();
-    void toggleRoutingSection();
-    void toggleOscSection();
+    juce::Identifier controlSelectionStateKey(const juce::Component& component, bool includeRoutingScope = true) const;
+    void showAllSection();
     void openRoutingInstance(int instanceId);
     void closeRoutingInstance();
-    void showModulePicker();
-    void closeActiveModule();
-    void loadModule(AvaAudioProcessor::ActiveModule module);
-    void showOscParameterList();
     void selectFilterSection(int filterIndex);
-    void refreshFilterPresetList(const juce::String& preferredSelection = {});
+    void refreshFilterPresetList();
     void reloadFilterPresetFromProcessor();
     void commitFilterDisplayOrderToProcessor();
     void addFilterPreset();
@@ -75,29 +288,26 @@ private:
     bool renameFilterPreset(const juce::String& sourcePresetName, const juce::String& newPresetName);
     void setDefaultFilterPreset();
     void deleteSelectedFilterPreset();
+    void copyAllEqlFilters();
+    void pasteAllEqlFilters();
     void requestSvgExport();
     static bool isSvgExportGesture(const juce::ModifierKeys& modifiers);
-    void expandContentForSvgExport() override;
-    void restoreContentAfterSvgExport() override;
-    int getSvgExportCanvasHeight() const override;
-    void prepareSvgExportLayout(int canvasHeight) override;
-    void finishSvgExportLayout() override;
 
 public:
-    bool handleHostSlotAssignRequest(const juce::String& parameterId,
-                                     const juce::String& parameterName,
-                                     float normalizedValue);
+    bool isHostSlotAssigned(const juce::String& parameterId) const;
+    bool handleHostSlotAssignRequest(const juce::String& parameterId);
     void showTextPrompt(const juce::String& currentText,
                         std::function<bool(const juce::String&)> onCommit,
                         juce::Rectangle<int> anchorBounds = {},
                         std::function<void()> onClose = {},
                         std::function<void()> onDismiss = {},
-                        bool uppercaseInput = true);
-    void showInfoPrompt(const juce::String& markdownText);
-    void showBlockArrangePrompt(juce::AudioProcessorValueTreeState& state, size_t range, tls::blocks::Order order,
-                                std::function<void(const tls::blocks::Order&)> preview,
-                                std::function<void(const tls::blocks::Order&)> commit,
-                                std::function<void()> dismiss);
+                        bool uppercaseInput = true,
+                        juce::Slider* numericControl = nullptr,
+                        std::function<double(const juce::String&)> textToValue = {},
+                        std::function<juce::String()> valueToText = {},
+                        std::function<void()> resetAction = {},
+                        juce::Component* anchorComponent = nullptr);
+    void toggleAboutSection();
     void setReturnToRoutingAction(std::function<void()> action);
     void showChoicePrompt(const juce::Rectangle<int>& anchorBounds,
                           const juce::StringArray& choices,
@@ -107,33 +317,32 @@ public:
                           std::function<void(int)> onSelect,
                           std::function<void()> onClose = {},
                           std::function<void()> onDismiss = {},
-                          bool commitBeforeFade = false);
-    void showGainArrangePrompt(juce::AudioProcessorValueTreeState& state, size_t range, tls::gain::Order order,
-                               std::function<void(const tls::gain::Order&)> preview,
-                               std::function<void(const tls::gain::Order&)> commit,
-                               std::function<void()> dismiss);
-    juce::Rectangle<int> getInfoPromptAnchorBounds() const noexcept;
-    juce::Rectangle<int> getInfoPromptVisibleBounds() const noexcept;
-    bool handleOscGlobalAction(const juce::String& actionId, float value);
-    bool handleOscEqlAction(size_t bandIndex, const juce::String& action, float value);
+                          bool commitBeforeFade = false,
+                          std::vector<bool> itemActiveStates = {});
 private:
     void dismissTextPrompt();
+    void prepareChildPrompt();
+    void closeTextPrompt();
+    void ensureModuleList();
+    void refreshInstanceLinkControls();
+    void changeLinkDestination(int index);
+    void refreshRoutingLinkControl();
+    void changeRoutingLinkDestination();
     static std::function<void()> makeScrollPreservingPromptClose(AvaAudioProcessorEditor& editor,
                                                                  std::function<void()> closeHandler);
     void timerCallback() override;
     void normalizeOrderForType(int filterIndex);
     void sortFilterSections();
-    void clearAllFilters();
+    void handleFilterDrag(int filterIndex, juce::Point<float> screenPosition, bool released);
+    void cancelFilterDrag();
     enum class HistoryAction { undo, redo };
     void performHistoryStep(HistoryAction action);
     void switchABState();
     void captureCurrentABState();
-    void copyCurrentABStateToOtherSlot();
     bool restoreABStateSnapshot(const juce::MemoryBlock& snapshot);
     void refreshABCompareButton();
     void refreshEqlFilterSectionsFromProcessor();
     void applyFilterSortOrder(const std::vector<int>& orderedIndices);
-    void moveFilterSectionTo(int filterIndex, int destinationOrderPosition);
     void enforceSingleExpandedFilterSection(int preferredFilterIndex = -1);
     void restoreEditorStateFromValueTree();
     void restoreFilterDisplayOrderFromValueTree();
@@ -141,19 +350,12 @@ private:
     void storeEditorStateToValueTree() noexcept;
     void storeEditorUiState();
     void restoreEditorUiState();
-    void setLoadedModuleFlags(AvaAudioProcessor::ActiveModule activeModule) noexcept;
-    juce::Point<int> getRestoredEditorSize() const noexcept;
-    juce::Rectangle<int> getFilterSectionBounds(int filterIndex) const;
     void resetFilterSectionUiState(int filterIndex);
-    void removeFilterSectionUiState(int removedIndex, int previousCount);
     void updateSectionStates();
     juce::String getInstanceDisplayName() const;
     void updateInstanceHeadings();
     void setPresetsVisible(bool shouldShow);
-    void setEqlFilterSectionsVisible(bool shouldShow);
-    void setEqlControlsVisible(bool shouldShow);
     void updateEqlSectionStates(int activeFilterCount);
-    void syncEditorWidthToBounds();
     bool updateEditorResizeLimits();
     void parameterChanged(const juce::String& parameterID, float newValue) override;
     void valueTreePropertyChanged(juce::ValueTree& treeWhosePropertyHasChanged,
@@ -164,8 +366,6 @@ private:
     void resyncEditorFromProcessorState();
     void registerParameterListeners();
     void unregisterParameterListeners();
-    juce::RangedAudioParameter* findHostAssignableParameter(const juce::String& parameterId) const noexcept;
-    void syncHostSlotAssignmentValue(int slotIndex, float normalizedValue);
     void registerObservedModuleParameterListeners(juce::AudioProcessorValueTreeState& moduleValueTreeState);
     void refreshModuleStateListeners();
     void clearModuleStateListeners();
@@ -176,25 +376,40 @@ private:
     void setupEqlControls(juce::AudioProcessorValueTreeState& initialEqlState);
     EqlModuleProcessor* getActiveEqlProcessor() noexcept;
     const EqlModuleProcessor* getActiveEqlProcessor() const noexcept;
-    void scheduleHistorySnapshot();
+    void scheduleHistorySnapshot(bool notifyHost = true);
     void commitPendingHistorySnapshot(bool force = false);
+    void recordPresetHistoryChange(const juce::MemoryBlock& before,
+                                   const juce::MemoryBlock& after,
+                                   int instanceId,
+                                   const juce::MemoryBlock& eqlBefore,
+                                   const juce::MemoryBlock& eqlAfter);
+    bool applyEqlPresetHistoryState(int instanceId,
+                                    const juce::MemoryBlock& bankState,
+                                    juce::MemoryBlock& previousBank);
     bool applyHistorySnapshot(const juce::MemoryBlock& snapshot);
     void updateUndoRedoButtons();
     int getActiveFilterContentHeight() const;
-    int getFilterContentHeight() const;
-    int getFlatFilterContentHeight() const;
+    void handleEqlBackgroundClick(const juce::MouseEvent& event);
     int getActiveFilterCount() const noexcept;
-    void layoutGlobalControlsSection(juce::Rectangle<int>& bounds);
-    void layoutBottomControlsSection(juce::Rectangle<int>& bounds);
+    void layoutGlobalSections(juce::Rectangle<int>& bounds);
+    void layoutQuickAccessStrip();
+    void syncQuickAccessControls();
     void layoutCrossoverSection(juce::Rectangle<int>& bounds);
     void finalizeLayout() noexcept;
-    void layoutModuleEditorContent(juce::Rectangle<int>& bounds);
+    void applyPromptVisibility();
+    void layoutUnifiedBlocks(juce::Rectangle<int>& bounds);
+    std::vector<ControlSearchEntry> findControls(const juce::String& query);
+    void navigateToSearchResult(ControlSearchEntry result);
+    void updateSearchFlash();
+    void updatePinnedSearchPosition();
+    void refreshPinnedRoutingStrip();
+    void switchPinnedRoutingInstance(int instanceId);
     void layoutEqlModuleSections(juce::Rectangle<int>& bounds);
-    void ensureModuleTitle();
+    juce::Rectangle<int> getModuleViewportBounds() const;
     void clearHostSlot(int slotIndex);
     void moveHostSlotAssignment(int slotIndex, int direction);
     void refreshHostSlotButtons();
-    void armHostSlotMove(int slotIndex, bool controlDrag = false);
+    void armHostSlotMove(int slotIndex);
     void cancelHostSlotMove();
     void updateHostSlotMoveTargets();
     void applyHostSlotMove(int destinationIndex);
@@ -211,49 +426,111 @@ private:
     std::vector<juce::ValueTree> observedModuleStates;
     std::vector<ObservedModuleParameterListeners> observedModuleParameterListeners;
     std::unique_ptr<AvaLookAndFeel> lookAndFeel;
-    std::unique_ptr<BoxTextButton> clipButton;
-    std::unique_ptr<BoxTextButton> hostButton;
-    std::unique_ptr<BoxTextButton> routingButton;
-    std::unique_ptr<BoxTextButton> oscButton;
-    std::unique_ptr<BoxTextButton> moduleAddButton;
-    std::unique_ptr<BoxTextButton> moduleTitle;
+    std::unique_ptr<juce::Component> windowDragHandle;
+    std::unique_ptr<LocalChoiceControl> sendControl;
+    std::unique_ptr<LocalChoiceControl> receiveControl;
+    std::unique_ptr<LocalChoiceControl> linksCountControl;
+    std::array<std::unique_ptr<LocalChoiceControl>, 12> linkToControls;
+    int linkDestinationCount = 1;
+    std::unique_ptr<LocalChoiceControl> linkInstanceControl;
+    std::vector<uint64_t> routingPeerIds;
+    juce::StringArray routingPeerNames;
+    uint64_t focusedRoutingPeerId = 0;
+    bool focusedRoutingAll = false;
+    std::array<std::vector<uint64_t>, 12> linkPeerIds;
+    std::array<juce::StringArray, 12> linkPeerNames;
     std::unique_ptr<juce::Component> crossoverEditor;
-    std::unique_ptr<BoxTextButton> addFilterButton;
+    std::unique_ptr<PushControl> addFilterButton;
+    std::unique_ptr<PushControl> deleteFilterButton;
+    std::unique_ptr<PushControl> copyFilterButton;
+    std::unique_ptr<PushControl> pasteFilterButton;
     std::unique_ptr<PresetsSection> presetsSection;
     bool restoringEditorUiState = true;
-    std::unique_ptr<juce::Label> globalSpacer;
-    std::unique_ptr<BoxTextButton> globalBypassButton;
-    std::unique_ptr<ButtonAttachment> globalBypassAttachment;
-    std::shared_ptr<AnimationSettings> animationSettings = std::make_shared<AnimationSettings>();
-    std::unique_ptr<juce::DocumentWindow> animationSettingsWindow;
-    std::unique_ptr<BurningFilmArtwork> topLines;
-    std::unique_ptr<BurningFilmArtwork> bottomLines;
-    std::unique_ptr<BoxTextButton> undoButton;
-    std::unique_ptr<BoxTextButton> redoButton;
-    std::unique_ptr<BoxTextButton> abSlotAButton;
-    std::unique_ptr<BoxTextButton> abSwitchButton;
-    std::unique_ptr<BoxTextButton> abSlotBButton;
-    std::unique_ptr<BoxTextButton> sortFiltersButton;
+    bool layingOutEditor = false;
+    int pendingHostRestoreScrollY = -1;
+    std::unique_ptr<ParameterControl> globalBypassButton;
+    std::unique_ptr<ParameterControl> bypassCompensationControl;
+    std::unique_ptr<PushControl> undoButton;
+    std::unique_ptr<PushControl> redoButton;
+    std::unique_ptr<LocalChoiceControl> abControl;
+    std::unique_ptr<PushControl> abCopyButton;
+    std::unique_ptr<PushControl> unitCopyButton;
+    std::unique_ptr<PushControl> unitPasteButton;
+    std::unique_ptr<LocalChoiceControl> unitZoomControl;
+    std::unique_ptr<LocalChoiceControl> unitDockSizeControl;
+    std::unique_ptr<SquareTextLabel> unitSampleRateLabel;
+    std::unique_ptr<PushControl> sortFiltersButton;
     std::array<std::unique_ptr<BoxTextButton>, AvaAudioProcessor::hostAutomationSlotCount> hostSlotNameFields;
     std::array<std::unique_ptr<BoxTextButton>, AvaAudioProcessor::hostAutomationSlotCount> hostSlotButtons;
-    std::array<std::unique_ptr<BoxTextButton>, EqlModuleProcessor::maxFilterCount> filterOrderLabels;
     std::array<std::unique_ptr<FilterSection>, EqlModuleProcessor::maxFilterCount> filterSections;
     juce::AudioProcessorValueTreeState* boundEqlState = nullptr;
-    juce::Viewport hostParametersViewport;
-    BackgroundClickComponent hostParametersContent;
-    juce::Viewport filterViewport;
+    BackgroundClickComponent slotsContent;
+    void syncMainScrollBar();
+    void scrollBarMoved(juce::ScrollBar*, double) override;
+    UiScrollViewport filterViewport;
+    DragOnlyScrollBar mainScrollBar { true };
+    int mainScrollPosition = 0;
+    BackgroundClickComponent moduleContent;
+    QuickAccessStrip quickAccessStrip;
+    DockSortToggle dockSortToggle;
+    DockSortToggle dockCollapseToggle;
+    DockSortToggle dockVerticalToggle;
+    StatusIndicator dockClipIndicator;
+    StatusIndicator unitSendIndicator;
+    StatusIndicator unitReceiveIndicator;
+    juce::Label unitNumberLabel;
+    DockSortOverlay dockSortOverlay;
+    int dockDragSource = -1;
+    int dockDropTarget = -1;
+    void dragDockControl(const juce::MouseEvent&, int phase);
+    juce::Viewport quickAccessViewport;
+    DockSlotContent quickAccessContent;
+    struct QuickAccessItem
+    {
+        juce::String key;
+        juce::Component::SafePointer<juce::Component> source;
+        // Hold the routing processor alive until its APVTS attachments detach.
+        std::shared_ptr<AvaAudioProcessor> instanceHandle;
+        std::unique_ptr<juce::Component> control;
+        // Owned separately, but parented into the mirrored ParameterField.
+        // Destruction order removes the accessory before its parent field.
+        std::unique_ptr<juce::Component> accessory;
+    };
+    std::vector<QuickAccessItem> quickAccessItems;
+    juce::String quickAccessOrderCache;
+    std::unique_ptr<juce::TooltipWindow> dockTooltipWindow;
+    BackgroundClickComponent unitContent;
+    std::unique_ptr<ControlSearchPanel> controlSearchPanel;
+    RoutingTabsViewport pinnedRoutingViewport;
+    juce::Component pinnedRoutingContent;
+    std::vector<std::unique_ptr<BoxTextButton>> pinnedRoutingButtons;
+    juce::String pinnedRoutingSignature;
+    bool pinnedRoutingVisible = false;
+
+    bool updatingPinnedSearchPosition = false;
+    juce::Component::SafePointer<juce::Component> searchFlashTarget;
+    juce::String searchFlashBlockTitle;
+    uint32_t searchFlashStarted = 0;
+    bool searchFlashOn = false;
+    BackgroundClickComponent unitMainContent;
+    BackgroundClickComponent unitRoutingContent;
+    ControlBlockComponent unitSyncContent;
+    BackgroundClickComponent mainContent;
+    BackgroundClickComponent modulesContent;
+    std::unique_ptr<ModuleList> moduleList;
+    int moduleListBand = -1;
+    BackgroundClickComponent instanceContent;
+    BackgroundClickComponent eqlContent;
     BackgroundClickComponent filterContent;
-#if JUCE_MAC
-    void* svgExportKeyboardMonitor = nullptr;
-#endif
-    std::unique_ptr<BoxTextButton> footerTab;
-    std::unique_ptr<juce::Component> verticalResizeHandle;
-    std::unique_ptr<juce::Component> horizontalResizeHandle;
-    std::unique_ptr<juce::Component> cornerResizeHandle;
-    std::unique_ptr<juce::Component> topResizeHandle;
-    std::unique_ptr<juce::Component> leftResizeHandle;
+    std::unique_ptr<juce::MouseListener> svgExportClickListener;
+    std::unique_ptr<juce::MouseListener> hostStateActionTracker;
+    std::unique_ptr<juce::MouseListener> windowMoveGesture;
+    std::unique_ptr<LocalChoiceControl> aboutControl;
+    std::unique_ptr<LocalChoiceControl> pinRoutingControl;
+    std::unique_ptr<LocalChoiceControl> unitSearchControl;
+    std::unique_ptr<juce::Component> aboutPanel;
+    std::vector<std::unique_ptr<juce::Component>> suspendedPromptOverlays;
     std::unique_ptr<juce::Component> textPromptOverlay;
-    std::unique_ptr<juce::DocumentWindow> oscParameterListWindow;
     std::unique_ptr<RoutingPanel> routingPanel;
     std::shared_ptr<AvaAudioProcessor> activeInstanceProcessor;
     std::unique_ptr<AvaAudioProcessorEditor> activeInstanceEditor;
@@ -261,46 +538,40 @@ private:
     int activeInstanceId = 0;
     int routingInstanceId = 0;
     std::unique_ptr<OscPanel> oscPanel;
-    std::unique_ptr<juce::Component> tlsModuleEditor;
+    std::unique_ptr<juce::Component> blockChainModuleEditor;
     std::unique_ptr<juce::Component> dynModuleEditor;
-    bool eqlModuleLoaded = false;
-    bool tlsModuleLoaded = false;
-    bool dynModuleLoaded = false;
-    bool hostParametersExpanded = false;
-    bool routingExpanded = false;
-    bool oscExpanded = false;
+    // Extra instances use the SAME native module editor as the originals.
+    std::map<int, std::unique_ptr<juce::Component>> copiedModuleEditors;
+    std::map<int, std::unique_ptr<EqlCopyEditor>> eqlCopyEditors;
+    // Newly added MODULES entries must also be shown on the underlying ALL page.
+    // The popup obscures that page, so reveal the new entry when it closes.
+    AvaAudioProcessor::ActiveModule displayedModule = AvaAudioProcessor::ActiveModule::none;
+    bool aboutExpanded = false;
+    bool updatingEditorResizeLimits = false;
+    // Keep the expanded window height independently of the compact dock size.
+    int expandedHeightBeforeDock = 0;
     std::vector<int> filterDisplayOrder;
+    int filterDragSourceIndex = -1;
     bool suppressFilterSectionValueChangeHandlers = false;
-    bool suppressHostSlotAutomationSync = false;
+    bool initialKeyboardFocusPending = true;
     bool suppressProcessorStateResync = false;
     bool suppressEditorSizeStateSave = true;
-    bool suppressHistorySnapshots = false;
-    std::vector<bool> svgExportFilterExpandedStates;
-    std::vector<juce::Viewport*> svgExportViewports;
-    std::vector<juce::Point<int>> svgExportViewportPositions;
-    juce::Rectangle<int> svgExportLayoutBounds;
-    bool svgExportLayoutActive = false;
+    std::atomic<bool> suppressHistorySnapshots { false };
     bool shellStateListenerRegistered = false;
     std::atomic<bool> processorStateResyncPending { false };
     std::atomic<bool> moduleControlsRefreshPending { false };
     std::atomic<bool> moduleControlsRebindPending { false };
-    juce::MemoryBlock committedHistorySnapshot;
-    std::vector<juce::MemoryBlock> undoHistory;
-    std::vector<juce::MemoryBlock> redoHistory;
-    std::atomic<bool> pendingHistorySnapshot { false };
-    std::atomic<uint32_t> lastHistoryChangeTimeMs { 0 };
+    juce::MemoryBlock& committedHistorySnapshot = audioProcessor.getHistoryState().committed;
+    std::vector<AvaAudioProcessor::HistoryState::Entry>& undoHistory = audioProcessor.getHistoryState().undo;
+    std::vector<AvaAudioProcessor::HistoryState::Entry>& redoHistory = audioProcessor.getHistoryState().redo;
+    std::atomic<bool>& pendingHistorySnapshot = audioProcessor.getHistoryState().pending;
+    std::atomic<uint32_t>& lastHistoryChangeTimeMs = audioProcessor.getHistoryState().lastChange;
+    uint64_t observedStateRevision = 0;
     uint32_t lastClipIndicatorTimeMs = 0;
+    uint32_t lastClipEventCount = 0;
+    bool clipIndicatorShown = false;
 
-    struct HostSlotAssignment
-    {
-        juce::String parameterId;
-        juce::String parameterName;
-    };
-    std::array<HostSlotAssignment, AvaAudioProcessor::hostAutomationSlotCount> hostSlotAssignments;
     int hostSlotMoveSourceIndex = -1;
-    bool hostSlotControlDrag = false;
-    bool hostSlotControlDragCancelled = false;
-    int filterMoveSourceIndex = -1;
 
     int getFilterIndexForOrderPosition(int orderIndex) const noexcept;
     int getFilterOrderPositionForIndex(int filterIndex) const noexcept;

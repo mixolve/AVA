@@ -1,12 +1,14 @@
 #pragma once
 
 #include "Controls.h"
+#include "ChoiceControl.h"
+#include "TextControl.h"
 #include "OscSettings.h"
 
 #include <functional>
 #include <memory>
 
-class OscPanel final : public juce::Component
+class OscPanel final : public ControlBlockComponent
 {
 public:
     struct Actions
@@ -14,30 +16,17 @@ public:
         std::function<OscSettings()> getSettings;
         std::function<bool(const OscSettings&)> setSettings;
         std::function<bool()> isInputPortBusy;
-        std::function<void()> toggleParameterList;
-        std::function<bool()> isParameterListVisible;
-        std::function<void(juce::Component&, const juce::String&,
-                           std::function<bool(const juce::String&)>)> showTextPrompt;
-        std::function<void()> clearFocus;
     };
 
     explicit OscPanel(Actions);
-    void paint(juce::Graphics&) override;
     void resized() override;
     void refresh();
+    int getPreferredHeight() const noexcept;
 
 private:
-    void editPort(bool inputPort);
-    std::unique_ptr<BoxTextButton> makeLabel(const juce::String&);
-
     Actions actions;
-    std::unique_ptr<BoxTextButton> enableButton;
-    std::unique_ptr<BoxTextButton> listButton;
+    std::unique_ptr<LocalChoiceControl> enableControl;
     std::unique_ptr<juce::Label> statusLabel;
-    std::unique_ptr<BoxTextButton> inputPortLabel;
-    std::unique_ptr<BoxTextButton> inputPortButton;
-    std::unique_ptr<BoxTextButton> outputPortLabel;
-    std::unique_ptr<BoxTextButton> outputPortButton;
-    std::unique_ptr<BoxTextButton> outputHostLabel;
-    std::unique_ptr<BoxTextButton> outputHostButton;
+    std::unique_ptr<TextControl> inputPortControl, outputPortControl;
+    std::unique_ptr<TextControl> outputHostControl;
 };

@@ -24,70 +24,29 @@ void AvaAudioProcessorEditor::setPresetsVisible(const bool shouldShow)
     if (presetsSection == nullptr)
         return;
 
-    const auto progress = presetsSection->actionsReveal.value();
-    const auto showActions = shouldShow && (presetsSection->actionsToggleButton->getToggleState() || progress > 0.0);
-    const auto showPresets = shouldShow && (!presetsSection->actionsToggleButton->getToggleState() || progress < 1.0);
-    setComponentVisible(presetsSection->actionsToggleButton.get(), shouldShow);
-    presetsSection->actionsClip.setVisible(showActions);
-    presetsSection->presetClip.setVisible(showPresets);
-    presetsSection->actionsClip.setAlpha(1.0f);
-    presetsSection->presetClip.setAlpha(1.0f);
-    presetsSection->actionsClip.setInterceptsMouseClicks(false, !presetsSection->actionsReveal.isRunning());
-    presetsSection->presetClip.setInterceptsMouseClicks(false, !presetsSection->actionsReveal.isRunning());
-    setComponentVisible(&presetsSection->presetCombo, showPresets);
-    setComponentVisible(presetsSection->addButton.get(), showPresets);
-    setComponentVisible(addFilterButton.get(), shouldShow);
-    setComponentVisible(sortFiltersButton.get(), shouldShow);
-    setComponentVisible(presetsSection->saveButton.get(), showActions);
-    setComponentVisible(presetsSection->renameButton.get(), showActions);
-    setComponentVisible(presetsSection->defaultButton.get(), showActions);
-    setComponentVisible(presetsSection->deleteButton.get(), showActions);
-}
-
-void AvaAudioProcessorEditor::setEqlFilterSectionsVisible(const bool shouldShow)
-{
-    for (auto& section : filterSections)
-    {
-        if (section == nullptr)
-            continue;
-
-        section->body.setVisible(shouldShow && (section->expanded || section->disclosure.value() > 0.0));
-        section->accentFrame.setVisible(shouldShow && (section->expanded || section->disclosure.value() > 0.0));
-        section->header->setVisible(shouldShow);
-        section->typeControl->setVisible(shouldShow);
-        section->orderControl->setVisible(shouldShow);
-        section->frequencyControl->setVisible(shouldShow);
-        section->bandwidthControl->setVisible(shouldShow);
-        section->gainControl->setVisible(shouldShow);
-        section->bypassButton->setVisible(shouldShow);
-    }
-}
-
-void AvaAudioProcessorEditor::setEqlControlsVisible(const bool shouldShow)
-{
-    filterViewport.setVisible(shouldShow);
-    setPresetsVisible(shouldShow);
-    setEqlFilterSectionsVisible(shouldShow);
+    setComponentVisible(&presetsSection->presetChoice, shouldShow);
+    for (auto* button : { presetsSection->addButton.get(), presetsSection->saveButton.get(),
+            presetsSection->renameButton.get(), presetsSection->defaultButton.get(), presetsSection->deleteButton.get(),
+            presetsSection->copyFiltersButton.get(), presetsSection->pasteFilterButton.get(),
+            addFilterButton.get(), sortFiltersButton.get() })
+        setComponentVisible(button, shouldShow);
 }
 
 void AvaAudioProcessorEditor::updateEqlSectionStates(const int activeFilterCount)
 {
+    enforceSingleExpandedFilterSection();
     updateUndoRedoButtons();
     const auto canSortFilters = activeFilterCount > 1;
 
     if (sortFiltersButton != nullptr)
     {
-        sortFiltersButton->setVisible(eqlModuleLoaded && presetsSection != nullptr);
-        sortFiltersButton->setEnabled(canSortFilters);
+        sortFiltersButton->setVisible((getActiveEqlProcessor() != nullptr) && presetsSection != nullptr);
+        sortFiltersButton->setInteractionEnabled(canSortFilters);
         sortFiltersButton->setAlpha(1.0f);
     }
 
-    filterViewport.setVisible(eqlModuleLoaded);
-    setPresetsVisible(eqlModuleLoaded);
-
-    for (int orderPosition = 0; orderPosition < static_cast<int>(filterOrderLabels.size()); ++orderPosition)
-        if (auto* label = filterOrderLabels[static_cast<size_t>(orderPosition)].get())
-            label->setVisible(eqlModuleLoaded && orderPosition < activeFilterCount);
+    filterViewport.setVisible((getActiveEqlProcessor() != nullptr));
+    setPresetsVisible((getActiveEqlProcessor() != nullptr));
 
     for (int filterIndex = 0; filterIndex < EqlModuleProcessor::maxFilterCount; ++filterIndex)
     {
@@ -97,19 +56,10 @@ void AvaAudioProcessorEditor::updateEqlSectionStates(const int activeFilterCount
             continue;
 
         const auto orderPosition = getFilterOrderPositionForIndex(filterIndex);
-        const auto isActive = eqlModuleLoaded && orderPosition >= 0;
-        const auto targetExpanded = isActive && section->expanded;
-        if (! section->disclosureInitialised || ! isActive)
-        {
-            section->disclosure.snap(targetExpanded);
-            section->disclosureInitialised = true;
-        }
-        else section->disclosure.setExpanded(targetExpanded);
-        const auto sectionExpanded = isActive && (targetExpanded || section->disclosure.value() > 0.0);
+        const auto isActive = (getActiveEqlProcessor() != nullptr) && orderPosition >= 0;
+        const auto sectionExpanded = isActive && section->expanded;
         section->body.setVisible(sectionExpanded);
-        section->body.setAlpha(static_cast<float>(section->disclosure.value()));
-        section->body.setInterceptsMouseClicks(! section->disclosure.isRunning(), ! section->disclosure.isRunning());
-        section->accentFrame.setAlpha(static_cast<float>(section->disclosure.value()));
+        section->body.setInterceptsMouseClicks(false, true);
         const auto filterType = section->getFilterType();
         const auto availability = getFilterControlAvailability(filterType, section->orderControl->getSelectedChoiceIndex());
         const auto isVolume = ! availability.frequency;
@@ -121,14 +71,13 @@ void AvaAudioProcessorEditor::updateEqlSectionStates(const int activeFilterCount
 
         section->updatePhaseForType(false);
         if (auto* eqlProcessor = getActiveEqlProcessor())
-            section->header->setButtonText(eqlProcessor->getFilterHeaderText(filterIndex));
+            section->header->setTitleText(juce::String(orderPosition + 1) + " " + eqlProcessor->getFilterHeaderText(filterIndex));
         else
-            section->header->setButtonText({});
+            section->header->setTitleText({});
 
-        section->accentFrame.setVisible(sectionExpanded);
         section->header->setVisible(isActive);
-        section->header->setToggleState(targetExpanded, juce::dontSendNotification);
-        section->header->setActiveFill(targetExpanded);
+        section->header->getProperties().set("textButtonBaseColour", juce::int64(sectionExpanded ? 0xffffffff : 0xffbbbbbb));
+        section->header->setSelectionHighlighted(sectionExpanded);
         section->typeControl->setVisible(sectionExpanded);
         section->orderControl->setVisible(sectionExpanded);
         section->orderControl->setInteractionEnabled(! orderInactive);
@@ -160,20 +109,31 @@ void AvaAudioProcessorEditor::updateEqlSectionStates(const int activeFilterCount
         else
             section->gainControl->clearOverrideText();
 
-        section->bypassButton->setVisible(isActive);
     }
 
     if (addFilterButton != nullptr)
     {
-        addFilterButton->setVisible(eqlModuleLoaded && presetsSection != nullptr);
-        addFilterButton->setEnabled(true);
+        addFilterButton->setVisible((getActiveEqlProcessor() != nullptr) && presetsSection != nullptr);
+        addFilterButton->setInteractionEnabled(true);
         addFilterButton->setAlpha(1.0f);
     }
+    if (deleteFilterButton != nullptr)
+    {
+        deleteFilterButton->setVisible(getActiveEqlProcessor() != nullptr);
+        deleteFilterButton->setInteractionEnabled(activeFilterCount > 1);
+    }
+    for (auto* control : {copyFilterButton.get(), pasteFilterButton.get()})
+        if (control != nullptr)
+        {
+            control->setVisible(getActiveEqlProcessor() != nullptr);
+            control->setInteractionEnabled(activeFilterCount > 0);
+        }
+    if (filterDragSourceIndex >= activeFilterCount) cancelFilterDrag();
 }
 
 juce::String AvaAudioProcessorEditor::getInstanceDisplayName() const
 {
-    const auto& owner = audioProcessor.getOscOwner();
+    const auto& owner = audioProcessor.getRoutingOwner();
     const auto routing = ava::routing::readState(owner.getValueTreeState().state);
     return ava::routing::getDisplayName(routing,
                                          routingInstanceId != 0 ? routingInstanceId : routing.rootInstanceId);
@@ -181,121 +141,69 @@ juce::String AvaAudioProcessorEditor::getInstanceDisplayName() const
 
 void AvaAudioProcessorEditor::updateInstanceHeadings()
 {
-    const auto name = getInstanceDisplayName();
-
-    juce::String moduleLabel;
-    switch (audioProcessor.getActiveModule())
-    {
-        case AvaAudioProcessor::ActiveModule::tls: moduleLabel = "TLS"; break;
-        case AvaAudioProcessor::ActiveModule::eql: moduleLabel = "EQL"; break;
-        case AvaAudioProcessor::ActiveModule::dyn: moduleLabel = "DYN"; break;
-        case AvaAudioProcessor::ActiveModule::none: break;
-    }
-
-    if (moduleTitle != nullptr)
-    {
-        const auto title = moduleLabel;
-        if (moduleTitle->getButtonText() != title)
-            moduleTitle->setButtonText(title);
-    }
-
-    if (auto* crossover = dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get()))
-        crossover->setInstanceName(name);
+    auto name = getInstanceDisplayName();
+    // Default routing names are INS-1, INS-2, etc. Show them as INS 1.
+    if (name.startsWithIgnoreCase("INS-"))
+        name = "INS " + name.substring(4);
+    const auto caption = "INSTANCE (" + name.toUpperCase() + ")";
+    for (auto& frame : instanceContent.controlBlockFrames)
+        if (frame.title == "INSTANCE" && frame.displayTitle != caption)
+        {
+            frame.displayTitle = caption;
+            instanceContent.repaint();
+        }
 }
 
 void AvaAudioProcessorEditor::updateSectionStates()
 {
-    constexpr auto globalControlsVisible = true;
+    const juce::ScopeGuard promptVisibility {[this] { applyPromptVisibility(); applyDockVisibility(); }};
     const auto activeFilterCount = getActiveFilterCount();
+    if (aboutExpanded) cancelFilterDrag();
 
-    if (clipButton != nullptr)
+    // UNIT MAIN owns ABOUT, with visibility controlled by its
+    // collapse state rather than a removed global sidebar.
+    if (aboutControl != nullptr)
     {
-        clipButton->setVisible(globalControlsVisible);
-        clipButton->setButtonText({});
-        clipButton->setToggleState(false, juce::dontSendNotification);
+        aboutControl->setSelectedChoiceIndex(aboutExpanded ? 1 : 0, false);
+        aboutControl->setSelectionHighlighted(aboutExpanded);
     }
+    if (aboutPanel != nullptr) aboutPanel->setVisible(aboutExpanded);
 
-    if (footerTab != nullptr)
-        footerTab->setVisible(true);
-
-    if (hostButton != nullptr)
-    {
-        hostButton->setVisible(globalControlsVisible);
-        hostButton->setToggleState(hostParametersExpanded, juce::dontSendNotification);
-    }
-
-    if (routingButton != nullptr)
-    {
-        routingButton->setVisible(globalControlsVisible);
-        routingButton->setToggleState(routingExpanded, juce::dontSendNotification);
-    }
     if (routingPanel != nullptr)
-        routingPanel->setVisible(routingExpanded);
-    if (oscButton != nullptr)
-        oscButton->setToggleState(oscExpanded, juce::dontSendNotification);
-    if (oscPanel != nullptr)
-        oscPanel->setVisible(oscExpanded);
+        routingPanel->setVisible(!unitContent.isBlockCollapsed("UNIT")
+            && !unitRoutingContent.isBlockCollapsed("ROUTING") && !aboutExpanded);
 
-    ensureModuleTitle();
     updateInstanceHeadings();
 
-    const auto hostParametersVisible = hostParametersExpanded;
-    if (! hostParametersVisible && hostSlotMoveSourceIndex >= 0) cancelHostSlotMove();
-    const auto modulePageVisible = ! routingExpanded && ! oscExpanded && ! hostParametersExpanded;
+    const auto modulePageVisible = !aboutExpanded;
+    if (!modulePageVisible && hostSlotMoveSourceIndex >= 0) cancelHostSlotMove();
     setComponentVisible(crossoverEditor.get(), modulePageVisible);
-    const auto moduleContentVisible = modulePageVisible && crossoverEditor != nullptr
-        && ! dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get())->isCrossoverSettingsSelected();
+    const auto moduleContentVisible = modulePageVisible && crossoverEditor != nullptr;
 
-    if (moduleTitle != nullptr)
+    // UNIT MAIN owns UNDO, REDO, A/B and BYPASS; the nested block manages
+    // their visibility so collapsed controls never reappear in the sidebar.
+    if (!moduleContentVisible)
     {
-        moduleTitle->setVisible(modulePageVisible && audioProcessor.getActiveModule() != AvaAudioProcessor::ActiveModule::none);
-    }
-
-    hostParametersViewport.setVisible(hostParametersVisible);
-
-    if (moduleAddButton != nullptr)
-    {
-        const auto noModuleLoaded = audioProcessor.getActiveModule() == AvaAudioProcessor::ActiveModule::none;
-        moduleAddButton->setVisible(modulePageVisible && noModuleLoaded);
-        moduleAddButton->setEnabled(noModuleLoaded);
-    }
-
-    setComponentVisible(globalBypassButton.get(), globalControlsVisible);
-    setComponentVisible(undoButton.get(), globalControlsVisible);
-    setComponentVisible(redoButton.get(), globalControlsVisible);
-    setComponentVisible(abSlotAButton.get(), globalControlsVisible);
-    setComponentVisible(abSwitchButton.get(), globalControlsVisible);
-    setComponentVisible(abSlotBButton.get(), globalControlsVisible);
-
-    for (auto& hostSlotNameField : hostSlotNameFields)
-        setComponentVisible(hostSlotNameField.get(), hostParametersVisible);
-    for (auto& hostSlotButton : hostSlotButtons)
-        setComponentVisible(hostSlotButton.get(), hostParametersVisible);
-
-    setComponentVisible(tlsModuleEditor.get(), tlsModuleLoaded && moduleContentVisible);
-    setComponentVisible(dynModuleEditor.get(), dynModuleLoaded && moduleContentVisible);
-
-    if (! moduleContentVisible)
-    {
-        setEqlControlsVisible(false);
+        filterViewport.setVisible(false);
+        moduleContent.setVisible(false);
         return;
     }
-
-    if (! eqlModuleLoaded && ! tlsModuleLoaded && ! dynModuleLoaded)
-    {
-        setEqlControlsVisible(false);
-        setComponentVisible(tlsModuleEditor.get(), false);
-        setComponentVisible(dynModuleEditor.get(), false);
-        return;
-    }
-
-    if (tlsModuleLoaded || dynModuleLoaded)
-    {
-        setEqlControlsVisible(false);
-        setComponentVisible(tlsModuleEditor.get(), tlsModuleLoaded);
-        setComponentVisible(dynModuleEditor.get(), dynModuleLoaded);
-        return;
-    }
-
+    moduleContent.setVisible(true);
+    filterViewport.setVisible(true);
     updateEqlSectionStates(activeFilterCount);
 }
+
+void AvaAudioProcessorEditor::showAllSection()
+{
+    dismissTextPrompt();
+    if (audioProcessor.getSelectedModuleCopy() >= ava::module_stack::originalCount) {
+        audioProcessor.selectModuleCopy(-1);
+        rebindActiveModuleEditors();
+    }
+    aboutExpanded = false;
+    storeEditorStateToValueTree();
+    updateSectionStates();
+    resized();
+    filterViewport.setViewPosition(0, 0);
+}
+

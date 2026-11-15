@@ -7,6 +7,7 @@
 #include <atomic>
 #include <complex>
 #include <memory>
+#include <optional>
 #include <vector>
 
 class EqlModuleProcessor final : private juce::AudioProcessorValueTreeState::Listener
@@ -50,22 +51,27 @@ public:
     void releaseResources();
     void resetProcessingState() noexcept;
     void processBlock(juce::AudioBuffer<float>& buffer);
+    bool syncParameters() noexcept;
+    void setProcessingFilterLimit(int count, bool acceptModel = true) noexcept { processingFilterLimit = count; processingModelUpdatesEnabled = acceptModel; }
     int getLatencySamples() const noexcept;
 
-    void getStateInformation(juce::MemoryBlock& destData);
-    bool setStateInformation(const void* data, int sizeInBytes);
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     juce::AudioProcessorValueTreeState& getValueTreeState() noexcept;
     const juce::AudioProcessorValueTreeState& getValueTreeState() const noexcept;
 
     int getActiveFilterCount() const noexcept;
+    bool isModelEditInProgress() const noexcept { return (modelVersion.load(std::memory_order_acquire) & 1u) != 0; }
     bool addFilter() noexcept;
-    bool removeFilter(int filterIndex) noexcept;
-    bool clearFilters() noexcept;
+    using FilterIndexMap = std::array<int, maxFilterCount>;
+    std::function<void(const FilterIndexMap&)> onFilterRemapped;
+    std::function<void()> onLayoutChanged;
+    std::optional<FilterIndexMap> removeFilter(int filterIndex) noexcept;
     bool applyFilterOrder(const std::vector<int>& orderedFilterIndices) noexcept;
     juce::String getDefaultFilterPresetName() const;
     juce::String getSelectedFilterPresetName() const;
-    juce::StringArray getFilterPresetNames() const;
+    juce::StringArray getFilterPresetNames();
+    bool resolveFilterPresetSelection(const juce::XmlElement* catalog);
     bool saveFilterPreset(const juce::String& presetName);
     bool renameFilterPreset(const juce::String& sourcePresetName, const juce::String& newPresetName);
     bool setDefaultFilterPreset(const juce::String& presetName);
@@ -75,7 +81,8 @@ public:
     void markEqlFiltersDirty() noexcept;
 
 private:
-    bool restoreState(juce::ValueTree restoredState) noexcept;
+    friend class EqlProcessorBank;
+    bool restoreState(juce::ValueTree restoredState, bool resolvePreset = true) noexcept;
 
     static constexpr size_t maxSupportedChannels = 2;
     static constexpr size_t maxBellOrder = 128;
@@ -151,7 +158,7 @@ private:
         int transitionRemaining = 0;
         int transitionLength = 0;
         std::array<std::array<float, phaseFirSize * 2>, maxSupportedChannels> state {};
-        int writeIndex = 0;
+        int writeIndex = 0, historySamples = 0;
     };
 
     struct FilterDesignState
@@ -167,7 +174,6 @@ private:
         double sampleRate = 0.0;
     };
 
-    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void parameterChanged(const juce::String&, float) override;
     void setParameterListenersEnabled(bool enabled);
     bool updateSmoothedFilterGains(int samplesPerBlock) noexcept;
@@ -221,9 +227,44 @@ private:
                                double slope) noexcept;
     void updateFilters();
 
+    template <typename T> struct PreparedFilterSlots {
+        void ensure(int count) {
+            for (int i = 0; i < count; ++i) if (slots[size_t(i)] == nullptr) slots[size_t(i)] = std::make_unique<T>();
+        }
+        T& operator[](size_t index) noexcept { jassert(slots[index] != nullptr); return *slots[index]; }
+        const T& operator[](size_t index) const noexcept { jassert(slots[index] != nullptr); return *slots[index]; }
+        std::array<std::unique_ptr<T>, maxFilterCount> slots;
+    };
+    void prepareFilterStorage(int count);
+
     ava::ModuleParameterHost moduleParameterHost;
     juce::AudioProcessorValueTreeState parameters;
-    mutable juce::CriticalSection filterProcessLock;
+    // Model writers may be slow; the audio thread keeps the last complete snapshot.
+    struct FilterSettings {
+        FilterType type = FilterType::bell;
+        float frequency = 632.46f, bandwidth = 1.0f, gain = 0.0f;
+        int order = 2;
+        bool phase = false, bypass = false;
+    };
+    struct BlockSettings { std::array<FilterSettings, maxFilterCount> filters {}; int count = 0; };
+    struct ModelEdit {
+        explicit ModelEdit(EqlModuleProcessor& p) : owner(p), lock(p.modelLock) {
+            if (owner.editDepth++ == 0) owner.modelVersion.fetch_add(1, std::memory_order_acq_rel);
+        }
+        ~ModelEdit() {
+            if (--owner.editDepth == 0) owner.modelVersion.fetch_add(1, std::memory_order_release);
+        }
+        EqlModuleProcessor& owner;
+        juce::ScopedLock lock;
+    };
+    mutable juce::CriticalSection modelLock;
+    unsigned editDepth = 0;
+    std::atomic<uint64_t> modelVersion { 0 };
+    BlockSettings blockSettings;
+    int processingFilterLimit = maxFilterCount;
+    bool processingModelUpdatesEnabled = true;
+    std::atomic<bool> resetRequested { false }, restoreGainsRequested { false };
+    std::atomic<int> processingLatency { 0 };
     std::array<std::atomic<float>*, maxFilterCount> filterTypeParams {};
     std::array<std::atomic<float>*, maxFilterCount> filterPhaseParams {};
     std::array<std::atomic<float>*, maxFilterCount> filterFrequencyParams {};
@@ -233,11 +274,11 @@ private:
     std::array<std::atomic<float>*, maxFilterCount> filterBypassParams {};
     std::array<juce::SmoothedValue<float>, maxFilterCount> filterGainSmoothers {};
     std::array<float, maxFilterCount> effectiveFilterGainDb {};
-    std::array<std::array<BellOrderFilter, maxBellOrder>, maxFilterCount> bellOrderFilters;
-    std::array<std::array<BiquadCascade, maxShelfOrder>, maxFilterCount> shelfOrderFilters;
-    std::array<BiquadCascade, maxFilterCount> tiltFilters;
-    std::array<BiquadCascade, maxFilterCount> cutBlendFilters;
-    std::array<PhaseFirFilter, maxFilterCount> phaseFirFilters;
+    PreparedFilterSlots<std::array<BellOrderFilter, 2>> bellOrderFilters;
+    PreparedFilterSlots<std::array<BiquadCascade, 2>> shelfOrderFilters;
+    PreparedFilterSlots<BiquadCascade> tiltFilters;
+    PreparedFilterSlots<BiquadCascade> cutBlendFilters;
+    PreparedFilterSlots<PhaseFirFilter> phaseFirFilters;
     juce::dsp::FFT phaseFirFft { phaseFirOrder };
     std::array<FilterDesignState, maxFilterCount> cachedFilterStates {};
     juce::AudioBuffer<float> filterProcessBufferA;

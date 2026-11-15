@@ -1,13 +1,11 @@
 #include "OscController.h"
 #include "Processor.h"
-#include "Editor.h"
-#include "EqlActions.h"
 
 #include "../modules/dyn/Processor.h"
 #include "../modules/eql/Processor.h"
 #include "../modules/eql/RangeBank.h"
-#include "../modules/tls/Processor.h"
-#include "../crossover/ParameterIds.h"
+#include "../modules/shared/BlockChainProcessor.h"
+#include "../crossover/ParameterAccess.h"
 #include "../crossover/UiStateSchema.h"
 #include "../routing/State.h"
 
@@ -17,9 +15,6 @@ namespace
 {
 constexpr auto outputRefreshRateHz = 30;
 constexpr auto parameterChangeTolerance = 1.0e-6f;
-constexpr std::array<const char*, 7> listenSuffixes {
-    "lc", "rc", "mc", "sc", "ll", "rr", "ss"
-};
 
 bool isValidPort(const int port) noexcept
 {
@@ -30,40 +25,6 @@ bool isPortAvailable(const int port)
 {
     juce::DatagramSocket socket;
     return socket.bindToPort(port);
-}
-
-bool parseBandParameterId(const juce::String& parameterId,
-                          size_t& bandIndex,
-                          juce::String& unprefixedParameterId)
-{
-    if (! parameterId.startsWith("band-"))
-        return false;
-
-    const auto separatorIndex = parameterId.indexOfChar('_');
-    if (separatorIndex <= 5)
-        return false;
-
-    const auto bandNumberText = parameterId.substring(5, separatorIndex);
-    if (! bandNumberText.containsOnly("0123456789"))
-        return false;
-
-    const auto bandNumber = bandNumberText.getIntValue();
-    if (bandNumber < 1 || bandNumber > static_cast<int>(ava::crossover::BufferRouter::numRanges)
-        || bandNumberText != juce::String(bandNumber))
-        return false;
-
-    bandIndex = static_cast<size_t>(bandNumber - 1);
-    unprefixedParameterId = parameterId.substring(separatorIndex + 1);
-    return unprefixedParameterId.isNotEmpty();
-}
-
-int getCrossoverSoloBandIndex(const juce::String& parameterId)
-{
-    for (size_t bandIndex = 0; bandIndex < ava::crossover::BufferRouter::numRanges; ++bandIndex)
-        if (parameterId == AvaAudioProcessor::getCrossoverSoloParameterId(bandIndex))
-            return static_cast<int>(bandIndex);
-
-    return -1;
 }
 
 int getCrossoverSplitIndex(const juce::String& parameterId)
@@ -163,8 +124,6 @@ bool OscController::applySettings(const OscSettings& settings)
 
     currentSettings = desired;
     lastSentParameterValues.clear();
-    lastSentModules.clear();
-    lastSentSplitCounts.clear();
 
     if (outputConnected)
     {
@@ -224,16 +183,12 @@ void OscController::oscMessageReceived(const juce::OSCMessage& message)
         if (parameterId == "request")
         {
             lastSentParameterValues.clear();
-            lastSentModules.clear();
-            lastSentSplitCounts.clear();
             sendInstanceState();
         }
-        else if (parameterId == "module" && message.size() >= 1)
-            applyModuleMessage(message[0]);
         else if (message.size() >= 1)
         {
-            currentVisibleParameters = targetProcessor().getVisibleOscParameters();
-            applyParameterMessage(getOscSourceId(parameterId, currentVisibleParameters), message[0]);
+            currentAssignedParameters = targetProcessor().getAssignedOscParameters();
+            applyParameterMessage(getOscSourceId(parameterId, currentAssignedParameters), message[0]);
         }
 
         currentTarget = &processor;
@@ -277,98 +232,7 @@ bool OscController::readNumericArgument(const juce::OSCArgument& argument, float
 
 juce::RangedAudioParameter* OscController::findParameter(const juce::String& parameterId) noexcept
 {
-    const auto trimmedId = parameterId.trim();
-
-    if (trimmedId.isEmpty())
-        return nullptr;
-
-    if (auto* parameter = targetProcessor().getValueTreeState().getParameter(trimmedId))
-        return parameter;
-
-    const auto findInModule = [] (auto* module, const juce::String& id) -> juce::RangedAudioParameter*
-    {
-        if (module == nullptr)
-            return nullptr;
-        if (auto* parameter = module->getValueTreeState().getParameter(id))
-            return parameter;
-        for (auto* candidate : module->getValueTreeState().processor.getParameters())
-            if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*>(candidate))
-                if (getOscAddressName(parameter->paramID) == id)
-                    return parameter;
-        return nullptr;
-    };
-
-    size_t bandIndex = 0;
-    juce::String unprefixedParameterId;
-    const auto hasBandPrefix = parseBandParameterId(trimmedId, bandIndex, unprefixedParameterId);
-
-    switch (targetProcessor().getActiveModule())
-    {
-        case AvaAudioProcessor::ActiveModule::eql:
-            if (hasBandPrefix)
-                if (auto* bank = targetProcessor().getEqlProcessorBank())
-                    return findInModule(bank->getProcessor(bandIndex), unprefixedParameterId);
-            return nullptr;
-        case AvaAudioProcessor::ActiveModule::tls: return findInModule(targetProcessor().getTlsModuleProcessor(), trimmedId);
-        case AvaAudioProcessor::ActiveModule::dyn: return findInModule(targetProcessor().getDynModuleProcessor(), trimmedId);
-        case AvaAudioProcessor::ActiveModule::none: break;
-    }
-
-    return nullptr;
-}
-
-juce::StringArray OscController::getExclusiveListenGroup(const juce::String& parameterId) const
-{
-    juce::StringArray group;
-
-    for (const auto* suffix : listenSuffixes)
-    {
-        if (parameterId != AvaAudioProcessor::getCrossoverParameterId(suffix))
-            continue;
-
-        for (const auto* groupSuffix : listenSuffixes)
-            group.add(AvaAudioProcessor::getCrossoverParameterId(groupSuffix));
-
-        return group;
-    }
-
-    if (getCrossoverSoloBandIndex(parameterId) >= 0)
-    {
-        const auto inclusiveModeProperty = crossover_ui::makeStatePropertyId(
-            "crossover", "manual_solo_inclusive");
-        const auto inclusiveMode = static_cast<bool>(
-            targetProcessor().getValueTreeState().state.getProperty(inclusiveModeProperty, false));
-
-        if (inclusiveMode)
-            return group;
-
-        const auto activeBandCount = targetProcessor().getCrossoverSettings().activeSplitCount + 1;
-        for (size_t bandIndex = 0; bandIndex < activeBandCount; ++bandIndex)
-            group.add(AvaAudioProcessor::getCrossoverSoloParameterId(bandIndex));
-
-        return group;
-    }
-
-    if (targetProcessor().getActiveModule() != AvaAudioProcessor::ActiveModule::tls
-        || ! parameterId.startsWith("band-"))
-        return group;
-
-    for (const auto* suffix : listenSuffixes)
-    {
-        const auto ending = "_" + juce::String(suffix);
-
-        if (! parameterId.endsWith(ending))
-            continue;
-
-        const auto rangePrefix = parameterId.dropLastCharacters(ending.length());
-
-        for (const auto* groupSuffix : listenSuffixes)
-            group.add(rangePrefix + "_" + groupSuffix);
-
-        break;
-    }
-
-    return group;
+    return targetProcessor().findHostSlotTarget(parameterId);
 }
 
 void OscController::sendParameterValue(const juce::String& parameterId,
@@ -385,17 +249,13 @@ void OscController::sendParameterValue(const juce::String& parameterId,
     if (dynamic_cast<const juce::AudioParameterChoice*>(parameter) != nullptr)
         outgoingValue += 1.0f;
 
-    const auto metadata = std::find_if(currentVisibleParameters.begin(), currentVisibleParameters.end(),
+    const auto metadata = std::find_if(currentAssignedParameters.begin(), currentAssignedParameters.end(),
         [&parameterId] (const auto& info) { return info.sourceId == parameterId; });
-    auto addressName = getOscAddressName(parameterId);
-    if (metadata != currentVisibleParameters.end())
-    {
-        addressName = metadata->address.fromLastOccurrenceOf("/", false, false);
-        if (metadata->parameterRange.has_value()) outgoingValue = juce::jlimit(
-            metadata->parameterRange->getStart(), metadata->parameterRange->getEnd(), outgoingValue);
-        outgoingValue *= metadata->valueScale;
-    }
-    const auto address = makeOscAddressPrefix(currentInstanceName) + addressName;
+    if (metadata == currentAssignedParameters.end()) return;
+    if (metadata->parameterRange.has_value()) outgoingValue = juce::jlimit(
+        metadata->parameterRange->getStart(), metadata->parameterRange->getEnd(), outgoingValue);
+    outgoingValue *= metadata->valueScale;
+    const auto address = makeAssignedOscAddress(currentInstanceName, *metadata);
     if (sender.send(juce::OSCMessage(address, outgoingValue)))
         lastSentParameterValues[address] = normalizedValue;
 }
@@ -408,193 +268,18 @@ bool OscController::applyParameterMessage(const juce::String& parameterId,
     if (! readNumericArgument(argument, value))
         return false;
 
-    size_t eqlBandIndex = 0;
-    juce::String eqlAction;
-    const auto eqlFilterDeleteIndex = parseEqlFilterDeleteActionIndex(
-        parameterId.substring(parameterId.indexOfChar('_') + 1));
-    if (parseBandParameterId(parameterId, eqlBandIndex, eqlAction)
-        && (eqlAction == "add"
-            || eqlAction == "delete-all.hidden"
-            || eqlAction == "preset"
-            || eqlFilterDeleteIndex >= 0))
-    {
-        if (targetProcessor().getActiveModule() != AvaAudioProcessor::ActiveModule::eql
-            || eqlBandIndex >= targetProcessor().getCrossoverSettings().activeSplitCount + 1)
-            return false;
-
-        if (auto* editor = targetProcessor().getOscActionEditor())
-            return editor->handleOscEqlAction(eqlBandIndex, eqlAction, value);
-
-        auto* bank = targetProcessor().getEqlProcessorBank();
-        auto* eqlProcessor = bank != nullptr ? bank->getProcessor(eqlBandIndex) : nullptr;
-        if (eqlProcessor == nullptr)
-            return false;
-
-        if (eqlAction == "add")
-            return std::abs(value - 1.0f) <= parameterChangeTolerance
-                && eqlProcessor->addFilter();
-
-        if (eqlAction == "delete-all.hidden")
-            return std::abs(value - 1.0f) <= parameterChangeTolerance
-                && eqlProcessor->clearFilters();
-
-        if (eqlFilterDeleteIndex >= 0)
-            return std::abs(value - 1.0f) <= parameterChangeTolerance
-                && eqlProcessor->removeFilter(eqlFilterDeleteIndex);
-
-        const auto presetNames = eqlProcessor->getFilterPresetNames();
-        const auto presetIndex = getOscChoiceIndex(value, presetNames.size());
-        return presetIndex >= 0 && eqlProcessor->loadFilterPreset(presetNames[presetIndex]);
-    }
-
-    if (parameterId == AvaAudioProcessor::oscGlobalClipId)
-        return true;
-
-    if (parameterId == AvaAudioProcessor::oscSoloModeId)
-    {
-        if (std::abs(value) > parameterChangeTolerance
-            && std::abs(value - 1.0f) > parameterChangeTolerance)
-            return false;
-
-        const auto inclusiveMode = value >= 0.5f;
-        auto& state = targetProcessor().getValueTreeState().state;
-        state.setProperty(crossover_ui::makeStatePropertyId("crossover", "manual_solo_inclusive"),
-                          inclusiveMode,
-                          nullptr);
-
-        const auto activeBandCount = targetProcessor().getCrossoverSettings().activeSplitCount + 1;
-        auto soloBandToKeep = -1;
-
-        if (! inclusiveMode)
-        {
-            const auto visibleBand = juce::jlimit(
-                0,
-                static_cast<int>(activeBandCount - 1),
-                static_cast<int>(state.getProperty(
-                    crossover_ui::makeStatePropertyId("crossover", "visible_band_index"), 0)));
-            if (auto* visibleSolo = targetProcessor().getValueTreeState().getParameter(
-                    AvaAudioProcessor::getCrossoverSoloParameterId(static_cast<size_t>(visibleBand))))
-                if (visibleSolo->getValue() >= 0.5f)
-                    soloBandToKeep = visibleBand;
-
-            if (soloBandToKeep < 0)
-            {
-                for (size_t bandIndex = 0; bandIndex < activeBandCount; ++bandIndex)
-                {
-                    if (auto* solo = targetProcessor().getValueTreeState().getParameter(
-                            AvaAudioProcessor::getCrossoverSoloParameterId(bandIndex)))
-                    {
-                        if (solo->getValue() >= 0.5f)
-                        {
-                            soloBandToKeep = static_cast<int>(bandIndex);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        for (size_t bandIndex = 0; bandIndex < activeBandCount; ++bandIndex)
-        {
-            const auto soloId = AvaAudioProcessor::getCrossoverSoloParameterId(bandIndex);
-            auto* solo = targetProcessor().getValueTreeState().getParameter(soloId);
-            if (solo == nullptr)
-                continue;
-
-            const auto enabled = inclusiveMode ? solo->getValue() >= 0.5f
-                                               : static_cast<int>(bandIndex) == soloBandToKeep;
-            if (! inclusiveMode && ! enabled && solo->getValue() >= 0.5f)
-            {
-                solo->beginChangeGesture();
-                solo->setValueNotifyingHost(0.0f);
-                solo->endChangeGesture();
-                sendParameterValue(soloId, 0.0f);
-            }
-
-            state.setProperty(crossover_ui::makeStatePropertyId(
-                                  "crossover", "manual_solo." + juce::String(static_cast<int>(bandIndex))),
-                              enabled,
-                              nullptr);
-        }
-
-        targetProcessor().notifyHostOfStateChange();
-        return true;
-    }
-
-    if (parameterId == AvaAudioProcessor::oscXovAddId
-        || parameterId == AvaAudioProcessor::oscXovDelId)
-    {
-        if (std::abs(value - 1.0f) > parameterChangeTolerance)
-            return false;
-
-        auto* splitCount = targetProcessor().getValueTreeState().getParameter(
-            AvaAudioProcessor::paramCrossoverActiveSplitCountId);
-        if (splitCount == nullptr)
-            return false;
-
-        const auto currentCount = juce::roundToInt(splitCount->convertFrom0to1(splitCount->getValue()));
-        const auto delta = parameterId == AvaAudioProcessor::oscXovAddId ? 1 : -1;
-        const auto targetCount = juce::jlimit(0,
-                                              static_cast<int>(ava::crossover::BufferRouter::numSplits),
-                                              currentCount + delta);
-        if (targetCount == currentCount)
-            return true;
-
-        splitCount->beginChangeGesture();
-        splitCount->setValueNotifyingHost(splitCount->convertTo0to1(static_cast<float>(targetCount)));
-        splitCount->endChangeGesture();
-        return true;
-    }
-
-    if (parameterId == AvaAudioProcessor::paramCrossoverActiveSplitCountId)
-        return false;
-
-    const auto isGlobalAction = parameterId == AvaAudioProcessor::oscGlobalAbSlotAId
-        || parameterId == AvaAudioProcessor::oscGlobalAbSwitchId
-        || parameterId == AvaAudioProcessor::oscGlobalAbSlotBId
-        || parameterId == AvaAudioProcessor::oscGlobalUndoId
-        || parameterId == AvaAudioProcessor::oscGlobalRedoId
-        || parameterId == AvaAudioProcessor::oscAddModuleId
-        || parameterId == AvaAudioProcessor::oscCloseModuleId;
-
-    if (isGlobalAction)
-    {
-        if (parameterId == AvaAudioProcessor::oscAddModuleId)
-        {
-            if (getOscChoiceIndex(value, static_cast<int>(AvaAudioProcessor::availableModules.size())) < 0)
-                return false;
-        }
-        else if (std::abs(value - 1.0f) > parameterChangeTolerance)
-        {
-            return false;
-        }
-
-        if (auto* editor = targetProcessor().getOscActionEditor())
-            return editor->handleOscGlobalAction(parameterId, value);
-
-        if (parameterId == AvaAudioProcessor::oscAddModuleId)
-        {
-            const auto index = getOscChoiceIndex(value, static_cast<int>(AvaAudioProcessor::availableModules.size()));
-            return targetProcessor().getActiveModule() == AvaAudioProcessor::ActiveModule::none
-                && targetProcessor().loadModule(AvaAudioProcessor::availableModules[static_cast<size_t>(index)]);
-        }
-        if (parameterId == AvaAudioProcessor::oscCloseModuleId)
-            return targetProcessor().clearLoadedModule();
-
-        return false;
-    }
-
     auto* parameter = findParameter(parameterId);
 
     if (parameter == nullptr)
         return false;
 
-    const auto metadata = std::find_if(currentVisibleParameters.begin(), currentVisibleParameters.end(),
+    const auto metadata = std::find_if(currentAssignedParameters.begin(), currentAssignedParameters.end(),
         [&parameterId] (const auto& info) { return info.sourceId == parameterId; });
+    if (metadata == currentAssignedParameters.end()) return false;
     const auto isChoice = dynamic_cast<juce::AudioParameterChoice*>(parameter) != nullptr;
-    const auto parameterValue = value / (metadata != currentVisibleParameters.end() ? metadata->valueScale : 1.0f)
+    const auto parameterValue = value / metadata->valueScale
         - (isChoice ? 1.0f : 0.0f);
-    if (metadata != currentVisibleParameters.end() && metadata->parameterRange.has_value()
+    if (metadata->parameterRange.has_value()
         && (parameterValue < metadata->parameterRange->getStart() - 1.0e-6f
             || parameterValue > metadata->parameterRange->getEnd() + 1.0e-6f))
         return false;
@@ -605,34 +290,12 @@ bool OscController::applyParameterMessage(const juce::String& parameterId,
 
     if (const auto splitIndex = getCrossoverSplitIndex(parameterId); splitIndex >= 0)
     {
-        constexpr auto minimumSplitGapHz = 1.0f;
-        const auto activeSplitCount = static_cast<int>(targetProcessor().getCrossoverSettings().activeSplitCount);
-        if (splitIndex >= activeSplitCount)
-            return false;
-
-        auto lowerBound = range.start + (minimumSplitGapHz * static_cast<float>(splitIndex));
-        auto upperBound = range.end
-            - (minimumSplitGapHz * static_cast<float>(activeSplitCount - splitIndex - 1));
-
-        if (splitIndex > 0)
-        {
-            const auto previousSuffix = "split-" + juce::String(splitIndex);
-            if (const auto* previous = targetProcessor().getValueTreeState().getParameter(
-                    AvaAudioProcessor::getCrossoverParameterId(previousSuffix.toRawUTF8())))
-                lowerBound = juce::jmax(lowerBound,
-                                        previous->convertFrom0to1(previous->getValue()) + minimumSplitGapHz);
-        }
-
-        if (splitIndex + 1 < activeSplitCount)
-        {
-            const auto nextSuffix = "split-" + juce::String(splitIndex + 2);
-            if (const auto* next = targetProcessor().getValueTreeState().getParameter(
-                    AvaAudioProcessor::getCrossoverParameterId(nextSuffix.toRawUTF8())))
-                upperBound = juce::jmin(upperBound,
-                                        next->convertFrom0to1(next->getValue()) - minimumSplitGapHz);
-        }
-
-        if (parameterValue < lowerBound - tolerance || parameterValue > upperBound + tolerance)
+        const auto activeSplitCount = targetProcessor().getCrossoverSettings().activeSplitCount;
+        if (size_t(splitIndex) >= activeSplitCount) return false;
+        const auto bounds = ava::crossover::parameters::splitFrequencyBounds(
+            targetProcessor().getValueTreeState(), size_t(splitIndex), activeSplitCount,
+            [] (const char* suffix) { return AvaAudioProcessor::getCrossoverParameterId(suffix); });
+        if (parameterValue < bounds.getStart() - tolerance || parameterValue > bounds.getEnd() + tolerance)
             return false;
     }
 
@@ -644,84 +307,13 @@ bool OscController::applyParameterMessage(const juce::String& parameterId,
         return false;
 
     const auto normalizedValue = juce::jlimit(0.0f, 1.0f, parameter->convertTo0to1(snappedValue));
-    const auto exclusiveGroup = normalizedValue >= 0.5f
-        ? getExclusiveListenGroup(parameterId)
-        : juce::StringArray {};
-
-    if (! exclusiveGroup.isEmpty() && parameter->getValue() < 0.5f)
-    {
-        for (const auto& otherParameterId : exclusiveGroup)
-        {
-            if (otherParameterId == parameterId)
-                continue;
-
-            auto* otherParameter = findParameter(otherParameterId);
-
-            if (otherParameter == nullptr || otherParameter->getValue() < 0.5f)
-                continue;
-
-            otherParameter->beginChangeGesture();
-            otherParameter->setValueNotifyingHost(0.0f);
-            otherParameter->endChangeGesture();
-            sendParameterValue(otherParameterId, 0.0f);
-
-            const auto otherSoloBandIndex = getCrossoverSoloBandIndex(otherParameterId);
-            if (otherSoloBandIndex >= 0)
-                targetProcessor().getValueTreeState().state.setProperty(
-                    crossover_ui::makeStatePropertyId(
-                        "crossover", "manual_solo." + juce::String(otherSoloBandIndex)),
-                    false,
-                    nullptr);
-        }
-    }
-
     parameter->beginChangeGesture();
     parameter->setValueNotifyingHost(normalizedValue);
     parameter->endChangeGesture();
 
-    const auto soloBandIndex = getCrossoverSoloBandIndex(parameterId);
-    if (soloBandIndex >= 0)
-    {
-        targetProcessor().getValueTreeState().state.setProperty(
-            crossover_ui::makeStatePropertyId(
-                "crossover", "manual_solo." + juce::String(soloBandIndex)),
-            normalizedValue >= 0.5f,
-            nullptr);
-        targetProcessor().notifyHostOfStateChange();
-    }
-
-    if (! exclusiveGroup.isEmpty() && normalizedValue >= 0.5f)
-        sendParameterValue(parameterId, normalizedValue);
+    sendParameterValue(parameterId, parameter->getValue(), parameter);
 
     return true;
-}
-
-bool OscController::applyModuleMessage(const juce::OSCArgument& argument)
-{
-    if (! argument.isString())
-        return false;
-
-    const auto moduleName = argument.getString().trim().toLowerCase();
-    auto target = AvaAudioProcessor::ActiveModule::none;
-
-    if (moduleName != "none")
-    {
-        for (const auto module : AvaAudioProcessor::availableModules)
-            if (moduleName == AvaAudioProcessor::stateIdForModule(module))
-                target = module;
-
-        if (target == AvaAudioProcessor::ActiveModule::none)
-            return false;
-    }
-
-    if (targetProcessor().getActiveModule() == target)
-        return true;
-
-    if (targetProcessor().getActiveModule() != AvaAudioProcessor::ActiveModule::none
-        && ! targetProcessor().clearLoadedModule())
-        return false;
-
-    return target == AvaAudioProcessor::ActiveModule::none || targetProcessor().loadModule(target);
 }
 
 void OscController::timerCallback()
@@ -743,9 +335,7 @@ void OscController::sendCurrentState()
     {
         lastRoutingSignature = routingSignature;
         lastSentParameterValues.clear();
-        lastSentModules.clear();
-        lastSentSplitCounts.clear();
-        lastVisibleParameters.clear();
+        lastAssignedParameters.clear();
     }
 
     for (const auto& node : routing.nodes)
@@ -765,125 +355,23 @@ void OscController::sendCurrentState()
 
 void OscController::sendInstanceState()
 {
-    currentVisibleParameters = targetProcessor().getVisibleOscParameters();
-    auto& previousVisible = lastVisibleParameters[currentInstanceName];
-    if (currentVisibleParameters != previousVisible)
+    currentAssignedParameters = targetProcessor().getAssignedOscParameters();
+    auto& previous = lastAssignedParameters[currentInstanceName];
+    if (currentAssignedParameters != previous)
     {
         const auto prefix = makeOscAddressPrefix(currentInstanceName);
         for (auto it = lastSentParameterValues.begin(); it != lastSentParameterValues.end();)
             it = it->first.startsWith(prefix) ? lastSentParameterValues.erase(it) : std::next(it);
-        previousVisible = currentVisibleParameters;
+        previous = currentAssignedParameters;
     }
-    const auto module = juce::String(AvaAudioProcessor::stateIdForModule(targetProcessor().getActiveModule()));
-    auto& lastSentModule = lastSentModules[currentInstanceName];
-
-    if (module != lastSentModule)
+    for (const auto& info : currentAssignedParameters)
     {
-        sender.send(juce::OSCMessage(makeOscAddressPrefix(currentInstanceName) + "module",
-                                     module.isEmpty() ? juce::String("none") : module));
-        lastSentModule = module;
-        const auto prefix = makeOscAddressPrefix(currentInstanceName);
-        for (auto it = lastSentParameterValues.begin(); it != lastSentParameterValues.end();)
-            it = it->first.startsWith(prefix) ? lastSentParameterValues.erase(it) : std::next(it);
-    }
-
-    const auto activeABSlot = targetProcessor().getABCompareActiveSlot();
-    sendParameterValue(AvaAudioProcessor::oscGlobalAbSlotAId, activeABSlot == 0 ? 1.0f : 0.0f);
-    sendParameterValue(AvaAudioProcessor::oscGlobalAbSlotBId, activeABSlot == 1 ? 1.0f : 0.0f);
-    sendParameterValue(AvaAudioProcessor::oscGlobalClipId,
-                       juce::jlimit(0.0f, 1.0f, targetProcessor().getGlobalClipIndicator()));
-    sendParameterValue(AvaAudioProcessor::oscSoloModeId,
-                       static_cast<bool>(targetProcessor().getValueTreeState().state.getProperty(
-                           crossover_ui::makeStatePropertyId("crossover", "manual_solo_inclusive"), false))
-                           ? 1.0f
-                           : 0.0f);
-
-    sendCrossoverActions();
-    sendParameters(targetProcessor().getValueTreeState());
-
-    switch (targetProcessor().getActiveModule())
-    {
-        case AvaAudioProcessor::ActiveModule::eql:
-            if (auto* bank = targetProcessor().getEqlProcessorBank())
-                for (size_t bandIndex = 0; bandIndex < bank->getCreatedRangeCount(); ++bandIndex)
-                    if (auto* moduleProcessor = bank->getProcessor(bandIndex))
-                    {
-                        sendParameters(moduleProcessor->getValueTreeState(),
-                                       "band-" + juce::String(static_cast<int>(bandIndex + 1)) + "_");
-
-                        const auto presetNames = moduleProcessor->getFilterPresetNames();
-                        const auto selectedPreset = moduleProcessor->getSelectedFilterPresetName();
-                        const auto presetIndex = presetNames.indexOf(selectedPreset, true);
-                        if (presetIndex >= 0)
-                            sendParameterValue(AvaAudioProcessor::getEqlPresetSelectionId(bandIndex),
-                                               static_cast<float>(presetIndex + 1));
-                    }
-            break;
-        case AvaAudioProcessor::ActiveModule::tls:
-            if (auto* moduleProcessor = targetProcessor().getTlsModuleProcessor()) sendParameters(moduleProcessor->getValueTreeState());
-            break;
-        case AvaAudioProcessor::ActiveModule::dyn:
-            if (auto* moduleProcessor = targetProcessor().getDynModuleProcessor()) sendParameters(moduleProcessor->getValueTreeState());
-            break;
-        case AvaAudioProcessor::ActiveModule::none:
-            break;
-    }
-}
-
-void OscController::sendCrossoverActions()
-{
-    auto* splitCount = targetProcessor().getValueTreeState().getParameter(
-        AvaAudioProcessor::paramCrossoverActiveSplitCountId);
-    if (splitCount == nullptr)
-        return;
-
-    const auto currentCount = juce::roundToInt(splitCount->convertFrom0to1(splitCount->getValue()));
-    auto& lastSentSplitCount = lastSentSplitCounts.try_emplace(currentInstanceName, -1).first->second;
-    if (lastSentSplitCount < 0)
-    {
-        lastSentSplitCount = currentCount;
-        return;
-    }
-
-    const auto actionId = currentCount > lastSentSplitCount
-        ? AvaAudioProcessor::oscXovAddId
-        : AvaAudioProcessor::oscXovDelId;
-    const auto actionCount = std::abs(currentCount - lastSentSplitCount);
-    lastSentSplitCount = currentCount;
-
-    for (int actionIndex = 0; actionIndex < actionCount; ++actionIndex)
-        sendParameterValue(actionId, 1.0f);
-}
-
-void OscController::sendParameters(juce::AudioProcessorValueTreeState& state,
-                                   const juce::String& parameterIdPrefix)
-{
-    for (const auto parameterState : state.state)
-    {
-        const auto parameterId = parameterState.getProperty("id").toString();
-        auto* parameter = state.getParameter(parameterId);
-
-        if (parameterId.isEmpty()
-            || parameter == nullptr)
-            continue;
-
-        if (&state == &targetProcessor().getValueTreeState()
-            && (parameterId == AvaAudioProcessor::paramCrossoverActiveSplitCountId
-                || parameterId.startsWith(AvaAudioProcessor::paramHostSlotPrefix)))
-            continue;
-
-        const auto currentValue = parameter->getValue();
-        const auto oscParameterId = parameterIdPrefix + parameterId;
-        const auto metadata = std::find_if(currentVisibleParameters.begin(), currentVisibleParameters.end(),
-            [&oscParameterId] (const auto& info) { return info.sourceId == oscParameterId; });
-        if (metadata == currentVisibleParameters.end()) continue;
-        const auto previous = lastSentParameterValues.find(
-            makeOscAddressPrefix(currentInstanceName) + metadata->address.fromLastOccurrenceOf("/", false, false));
-
-        if (previous != lastSentParameterValues.end()
-            && std::abs(previous->second - currentValue) <= parameterChangeTolerance)
-            continue;
-
-        sendParameterValue(oscParameterId, currentValue, parameter);
+        auto* parameter = findParameter(info.sourceId);
+        if (parameter == nullptr) continue;
+        const auto value = parameter->getValue();
+        const auto address = makeAssignedOscAddress(currentInstanceName, info);
+        const auto sent = lastSentParameterValues.find(address);
+        if (sent != lastSentParameterValues.end() && std::abs(sent->second - value) <= parameterChangeTolerance) continue;
+        sendParameterValue(info.sourceId, value, parameter);
     }
 }

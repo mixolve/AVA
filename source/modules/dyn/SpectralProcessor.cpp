@@ -17,7 +17,7 @@ void DynSpectralProcessor::prepareToPlay(const double sampleRate, const int samp
         values.assign(static_cast<size_t>(deltaDelayBufferSize), 0.0f);
     for (auto& values : lookaheadDelayBuffers)
         values.assign(static_cast<size_t>(maxLookaheadSamples + 2), 0.0f);
-    lookaheadDelay.reset(sampleRate, 0.005);
+    lookaheadDelay.reset(sampleRate, 0.0);
     activeDynamicProcessorIndex = 0;
     activeFftSize = 4096;
     activeOverlapFactor = 32;
@@ -283,7 +283,8 @@ void DynSpectralProcessor::ensureDeltaDryBufferSize(const int channels, const in
 void DynSpectralProcessor::delayMainForLookahead(juce::AudioBuffer<float>& buffer, const int channels,
                                                  const int lookaheadSamples) noexcept
 {
-    lookaheadDelay.setTargetValue(static_cast<float>(lookaheadSamples));
+    // Preserve zero-hidden-slew behavior when automating LOOKAHEAD.
+    lookaheadDelay.setCurrentAndTargetValue(static_cast<float>(lookaheadSamples));
     const auto capacity = maxLookaheadSamples + 2;
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
     {

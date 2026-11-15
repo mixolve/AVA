@@ -3,27 +3,17 @@
 #include "DisclosureAnimation.h"
 #include "PopupListStyle.h"
 
+#include <cmath>
 #include <utility>
 
 namespace
 {
-constexpr int promptItemHeight = popup_list::itemHeight;
 
 class ChoiceContent final : public juce::Component
 {
 public:
-    explicit ChoiceContent(const int itemCountIn) : itemCount(itemCountIn) {}
-
-    void paint(juce::Graphics& graphics) override { graphics.fillAll(uiGreyDark); }
-
-    void paintOverChildren(juce::Graphics& graphics) override
-    {
-        graphics.setColour(uiWhite);
-        popup_list::paintSeparators(graphics,getWidth(),itemCount);
-    }
-
-private:
-    int itemCount = 0;
+    explicit ChoiceContent(int) { setOpaque(true); }
+    void paint(juce::Graphics& graphics) override { paintPluginBackground(graphics); }
 };
 
 class FloatingChoicePrompt final : public PromptComponent
@@ -41,12 +31,15 @@ public:
                          SelectCallback selectCallback,
                          DismissCallback dismissCallback,
                          CloseCallback closeCallback,
-                         bool commitBeforeFadeIn)
+                         bool commitBeforeFadeIn,
+                         std::vector<bool> itemActiveStates,
+                         bool compactButtonsIn)
         : anchorBounds(std::move(anchorBoundsIn)),
           choices(std::move(choicesIn)),
           selectedIndex(selectedIndexIn),
           itemEnabledStates(std::move(itemEnabledStatesIn)),
           itemJustification(itemJustificationIn),
+          compactButtons(compactButtonsIn),
           choiceContent(choices.size()),
           onSelect(std::move(selectCallback)),
           onDismiss(std::move(dismissCallback)),
@@ -63,6 +56,7 @@ public:
         choiceViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
         choiceViewport.setWantsKeyboardFocus(false);
         choiceViewport.setMouseClickGrabsKeyboardFocus(false);
+        revealClip.setOpaque(true);
         revealClip.addAndMakeVisible(choiceViewport);
         addAndMakeVisible(revealClip);
         revealClip.setInterceptsMouseClicks(false, true);
@@ -81,11 +75,13 @@ public:
 
         for (int index = 0; index < choices.size(); ++index)
         {
-            auto button = std::make_unique<BoxTextButton>(uiAccent);
+            auto button = std::make_unique<BoxTextButton>();
             button->setButtonText(choices[index]);
             button->setTextJustification(itemJustification);
-            button->setBorderVisible(false);
-            button->setActiveFill(index==selectedIndex);
+            button->setBorderVisible(true);
+
+            button->setSelectionHighlighted(itemActiveStates.size() == static_cast<size_t>(choices.size())
+                ? itemActiveStates[static_cast<size_t>(index)] : index == selectedIndex);
             const auto isEnabled = itemEnabled(index);
             button->setEnabled(isEnabled);
             button->setAlpha(1.0f);
@@ -101,40 +97,63 @@ public:
 
     void paintOverChildren(juce::Graphics& graphics) override
     {
-        if (reveal.value() <= 0.0) return;
+        if (reveal.value() <= 0.0 || compactButtons) return;
         juce::Graphics::ScopedSaveState saved(graphics);
         graphics.reduceClipRegion(revealClip.getBounds());
         const auto bounds = revealClip.getBounds().toFloat();
-        graphics.setColour(uiWhite.withMultipliedAlpha(static_cast<float>(reveal.value())));
-        popup_list::paintFrame(graphics,bounds);
+        paintUiFrame(graphics, bounds,
+            uiWhite.withMultipliedAlpha(static_cast<float>(reveal.value())), 1.0f);
     }
 
     void resized() override
     {
-        const auto visibleBounds = getLocalBounds().reduced(uiGap);
+        const auto visibleBounds = getLocalBounds().reduced(getUiGap(*this));
         const auto itemCount = static_cast<int>(choices.size());
-        const auto itemBlockHeight = itemCount * promptItemHeight;
+        if (compactButtons)
+        {
+            // Text COPY/PASTE uses the same 36 px square controls and 8 px gaps
+            // as the global navigation, rather than the full-size choice list.
+            const auto size = getCompactControlSize(*this);
+            const auto gap = getUiGap(*this);
+            panelBounds = juce::Rectangle<int>(juce::jmin(visibleBounds.getWidth(),
+                itemCount * size + juce::jmax(0, itemCount - 1) * gap), size);
+            panelBounds.setCentre(anchorBounds.getCentre());
+            panelBounds = panelBounds.constrainedWithin(visibleBounds);
+            choiceViewport.setBounds(panelBounds.withPosition(0, 0));
+            choiceContent.setSize(panelBounds.getWidth(), size);
+            for (size_t index = 0; index < itemButtons.size(); ++index)
+                itemButtons[index]->setBounds(int(index) * (size + gap), 0, size, size);
+            if (!animationStarted && !visibleBounds.isEmpty())
+            {
+                animationStarted = true;
+                reveal.setExpanded(true);
+            }
+            layoutReveal();
+            return;
+        }
+        const auto itemBlockHeight = popup_list::contentHeight(itemCount, *this);
         const auto availableWidth = visibleBounds.getWidth();
-        const auto promptWidth = juce::jmax(1, juce::jmin(availableWidth, anchorBounds.getWidth()));
-        const auto visibleRows = juce::jmin(itemCount, juce::jmax(0, visibleBounds.getHeight() / promptItemHeight));
-        const auto promptHeight = visibleRows * promptItemHeight;
+        const auto promptWidth = juce::jmax(1, juce::jmin(availableWidth, getSquareControlSize(*this) + 2 * getUiGap(*this)));
+        const auto visibleRows = juce::jmin(itemCount, juce::jmax(0, juce::jmax(0, visibleBounds.getHeight() - 2 * getUiGap(*this) + getUiRowGap(*this)) / (getSquareControlSize(*this) + getUiRowGap(*this))));
+        const auto promptHeight = popup_list::contentHeight(visibleRows, *this) + 2 * getUiGap(*this);
         const auto alignedItemIndex = juce::isPositiveAndBelow(selectedIndex, itemCount) ? selectedIndex : 0;
-        const auto alignedItemCentreY = (alignedItemIndex * promptItemHeight)
-            + (promptItemHeight / 2);
+        const auto alignedItemCentreY = (alignedItemIndex * (getSquareControlSize(*this) + getUiRowGap(*this)))
+            + getUiGap(*this) + (getSquareControlSize(*this) / 2);
 
         panelBounds = juce::Rectangle<int>(promptWidth, promptHeight);
         panelBounds.setX(anchorBounds.getX());
         panelBounds.setY(anchorBounds.getCentreY() - alignedItemCentreY);
         panelBounds = panelBounds.constrainedWithin(visibleBounds);
 
-        choiceViewport.setBounds(panelBounds.withPosition(0, 0));
-        choiceContent.setSize(panelBounds.getWidth(), juce::jmax(panelBounds.getHeight(), itemBlockHeight));
+        choiceViewport.setBounds(panelBounds.withPosition(0, 0).reduced(getUiGap(*this)));
+        choiceContent.setSize(choiceViewport.getWidth(), juce::jmax(choiceViewport.getHeight(), itemBlockHeight));
 
         auto contentBounds = choiceContent.getLocalBounds();
         for (size_t index = 0; index < itemButtons.size(); ++index)
         {
-            auto itemBounds = contentBounds.removeFromTop(promptItemHeight);
+            auto itemBounds = contentBounds.removeFromTop(getSquareControlSize(*this));
             itemButtons[index]->setBounds(itemBounds);
+            contentBounds.removeFromTop(getUiRowGap(*this));
 
         }
 
@@ -151,15 +170,15 @@ public:
 
             if (juce::isPositiveAndBelow(selectedIndex, static_cast<int>(itemButtons.size())))
             {
-                const auto itemY = selectedIndex * promptItemHeight;
+                const auto itemY = selectedIndex * (getSquareControlSize(*this) + getUiRowGap(*this));
                 const auto maxOffset = juce::jmax(0, choiceContent.getHeight() - choiceViewport.getHeight());
                 const auto rowsBefore = juce::jmax(0, visibleRows - 1) / 2;
-                const auto targetY = itemY - rowsBefore * promptItemHeight;
+                const auto targetY = itemY - rowsBefore * (getSquareControlSize(*this) + getUiRowGap(*this));
                 choiceViewport.setViewPosition(0, juce::jlimit(0, maxOffset, targetY));
             }
         }
-        choiceViewport.setViewPosition(0, juce::jlimit(0, juce::jmax(0, itemBlockHeight - promptHeight),
-            (choiceViewport.getViewPositionY() / promptItemHeight) * promptItemHeight));
+        choiceViewport.setViewPosition(0, juce::jlimit(0, juce::jmax(0, itemBlockHeight - choiceViewport.getHeight()),
+            (choiceViewport.getViewPositionY() / (getSquareControlSize(*this) + getUiRowGap(*this))) * (getSquareControlSize(*this) + getUiRowGap(*this))));
         layoutReveal();
     }
 
@@ -171,17 +190,19 @@ public:
 
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
     {
-        if (! panelBounds.contains(event.getPosition()))
+        if (compactButtons || ! panelBounds.contains(event.getPosition()))
             return;
+        // Horizontal trackpad gestures are not row navigation.
+        if (std::abs(wheel.deltaX) > std::abs(wheel.deltaY)) return;
 
         const auto delta = wheel.isReversed ? wheel.deltaY : -wheel.deltaY;
-        scrollRemainder += delta * (wheel.isSmooth ? 220.0f : 48.0f) / promptItemHeight;
+        scrollRemainder += delta * (wheel.isSmooth ? 220.0f : 48.0f) / static_cast<float>(getSquareControlSize(*this) + getUiRowGap(*this));
         const auto rows = static_cast<int>(scrollRemainder);
         if (rows == 0) return;
         scrollRemainder -= static_cast<float>(rows);
         const auto maximum = juce::jmax(0, choiceContent.getHeight() - choiceViewport.getHeight());
         choiceViewport.setViewPosition(0, juce::jlimit(0, maximum,
-            choiceViewport.getViewPositionY() + rows * promptItemHeight));
+            choiceViewport.getViewPositionY() + rows * (getSquareControlSize(*this) + getUiRowGap(*this))));
     }
 
 private:
@@ -236,7 +257,8 @@ private:
         // All choice lists fade in place: keep rows, text and frame stationary.
         revealClip.setBounds(panelBounds);
         revealClip.setAlpha(static_cast<float>(reveal.value()));
-        choiceViewport.setBounds(panelBounds.withPosition(0, 0));
+        choiceViewport.setBounds(compactButtons ? panelBounds.withPosition(0, 0)
+            : panelBounds.withPosition(0, 0).reduced(getUiGap(*this)));
     }
 
     void requestClose()
@@ -268,7 +290,11 @@ private:
     int selectedIndex = -1;
     std::vector<bool> itemEnabledStates;
     juce::Justification itemJustification = juce::Justification::centred;
-    juce::Component revealClip;
+    bool compactButtons = false;
+    struct Panel final : juce::Component
+    {
+        void paint(juce::Graphics& g) override { paintPluginBackground(g); }
+    } revealClip;
     class RowViewport final : public juce::Viewport
     {
     public:
@@ -300,7 +326,9 @@ std::unique_ptr<PromptComponent> makeChoicePrompt(juce::Rectangle<int> anchorBou
                                                   std::function<void(int)> onSelect,
                                                   std::function<void()> onDismiss,
                                                   std::function<void()> onClose,
-                                                  const bool commitBeforeFade)
+                                                  const bool commitBeforeFade,
+                                                  std::vector<bool> itemActiveStates,
+                                                  const bool compactButtons)
 {
     return std::make_unique<FloatingChoicePrompt>(std::move(anchorBounds),
                                                   std::move(choices),
@@ -309,5 +337,6 @@ std::unique_ptr<PromptComponent> makeChoicePrompt(juce::Rectangle<int> anchorBou
                                                   itemJustification,
                                                   std::move(onSelect),
                                                   std::move(onDismiss),
-                                                  std::move(onClose),commitBeforeFade);
+                                                  std::move(onClose), commitBeforeFade,
+                                                  std::move(itemActiveStates), compactButtons);
 }

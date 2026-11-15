@@ -2,13 +2,11 @@
 
 #if JUCE_WINDOWS
 #include <windows.h>
-#include <vector>
 
 namespace window_geometry
 {
 namespace
 {
-int dragCursorHideCalls = 0;
 
 HWND getWindow(juce::Component& component)
 {
@@ -17,7 +15,7 @@ HWND getWindow(juce::Component& component)
 }
 }
 
-bool canResizeNativeWindow(juce::Component& component)
+bool canMoveNativeWindow(juce::Component& component)
 {
     if (dynamic_cast<juce::AudioProcessorEditor*>(&component) == nullptr) return true;
     auto* window = getWindow(component);
@@ -47,59 +45,12 @@ void setPosition(juce::Component& component, juce::Point<int> position)
                      SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
     }
 }
-std::vector<SnapTarget> getSnapTargets(juce::Component& component)
-{
-    std::vector<SnapTarget> targets;
-    for (const auto& display : juce::Desktop::getInstance().getDisplays().displays)
-    {
-        const auto area = display.userArea;
-        targets.push_back({ { area.getX(), area.getY(), area.getWidth(), area.getHeight() }, true });
-    }
-    struct Context { HWND own; std::vector<SnapTarget>& targets; } context { getWindow(component), targets };
-    EnumWindows([](HWND window, LPARAM data) -> BOOL
-    {
-        auto& state = *reinterpret_cast<Context*>(data);
-        if (window == state.own || !IsWindowVisible(window) || IsIconic(window)) return TRUE;
-        RECT frame {};
-        if (GetWindowRect(window, &frame) && frame.right > frame.left && frame.bottom > frame.top)
-        {
-            const auto area = juce::Desktop::getInstance().getDisplays().physicalToLogical(
-                juce::Rectangle<int>(frame.left, frame.top, frame.right - frame.left, frame.bottom - frame.top));
-            state.targets.push_back({ { area.getX(), area.getY(), area.getWidth(), area.getHeight() }, false });
-        }
-        return TRUE;
-    }, reinterpret_cast<LPARAM>(&context));
-    return targets;
-}
-
-void hideWindowDragCursor()
-{
-    auto source = juce::Desktop::getInstance().getMainMouseSource();
-    source.hideCursor();
-}
-void setWindowDragActive(juce::Component&, const bool active)
-{
-    if (active)
-    {
-        if (dragCursorHideCalls == 0)
-        {
-            int visibility;
-            do { visibility = ShowCursor(FALSE); ++dragCursorHideCalls; } while (visibility >= 0);
-        }
-        hideWindowDragCursor();
-    }
-    else
-    {
-        while (dragCursorHideCalls > 0) { ShowCursor(TRUE); --dragCursorHideCalls; }
-        juce::Desktop::getInstance().getMainMouseSource().forceMouseCursorUpdate();
-    }
-}
 
 }
 #elif ! JUCE_MAC
 namespace window_geometry
 {
-bool canResizeNativeWindow(juce::Component& component) { return component.getTopLevelComponent()->isOnDesktop(); }
+bool canMoveNativeWindow(juce::Component& component) { return component.getTopLevelComponent()->isOnDesktop(); }
 
 juce::Rectangle<int> getBounds(juce::Component& component)
 {
@@ -110,26 +61,6 @@ void setPosition(juce::Component& component, juce::Point<int> position)
     auto* top = component.getTopLevelComponent();
     if (top->isOnDesktop())
         top->setTopLeftPosition(position);
-}
-std::vector<SnapTarget> getSnapTargets(juce::Component&)
-{
-    std::vector<SnapTarget> targets;
-    for (const auto& display : juce::Desktop::getInstance().getDisplays().displays)
-    {
-        const auto area = display.userArea;
-        targets.push_back({ { area.getX(), area.getY(), area.getWidth(), area.getHeight() }, true });
-    }
-    return targets;
-}
-void hideWindowDragCursor()
-{
-    auto source = juce::Desktop::getInstance().getMainMouseSource();
-    source.hideCursor();
-}
-void setWindowDragActive(juce::Component&, const bool active)
-{
-    if (active) hideWindowDragCursor();
-    else juce::Desktop::getInstance().getMainMouseSource().forceMouseCursorUpdate();
 }
 
 }

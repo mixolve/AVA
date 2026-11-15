@@ -10,7 +10,8 @@ namespace ava::eql
 {
 template <typename Cascade>
 void designCutOrderFilter(Cascade& filter, const EqlModuleProcessor::FilterType filterType,
-                          const int order, const double frequency, const double sampleRate) noexcept
+                          const int order, const double frequency, const double sampleRate,
+                          const bool normaliseAtReference = true) noexcept
 {
     filter.setIdentity();
 
@@ -89,7 +90,7 @@ void designCutOrderFilter(Cascade& filter, const EqlModuleProcessor::FilterType 
     }
     const auto magnitude = std::abs(response);
 
-    if (magnitude > 1.0e-9 && filter.stageCount > 0)
+    if (normaliseAtReference && magnitude > 1.0e-9 && filter.stageCount > 0)
     {
         auto& firstSection = filter.sections[0];
         const auto normalisation = 1.0 / magnitude;

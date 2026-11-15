@@ -8,6 +8,20 @@
 
 namespace ava::modules::state
 {
+template <typename Order>
+inline bool isPermutation(const Order& order, const int count) noexcept
+{
+    if (count < 0 || static_cast<int>(order.size()) < count) return false;
+    for (int index = 0; index < count; ++index)
+    {
+        const auto value = static_cast<int>(order[static_cast<size_t>(index)]);
+        if (!juce::isPositiveAndBelow(value, count)) return false;
+        for (int previous = 0; previous < index; ++previous)
+            if (order[static_cast<size_t>(previous)] == order[static_cast<size_t>(index)]) return false;
+    }
+    return true;
+}
+
 inline std::optional<double> parseExactFiniteNumber(const juce::var& value)
 {
     const auto valueText = value.toString();
@@ -96,101 +110,80 @@ inline std::optional<float> readParameterPlainValue(const juce::ValueTree& state
     return std::nullopt;
 }
 
-inline bool hasExactParameterState(const juce::ValueTree& candidate,
+// Read registered IDs without interpreting unknown IDs. Missing current values
+// get their declared defaults before APVTS::replaceState, so they cannot inherit
+// the previous live value. No ID aliases or value conversion are applied.
+inline juce::ValueTree completeMissingParameterDefaults(
+    const juce::ValueTree& candidate,
+    juce::AudioProcessorValueTreeState& parameters)
+{
+    if (!candidate.isValid() || candidate.getType() != parameters.state.getType())
+        return {};
+
+    auto complete = candidate.createCopy();
+    juce::HashMap<juce::String, bool> present;
+    for (int index = complete.getNumChildren(); --index >= 0;)
+    {
+        const auto child = complete.getChild(index);
+        if (!child.hasType("PARAM")) continue;
+        const auto id = child.getProperty("id").toString();
+        if (parameters.getParameter(id) != nullptr) present.set(id, true);
+        else complete.removeChild(index, nullptr);
+    }
+    // A state with no recognised parameters must not become an all-default save.
+    if (present.size() == 0) return complete;
+
+    for (const auto expected : parameters.copyState())
+    {
+        if (!expected.hasType("PARAM")) continue;
+        const auto id = expected.getProperty("id").toString();
+        auto* parameter = parameters.getParameter(id);
+        if (parameter == nullptr) continue;
+        if (present.contains(id)) continue;
+        juce::ValueTree item("PARAM");
+        item.setProperty("id", id, nullptr);
+        item.setProperty("value", parameter->convertFrom0to1(parameter->getDefaultValue()), nullptr);
+        complete.addChild(item, -1, nullptr);
+    }
+    return complete;
+}
+
+// Unknown IDs carry no settings. Validate current values and reject duplicates,
+// malformed current values or a state with no complete current parameter set.
+inline bool hasValidParameterState(const juce::ValueTree& candidate,
                                    juce::AudioProcessorValueTreeState& parameters,
                                    const juce::Identifier& allowedExtraChildType = {})
 {
-    if (! candidate.isValid() || candidate.getType() != parameters.state.getType())
-        return false;
+    if (!candidate.isValid() || candidate.getType() != parameters.state.getType()) return false;
 
-    const auto current = parameters.copyState();
-    juce::StringArray expectedParameterIds;
-
-    for (int childIndex = 0; childIndex < current.getNumChildren(); ++childIndex)
-    {
-        const auto child = current.getChild(childIndex);
-
-        if (! child.hasType("PARAM"))
-            continue;
-
-        const auto parameterId = child.getProperty("id").toString();
-
-        if (parameterId.isEmpty() || expectedParameterIds.contains(parameterId))
-            return false;
-
-        expectedParameterIds.add(parameterId);
-    }
-
-    juce::StringArray restoredParameterIds;
-    auto extraChildCount = 0;
-
-    for (int childIndex = 0; childIndex < candidate.getNumChildren(); ++childIndex)
-    {
-        const auto child = candidate.getChild(childIndex);
-
-        if (! child.hasType("PARAM"))
+    juce::HashMap<juce::String, bool> expected;
+    for (const auto child : parameters.copyState())
+        if (child.hasType("PARAM"))
         {
-            if (allowedExtraChildType.toString().isEmpty() || child.getType() != allowedExtraChildType || ++extraChildCount > 1)
-                return false;
-
-            continue;
+            const auto id = child.getProperty("id").toString();
+            if (parameters.getParameter(id) != nullptr) expected.set(id, true);
         }
 
-        if (child.getNumChildren() != 0
-            || child.getNumProperties() != 2
-            || ! child.hasProperty("id")
-            || ! child.hasProperty("value"))
-            return false;
-
-        const auto parameterId = child.getProperty("id").toString();
-
-        auto* parameter = parameters.getParameter(parameterId);
-        const auto plainValue = parseExactFiniteNumber(child.getProperty("value"));
-
-        if (parameterId.isEmpty()
-            || parameter == nullptr
-            || restoredParameterIds.contains(parameterId)
-            || ! plainValue.has_value())
-            return false;
-
-        const auto& range = parameter->getNormalisableRange();
-        const auto boundaryTolerance = juce::jmax(1.0e-6,
-                                                  static_cast<double>(range.end - range.start) * 1.0e-6);
-
-        if (*plainValue < static_cast<double>(range.start) - boundaryTolerance
-            || *plainValue > static_cast<double>(range.end) + boundaryTolerance)
-            return false;
-
-        if (range.interval > 0.0f)
+    juce::HashMap<juce::String, bool> received;
+    int extraChildren = 0;
+    for (const auto child : candidate)
+    {
+        if (!child.hasType("PARAM"))
         {
-            const auto snappedValue = static_cast<double>(range.snapToLegalValue(static_cast<float>(*plainValue)));
-            const auto floatRoundingTolerance = static_cast<double>(std::numeric_limits<float>::epsilon())
-                // Normalised parameter round-trips accumulate error over the
-                // whole range, even when the resulting plain value is near zero.
-                * juce::jmax(1.0, std::abs(snappedValue),
-                            static_cast<double>(range.end) - static_cast<double>(range.start)) * 2.0;
-            const auto gridTolerance = juce::jmax(1.0e-6,
-                                                  static_cast<double>(range.interval) * 1.0e-4,
-                                                  floatRoundingTolerance);
-
-            if (std::abs(snappedValue - *plainValue) > gridTolerance)
+            if (allowedExtraChildType.toString().isEmpty()
+                || child.getType() != allowedExtraChildType || ++extraChildren > 1)
                 return false;
+            continue;
         }
-
-        restoredParameterIds.add(parameterId);
+        const auto id = child.getProperty("id").toString();
+        if (!expected.contains(id)) continue;
+        if (child.getNumChildren() != 0 || id.isEmpty()
+            || received.contains(id)
+            || !parseExactFiniteNumber(child.getProperty("value")).has_value()) return false;
+        received.set(id, true);
     }
-
-    if (! allowedExtraChildType.toString().isEmpty() && extraChildCount != 1)
-        return false;
-
-    if (restoredParameterIds.size() != expectedParameterIds.size())
-        return false;
-
-    for (const auto& parameterId : expectedParameterIds)
-        if (! restoredParameterIds.contains(parameterId))
-            return false;
-
-    return true;
+    if (received.size() != expected.size()) return false;
+    return allowedExtraChildType.toString().isEmpty() || extraChildren == 1;
 }
 
 }

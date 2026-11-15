@@ -1,4 +1,5 @@
 #include "Editor.h"
+#include "ChoiceControl.h"
 #include "FilterSection.h"
 #include "EditorPreferences.h"
 
@@ -28,18 +29,19 @@ bool AvaAudioProcessorEditor::restoreABStateSnapshot(const juce::MemoryBlock& sn
 
     struct PreservedUiState
     {
-        bool hostParameters = false;
+        bool about = false;
+        bool unitMainExpanded = false;
         int filterScrollY = 0;
     };
 
     const PreservedUiState preservedUiState
     {
-        hostParametersExpanded,
+        aboutExpanded,
+        !unitMainContent.isBlockCollapsed("MAIN"),
         filterViewport.getViewPositionY()
     };
 
-    const juce::ScopedValueSetter<bool> suppressHistory(suppressHistorySnapshots, true);
-    const juce::ScopedValueSetter<bool> suppressHostSlotSync(suppressHostSlotAutomationSync, true);
+    const ScopedAtomicFlag suppressHistory(suppressHistorySnapshots, true);
     pendingHistorySnapshot.store(false, std::memory_order_relaxed);
 
     {
@@ -51,7 +53,6 @@ bool AvaAudioProcessorEditor::restoreABStateSnapshot(const juce::MemoryBlock& sn
                                                                 static_cast<int>(restoredSnapshot.getSize())))
         {
             restoreEditorStateFromValueTree();
-            ensureModuleTitle();
             updateSectionStates();
             resized();
             refreshABCompareButton();
@@ -60,22 +61,22 @@ bool AvaAudioProcessorEditor::restoreABStateSnapshot(const juce::MemoryBlock& sn
     }
 
     restoreEditorStateFromValueTree();
-    ensureModuleTitle();
 
-    if (auto* eqlProcessor = getActiveEqlProcessor())
-    {
-        refreshFilterPresetList(eqlProcessor->getSelectedFilterPresetName());
-        refreshEqlFilterSectionsFromProcessor();
-    }
+    refreshFilterPresetList();
+    if (getActiveEqlProcessor() != nullptr) refreshEqlFilterSectionsFromProcessor();
+
+    aboutExpanded = preservedUiState.about;
+    // A/B snapshots may store different collapse preferences. The user must
+    // keep access to the A/B control in UNIT > MAIN after switching states.
+    // UNIT > MAIN is the only block owned by unitMainContent, so use
+    // its public collapse API rather than the private per-block setter.
+    if (preservedUiState.unitMainExpanded)
+        unitMainContent.expandAllBlocks();
     else
-    {
-        refreshFilterPresetList({});
-    }
-
-    hostParametersExpanded = preservedUiState.hostParameters;
+        unitMainContent.collapseAllBlocks();
 
     storeEditorStateToValueTree();
-    syncEditorWidthToBounds();
+    updateEditorResizeLimits();
     updateSectionStates();
     resized();
 
@@ -83,6 +84,7 @@ bool AvaAudioProcessorEditor::restoreABStateSnapshot(const juce::MemoryBlock& sn
     filterViewport.setViewPosition(0, juce::jlimit(0, filterMaxOffset, preservedUiState.filterScrollY));
 
     audioProcessor.getStateInformationForABCompareSnapshot(committedHistorySnapshot);
+    audioProcessor.getHistoryState().committedRevision = audioProcessor.getStateRevision();
     return true;
 }
 
@@ -104,28 +106,14 @@ void AvaAudioProcessorEditor::switchABState()
     clearKeyboardFocus(*this);
 }
 
-void AvaAudioProcessorEditor::copyCurrentABStateToOtherSlot()
-{
-    captureCurrentABState();
-
-    const auto currentSlot = audioProcessor.getABCompareActiveSlot();
-    const auto targetSlot = currentSlot == 0 ? 1 : 0;
-    const auto currentSnapshot = audioProcessor.getABCompareSnapshot(currentSlot);
-
-    if (! currentSnapshot.isEmpty())
-        audioProcessor.setABCompareSnapshot(targetSlot, currentSnapshot);
-
-    refreshABCompareButton();
-    clearKeyboardFocus(*this);
-}
-
 void AvaAudioProcessorEditor::refreshABCompareButton()
 {
-    if (abSlotAButton == nullptr || abSwitchButton == nullptr || abSlotBButton == nullptr)
-        return;
-
-    const auto activeABSlot = audioProcessor.getABCompareActiveSlot();
-    abSlotAButton->setToggleState(activeABSlot == 0, juce::dontSendNotification);
-    abSlotBButton->setToggleState(activeABSlot == 1, juce::dontSendNotification);
-    abSwitchButton->setButtonText({});
+    if(abControl!=nullptr)
+    {
+        const auto active = audioProcessor.getABCompareActiveSlot();
+        abControl->setSelectedChoiceIndex(active, false);
+        abControl->setSelectionHighlighted(active == 1);
+        if (abCopyButton != nullptr)
+            abCopyButton->setTitleText(active == 0 ? "COPY\nA TO B" : "COPY\nB TO A");
+    }
 }

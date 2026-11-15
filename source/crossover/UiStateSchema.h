@@ -1,9 +1,7 @@
 #pragma once
 
 #include "Splitter.h"
-#include "DynControlGroups.h"
-#include "../modules/tls/BlockOrder.h"
-#include "../modules/tls/GainOrder.h"
+#include "../modules/gain/GainOrder.h"
 #include "../modules/shared/StateValidation.h"
 
 #include <JuceHeader.h>
@@ -26,10 +24,9 @@ inline juce::Identifier makeStatePropertyId(const juce::String& moduleKey, const
 
 inline bool isCurrentStateProperty(const juce::Identifier& property, const juce::String& moduleKey)
 {
-    constexpr std::array<const char*, 6> fixedProperties {
+    constexpr std::array<const char*, 5> fixedProperties {
         "auto_solo_enabled",
         "manual_solo_inclusive",
-        "crossover_settings_active",
         "visible_band_index",
         "page_scroll_y",
         "has_ui_state"
@@ -44,15 +41,9 @@ inline bool isCurrentStateProperty(const juce::Identifier& property, const juce:
                                             "manual_solo." + juce::String(static_cast<int>(rangeIndex))))
             return true;
 
-    if (moduleKey == "tls")
+    if (moduleKey == "chain")
         for(size_t range=0;range<ava::crossover::Splitter::numRanges;++range)
-            if(property==tls::blocks::stateKey(range) || property==tls::gain::stateKey(range)) return true;
-
-    if (moduleKey == "dyn")
-        for (size_t range = 0; range < ava::crossover::Splitter::numRanges; ++range)
-            for (const auto& group : dynControlGroups)
-                if (property == makeStatePropertyId(moduleKey, "group." + juce::String(int(range)) + "." + group.key))
-                    return true;
+            if(property==ava::modules::chain::gain::stateKey(range)) return true;
 
     return false;
 }
@@ -76,8 +67,7 @@ inline bool isCurrentStatePropertyValue(const juce::ValueTree& state,
 {
     for (const auto* name : { "auto_solo_enabled",
                               "manual_solo_inclusive",
-                              "crossover_settings_active",
-                              "has_ui_state" })
+                                                    "has_ui_state" })
     {
         const auto id = makeStatePropertyId(moduleKey, name);
         if (property == id)
@@ -103,42 +93,26 @@ inline bool isCurrentStatePropertyValue(const juce::ValueTree& state,
             return hasExactBooleanValue(state.getProperty(manualSoloId));
     }
 
-    if (moduleKey == "tls") {
+    if (moduleKey == "chain") {
         for(size_t range=0;range<ava::crossover::Splitter::numRanges;++range) {
-            if(property==tls::blocks::stateKey(range)) {
-                auto order=tls::blocks::defaultOrder;
-                return tls::blocks::parse(state.getProperty(property).toString(),order);
-            }
-            if(property==tls::gain::stateKey(range)) {
-                auto order=tls::gain::defaultOrder;
-                return tls::gain::parse(state.getProperty(property).toString(),order);
+            if(property==ava::modules::chain::gain::stateKey(range)) {
+                auto order=ava::modules::chain::gain::defaultOrder;
+                return ava::modules::chain::gain::parse(state.getProperty(property).toString(),order);
             }
         }
     }
-
-    if (moduleKey == "dyn")
-        for (size_t range = 0; range < ava::crossover::Splitter::numRanges; ++range)
-            for (const auto& group : dynControlGroups)
-                if (property == makeStatePropertyId(moduleKey, "group." + juce::String(int(range)) + "." + group.key))
-                    return hasExactBooleanValue(state.getProperty(property));
 
     return false;
 }
 
 inline bool hasCurrentStateProperties(const juce::ValueTree& state, const juce::String& moduleKey)
 {
-    if (moduleKey == "tls")
-        for (size_t range = 0; range < ava::crossover::Splitter::numRanges; ++range)
-            if (! state.hasProperty(tls::blocks::stateKey(range))
-                || ! state.hasProperty(tls::gain::stateKey(range)))
-                return false;
-
     for (int propertyIndex = 0; propertyIndex < state.getNumProperties(); ++propertyIndex)
     {
         const auto property = state.getPropertyName(propertyIndex);
 
-        if (! isCurrentStateProperty(property, moduleKey)
-            || ! isCurrentStatePropertyValue(state, property, moduleKey))
+        if (isCurrentStateProperty(property, moduleKey)
+            && !isCurrentStatePropertyValue(state, property, moduleKey))
             return false;
     }
 

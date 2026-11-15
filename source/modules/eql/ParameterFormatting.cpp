@@ -22,7 +22,7 @@ juce::String makeFilterParameterId(const char* suffix, const int filterIndex)
 
 int clampActiveFilterCount(const int filterCount)
 {
-    return juce::jlimit(0, EqlModuleProcessor::maxFilterCount, filterCount);
+    return juce::jlimit(1, EqlModuleProcessor::maxFilterCount, filterCount);
 }
 
 juce::String filterTypeDisplayPrefix(const EqlModuleProcessor::FilterType type)

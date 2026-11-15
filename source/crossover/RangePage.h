@@ -2,8 +2,7 @@
 
 #include "Editor.h"
 #include "Page.h"
-#include "../shell/DisclosureAnimation.h"
-#include "../shell/SvgExport.h"
+#include "../modules/shared/DspUtilities.h"
 
 #include "../shell/ChoiceControl.h"
 #include "../shell/ParameterControl.h"
@@ -12,87 +11,86 @@
 #include <memory>
 #include <vector>
 
-class LocalParameterControl;
-
 class CrossoverRangePage final : public CrossoverModulePage,
-                                 public svg_export::ExpandableContent,
                                  private juce::AudioProcessorValueTreeState::Listener,
                                  private juce::AsyncUpdater
 {
 public:
-    using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using CrossoverControlSpec = CrossoverModuleComponent::CrossoverControlSpec;
-    using ExclusiveScope = CrossoverModuleComponent::ExclusiveScope;
 
     CrossoverRangePage(CrossoverModuleComponent& ownerIn,
-                       size_t rangeIndexIn,
-                       juce::Colour accent);
+                       size_t rangeIndexIn);
     ~CrossoverRangePage() override;
 
     void refreshExternalState() override;
     int getPreferredHeight() const override;
-    juce::Component* getPinnedHeaderComponent() noexcept override;
-    int getPinnedHeaderHeight() const noexcept override;
-    juce::Component* getPinnedTailComponent() noexcept override;
-    int getPinnedTailHeight() const noexcept override;
-    void layoutPinnedTail() override;
     void resized() override;
     void mouseDown(const juce::MouseEvent&) override;
-    void showBlockArrange();
-    void showGainArrange();
-
-    // The exported artwork must contain every row, so collapsed parameter
-    // groups are opened for the duration of the export only.
-    void expandContentForSvgExport() override;
-    void restoreContentAfterSvgExport() override;
-
+    void hideIndependentBlocks();
+    std::vector<std::pair<int, juce::Component*>> independentBlocks(juce::Component& parent, int width);
 private:
-    int getFlatPreferredHeight() const;
-    void applyBlockOrder(const tls::blocks::Order& order);
-    void applyGainOrder(const tls::gain::Order& order);
+    void applyGainOrder(const ava::modules::chain::gain::Order& order);
     bool refreshBlockVisibility();
-    struct RowBase : public juce::Component
+    struct RowBase : public ControlBlockComponent
     {
+        RowBase() { getProperties().set("emptyEditorBackground",true); }
         virtual int getPreferredHeight() const = 0;
+        virtual int getLayoutHeight(int) const { return getPreferredHeight(); }
         virtual void refreshExternalState() {}
         virtual int getTopGap() const noexcept;
-        virtual int getHorizontalOutset() const noexcept { return 0; }
-        void paint(juce::Graphics&) override;
+        virtual bool isValueField() const noexcept { return false; }
+        virtual int getCellSpan() const noexcept { return 1; }
+        virtual int getPreferredWidth() const
+        {
+            const auto span = getCellSpan();
+            return span * getSquareControlSize(*this) + (span - 1) * getUiGap(*this);
+        }
         void mouseDown(const juce::MouseEvent&) override;
-        void paintOverChildren(juce::Graphics&) override;
+
+        template <typename Control>
+        void bindAuxiliary(Control& field, juce::AudioProcessorValueTreeState& state,
+                           const juce::String& id, const ava::modules::parameters::ControlPolicy& policy,
+                           ParameterControl* gain = nullptr)
+        {
+            if (id.isEmpty()) return;
+            const auto& metadata = policy.metadata;
+            jassert(metadata.auxiliaryLabel[0] != '\0');
+            auxiliaryIndicator = std::make_unique<AccessoryButton>(metadata.auxiliaryLabel);
+            auxiliaryIndicator->setButtonText(metadata.auxiliaryLabel);
+            auxiliaryIndicator->bindParameter(state, id);
+            auxiliaryIndicator->setEnabled(policy.enabled);
+            if (metadata.gainWithMute && gain != nullptr)
+                auxiliaryIndicator->bindLowerMuteThreshold(*gain, ava::modules::dsp::gainMuteThresholdDb);
+            field.setBottomAccessory(auxiliaryIndicator.get());
+        }
+        std::unique_ptr<AccessoryButton> auxiliaryIndicator;
 
         int blockIndex = -1;
         int gainIndex = -1;
         bool layoutHidden = false;
-        bool paintsRowBackground = false;
         juce::String label;
-        ExclusiveScope exclusiveScope = ExclusiveScope::none;
-        int topGapMultiplier = 1;
+        bool hasTopGap = true;
         int controlsInRow = 1;
     };
 
-    struct DisclosureGroup final : public RowBase
+    struct CustomRow final:public RowBase {
+        explicit CustomRow(std::unique_ptr<juce::Component> fieldIn):field(std::move(fieldIn)){if(field)addAndMakeVisible(*field);}
+        int getPreferredHeight() const override {return getSquareControlSize(*this);}
+        bool isValueField() const noexcept override {return true;}
+        void resized() override {if(field)field->setBounds(getLocalBounds());}
+        std::unique_ptr<juce::Component> field;
+    };
+    struct ParameterGroup final : public RowBase
     {
-        DisclosureGroup(CrossoverRangePage& pageIn, juce::String keyIn,
-                        std::vector<size_t> definingIndicesIn, std::vector<std::unique_ptr<RowBase>> membersIn);
+        ParameterGroup(juce::String name, std::vector<std::unique_ptr<RowBase>> membersIn);
+        int getLayoutHeight(int width) const override;
         int getPreferredHeight() const override;
         int getTopGap() const noexcept override;
-        int getHorizontalOutset() const noexcept override;
+        int getPreferredWidth() const override;
+        int columns = 0;
         void refreshExternalState() override;
         void resized() override;
-        void paint(juce::Graphics&) override;
-        void toggle();
-        void setExpanded(bool expandedIn, bool animate);
-        void updateVisibility();
-
-        CrossoverRangePage& page;
-        juce::String stateKey;
-        std::vector<size_t> definingIndices;
-        bool expanded = false;
-        DisclosureAnimation animation;
-        juce::Component slidingClip, slidingBody;
         std::vector<std::unique_ptr<RowBase>> members;
-        std::unique_ptr<juce::Button> petal;
     };
 
     struct ParameterRow final : public RowBase
@@ -106,27 +104,19 @@ private:
         int getPreferredHeight() const override;
         void resized() override;
         void refreshExternalState() override;
-        void refreshAuxiliaryToggleState();
         void refreshInteractionState();
-        void toggleAuxiliaryParameter();
 
         CrossoverRangePage& page;
         CrossoverModuleComponent& owner;
-        juce::String auxiliaryToggleId;
         CrossoverControlSpec controlSpec;
-        std::vector<juce::String> enabledWhenAnyNonZeroIds;
-        bool auxiliaryToggleInverted = false;
-        int parameterTitleWidth = 0;
-        int auxiliaryToggleWidth = 0;
         std::unique_ptr<ParameterControl> control;
-        std::unique_ptr<ChoiceControl> auxiliaryChoice;
-        std::unique_ptr<BoxTextButton> auxiliaryToggle;
-        std::unique_ptr<ButtonAttachment> auxiliaryToggleAttachment;
+        bool isValueField() const noexcept override { return true; }
+        int getCellSpan() const noexcept override { return control != nullptr ? control->getLayoutCellSpan() : 1; }
     };
 
     struct ChoiceRow final : public RowBase
     {
-        ChoiceRow(CrossoverModuleComponent& ownerIn,
+        ChoiceRow(CrossoverModuleComponent& ownerIn, size_t rangeIndexIn,
                   const juce::String& parameterId,
                   const juce::String& auxiliaryToggleId,
                   const CrossoverControlSpec& spec);
@@ -134,26 +124,11 @@ private:
         void resized() override;
         void refreshExternalState() override;
         CrossoverModuleComponent& owner;
+        size_t rangeIndex = 0;
         juce::String suffix;
         std::unique_ptr<ChoiceControl> control;
-        std::unique_ptr<BoxTextButton> auxiliaryToggle;
-        std::unique_ptr<ButtonAttachment> auxiliaryToggleAttachment;
-    };
-
-    struct HeadingRow final : public RowBase
-    {
-        explicit HeadingRow(const CrossoverControlSpec& spec);
-        int getPreferredHeight() const override;
-        void resized() override;
-        std::unique_ptr<BoxTextButton> heading;
-    };
-
-    struct InactiveRow final : public RowBase
-    {
-        explicit InactiveRow(const CrossoverControlSpec& spec);
-        int getPreferredHeight() const override;
-        void resized() override;
-        std::unique_ptr<BoxTextButton> button;
+        bool isValueField() const noexcept override { return true; }
+        int getCellSpan() const noexcept override { return control != nullptr ? control->getLayoutCellSpan() : 1; }
     };
 
     struct ToggleRow final : public RowBase
@@ -165,19 +140,13 @@ private:
         int getPreferredHeight() const override;
         void refreshExternalState() override;
         void resized() override;
-        void updateLabel();
 
         CrossoverRangePage& page;
         CrossoverModuleComponent& owner;
-        juce::String parameterIdToToggle;
-        juce::String exclusiveGroup;
-        juce::String enabledLabel;
-        juce::String disabledLabel;
-        int auxiliaryToggleWidth = 60;
-        std::unique_ptr<BoxTextButton> auxiliaryToggle;
-        std::unique_ptr<ButtonAttachment> auxiliaryToggleAttachment;
-        std::unique_ptr<BoxTextButton> button;
-        std::unique_ptr<ButtonAttachment> attachment;
+        juce::String parameterIdToToggle, suffix;
+        std::unique_ptr<ParameterControl> control;
+        bool isValueField() const noexcept override { return true; }
+        int getCellSpan() const noexcept override { return control != nullptr ? control->getLayoutCellSpan() : 1; }
     };
 
     struct ReadoutRow final : public RowBase
@@ -190,16 +159,18 @@ private:
         void refreshExternalState() override;
         void resized() override;
         void updateText();
+        bool isValueField() const noexcept override { return true; }
+        int getCellSpan() const noexcept override { return 2; }
 
         CrossoverModuleComponent& owner;
         juce::String degreeParameterIdToRead;
         juce::String flipParameterIdToRead;
-        juce::Label value;
+        SquareTextLabel value;
     };
 
     struct TimeRow final : public RowBase
     {
-        TimeRow(CrossoverModuleComponent& ownerIn,
+        TimeRow(CrossoverModuleComponent& ownerIn, size_t rangeIndexIn,
                 juce::String valueParameterId,
                 juce::String modeParameterId,
                 juce::String syncParameterId,
@@ -207,43 +178,38 @@ private:
         int getPreferredHeight() const override;
         void refreshExternalState() override;
         void resized() override;
-        bool isHostSyncMode() const noexcept;
+        bool isNoteMode() const noexcept;
         int getTimeModeIndex() const noexcept;
-        int getSyncChoiceIndex() const noexcept;
-        juce::String getSyncChoiceText() const;
-        juce::StringArray getSyncChoices() const;
-        void showSyncPrompt();
+        juce::StringArray getNoteChoices() const;
         void updateModeControl();
 
         CrossoverControlSpec controlSpec;
+        size_t rangeIndex;
         CrossoverModuleComponent& owner;
         juce::String valueParameterIdToEdit;
         juce::String modeParameterIdToEdit;
-        juce::String syncParameterIdToEdit;
+        juce::String noteParameterIdToEdit;
+        std::unique_ptr<ChoiceControl> noteControl;
         std::unique_ptr<ParameterControl> control;
-        std::unique_ptr<BoxTextButton> modeButton;
+        std::unique_ptr<AccessoryButton> modeIndicator;
+        bool isValueField() const noexcept override { return true; }
+        int getCellSpan() const noexcept override
+        {
+            return isNoteMode() ? noteControl->getLayoutCellSpan() : control->getLayoutCellSpan();
+        }
     };
 
     juce::String getCrossoverRangeParameterId(const CrossoverControlSpec& spec) const;
+    void listenToParameter(const juce::String& id);
     void addControlSpecs(const std::vector<CrossoverControlSpec>& specs, juce::Component& parent);
-    void groupDynControls();
-    void setAllGroupsExpanded(bool expanded);
-    void refreshSvgExportLayout();
+    void groupBlockControls();
     void handleAsyncUpdate() override;
-    void clearExclusiveToggleGroup(const juce::String& activeParameterId, const juce::String& exclusiveGroup);
-    void updateToggleLabels();
-    void updateTimeModeControls();
+    void refreshRows();
     void parameterChanged(const juce::String& parameterID, float) override;
 
     CrossoverModuleComponent& owner;
     size_t rangeIndex = 0;
-    BoxTextButton moduleHeading;
-    std::unique_ptr<juce::Component> pinnedTail;
     std::vector<std::unique_ptr<RowBase>> rows;
-    size_t tailRowStart = 0;
-    tls::blocks::Order displayedBlockOrder = tls::blocks::defaultOrder;
-    bool previewingBlockOrder = false, previewingGainOrder = false;
-    tls::gain::Order displayedGainOrder = tls::gain::defaultOrder;
+    ava::modules::chain::gain::Order displayedGainOrder = ava::modules::chain::gain::defaultOrder;
     std::vector<juce::String> listenedParameterIds;
-    std::vector<bool> svgExportGroupStates;
 };

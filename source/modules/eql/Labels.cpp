@@ -104,9 +104,14 @@ juce::String EqlModuleProcessor::getFilterHeaderText(const int filterIndex) cons
         ? filterFrequencyParams[filterArrayIndex]->load(std::memory_order_relaxed)
         : defaultFilterFrequencyHz;
 
+    if (filterType == FilterType::volume) {
+        const auto gain = filterGainParams[filterArrayIndex] != nullptr
+            ? filterGainParams[filterArrayIndex]->load(std::memory_order_relaxed) : 0.0f;
+        return "VOL-" + juce::String::formatted("%+.2f", double(gain));
+    }
     return filterTypeDisplayPrefix(filterType) + "-"
-        + juce::String::formatted("%05d", filterType == FilterType::volume ? 0 : static_cast<int>(std::lround(frequency)))
-        + (filterType == FilterType::volume ? "" : (phaseEnabled ? "-P" : "-F"));
+        + juce::String::formatted("%05d", static_cast<int>(std::lround(frequency)))
+        + (phaseEnabled ? "-P" : "-F");
 }
 
 juce::StringArray getOrderDisplayChoicesForType(const EqlModuleProcessor::FilterType type) noexcept

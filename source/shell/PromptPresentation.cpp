@@ -1,8 +1,15 @@
+#include "EqlCopyEditor.h"
 #include "Editor.h"
+#include "ChoiceControl.h"
 #include "Style.h"
 #include "Prompt.h"
-#include "BlockArrangePrompt.h"
+#include "ModuleList.h"
+#include "../modules/shared/BlockChainProcessor.h"
+#include "../crossover/Editor.h"
+#include "../crossover/ParameterIds.h"
 
+#include <array>
+#include <algorithm>
 #include <utility>
 
 void AvaAudioProcessorEditor::showTextPrompt(const juce::String& currentText,
@@ -10,9 +17,14 @@ void AvaAudioProcessorEditor::showTextPrompt(const juce::String& currentText,
                                              juce::Rectangle<int> anchorBounds,
                                              std::function<void()> onClose,
                                              std::function<void()> onDismiss,
-                                             const bool uppercaseInput)
+                                             const bool uppercaseInput,
+                                             juce::Slider* numericControl,
+                                             std::function<double(const juce::String&)> textToValue,
+                                             std::function<juce::String()> valueToText,
+                                             std::function<void()> resetAction,
+                                             juce::Component* anchorComponent)
 {
-    dismissTextPrompt();
+    prepareChildPrompt();
 
     const auto preservedFilterScrollY = filterViewport.getViewPositionY();
 
@@ -21,10 +33,16 @@ void AvaAudioProcessorEditor::showTextPrompt(const juce::String& currentText,
                                  anchorBounds,
                                  std::move(onDismiss),
                                  makeScrollPreservingPromptClose(*this, std::move(onClose)),
-                                 uppercaseInput);
+                                 uppercaseInput, false, numericControl, std::move(textToValue), std::move(valueToText));
+    prompt->setResetAction(std::move(resetAction));
+    if (!suspendedPromptOverlays.empty())
+        for (const auto* property : { "hidesModuleContent", "paintControlIndicators" })
+            prompt->getProperties().set(property,
+                suspendedPromptOverlays.back()->getProperties().getWithDefault(property, false));
     auto* promptComponent = prompt.get();
     textPromptOverlay = std::move(prompt);
     addAndMakeVisible(*textPromptOverlay);
+    if (anchorComponent != nullptr) promptComponent->followAnchor(*anchorComponent);
     resized();
 
     if (filterViewport.isVisible())
@@ -57,10 +75,11 @@ void AvaAudioProcessorEditor::showChoicePrompt(const juce::Rectangle<int>& ancho
                                                std::function<void(int)> onSelect,
                                                std::function<void()> onClose,
                                                std::function<void()> onDismiss,
-                                               const bool commitBeforeFade)
+                                               const bool commitBeforeFade,
+                                               std::vector<bool> itemActiveStates)
 {
     const auto preservedFilterScrollY = filterViewport.getViewPositionY();
-    dismissTextPrompt();
+    prepareChildPrompt();
 
     auto prompt = makeChoicePrompt(anchorBounds,
                                    choices,
@@ -70,7 +89,11 @@ void AvaAudioProcessorEditor::showChoicePrompt(const juce::Rectangle<int>& ancho
                                    std::move(onSelect),
                                    std::move(onDismiss),
                                    makeScrollPreservingPromptClose(*this, std::move(onClose)),
-                                   commitBeforeFade);
+                                   commitBeforeFade, std::move(itemActiveStates));
+    if (!suspendedPromptOverlays.empty())
+        for (const auto* property : { "hidesModuleContent", "paintControlIndicators" })
+            prompt->getProperties().set(property,
+                suspendedPromptOverlays.back()->getProperties().getWithDefault(property, false));
     auto* promptComponent = prompt.get();
     textPromptOverlay = std::move(prompt);
     addAndMakeVisible(*textPromptOverlay);
@@ -85,33 +108,47 @@ void AvaAudioProcessorEditor::showChoicePrompt(const juce::Rectangle<int>& ancho
     promptComponent->toFront(true);
 }
 
-void AvaAudioProcessorEditor::showInfoPrompt(const juce::String& markdownText)
+void AvaAudioProcessorEditor::toggleAboutSection()
 {
-    dismissTextPrompt();
-
-    auto prompt = makeInfoPrompt(markdownText,
-                                 [safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
-                                 {
-                                     if (safeEditor != nullptr)
-                                         safeEditor->dismissTextPrompt();
-                                 });
-    auto* promptComponent = prompt.get();
-    textPromptOverlay = std::move(prompt);
-    addAndMakeVisible(*textPromptOverlay);
-    promptComponent->toFront(true);
+    aboutExpanded = true;
+    if (aboutExpanded)
+    {
+        dismissTextPrompt();
+    }
+    storeEditorStateToValueTree();
+    updateSectionStates();
     resized();
-    promptComponent->focusEditor();
+}
+
+void AvaAudioProcessorEditor::prepareChildPrompt()
+{
+    if (textPromptOverlay != nullptr
+        && bool(textPromptOverlay->getProperties().getWithDefault("allowsChildPrompts", false)))
+        suspendedPromptOverlays.push_back(std::move(textPromptOverlay));
+    else
+        dismissTextPrompt();
+}
+
+void AvaAudioProcessorEditor::closeTextPrompt()
+{
+    if (textPromptOverlay == nullptr) return;
+    const auto restoreModuleContent = bool(textPromptOverlay->getProperties().getWithDefault("hidesModuleContent", false));
+    removeChildComponent(textPromptOverlay.get());
+    textPromptOverlay.reset();
+    if (!suspendedPromptOverlays.empty())
+    {
+        textPromptOverlay = std::move(suspendedPromptOverlays.back());
+        suspendedPromptOverlays.pop_back();
+    }
+    if (restoreModuleContent) resized();
+    clearKeyboardFocus(*this);
+    if (auto* prompt = dynamic_cast<PromptComponent*>(textPromptOverlay.get())) prompt->focusEditor();
+    repaint();
 }
 
 void AvaAudioProcessorEditor::dismissTextPrompt()
 {
-    if (textPromptOverlay == nullptr)
-        return;
-
-    removeChildComponent(textPromptOverlay.get());
-    textPromptOverlay.reset();
-    clearKeyboardFocus(*this);
-    repaint();
+    while (textPromptOverlay != nullptr) closeTextPrompt();
 }
 
 std::function<void()> AvaAudioProcessorEditor::makeScrollPreservingPromptClose(AvaAudioProcessorEditor& editor,
@@ -124,7 +161,7 @@ std::function<void()> AvaAudioProcessorEditor::makeScrollPreservingPromptClose(A
             return;
 
         const auto closePreservedFilterScrollY = safeEditor->filterViewport.getViewPositionY();
-        safeEditor->dismissTextPrompt();
+        safeEditor->closeTextPrompt();
 
         if (safeEditor->filterViewport.isVisible())
         {
@@ -137,32 +174,141 @@ std::function<void()> AvaAudioProcessorEditor::makeScrollPreservingPromptClose(A
     };
 }
 
-void AvaAudioProcessorEditor::showBlockArrangePrompt(juce::AudioProcessorValueTreeState& state, size_t range, tls::blocks::Order order,
-    std::function<void(const tls::blocks::Order&)> preview,
-    std::function<void(const tls::blocks::Order&)> commit, std::function<void()> dismiss)
+void AvaAudioProcessorEditor::ensureModuleList()
 {
-    dismissTextPrompt();
-    auto prompt=std::make_unique<BlockArrangePrompt>(order,std::move(preview),std::move(commit),
-        std::move(dismiss),makeScrollPreservingPromptClose(*this,{}),&state,range);
-    auto* component=prompt.get();
-    textPromptOverlay=std::move(prompt);
-    addAndMakeVisible(*textPromptOverlay);
-    resized();
-    component->toFront(true);
-    component->focusEditor();
-}
-
-void AvaAudioProcessorEditor::showGainArrangePrompt(juce::AudioProcessorValueTreeState& state, size_t range, tls::gain::Order order,
-    std::function<void(const tls::gain::Order&)> preview,
-    std::function<void(const tls::gain::Order&)> commit, std::function<void()> dismiss)
-{
-    dismissTextPrompt();
-    auto prompt=std::make_unique<GainArrangePrompt>(order,std::move(preview),std::move(commit),
-        std::move(dismiss),makeScrollPreservingPromptClose(*this,{}),&state,range);
-    auto* component=prompt.get();
-    textPromptOverlay=std::move(prompt);
-    addAndMakeVisible(*textPromptOverlay);
-    resized();
-    component->toFront(true);
-    component->focusEditor();
+    const auto band = int(audioProcessor.getSelectedCrossoverRange());
+    if (moduleList != nullptr && moduleListBand == band) return;
+    if (moduleList != nullptr)
+    {
+        modulesContent.removeChildComponent(moduleList.get());
+        moduleList.reset();
+    }
+    moduleListBand = band;
+    const auto range = audioProcessor.getSelectedCrossoverRange();
+    const auto buildItems = [this,range]() -> std::vector<ModuleListItem>
+    {
+        std::vector<ModuleListItem> items;
+        auto* processor = audioProcessor.getBlockChainProcessor();
+        const auto slots = audioProcessor.getModuleStackForRange(range);
+        std::array<int, ava::module_stack::typeCount> instancesByType {};
+        for (const auto& slot : slots)
+            if (juce::isPositiveAndBelow(slot.type, int(instancesByType.size())))
+                ++instancesByType[size_t(slot.type)];
+        for (const auto& slot : slots)
+        {
+            ModuleListItem item;
+            item.id=slot.uid;
+            item.name=module_order::descriptions[size_t(slot.type)].name;
+            item.serial=ava::module_stack::displayOrdinal(slots, slot.uid);
+            // The original modules also have per-block hidden parameters. Display
+            // their EFFECTIVE state, not the separate cached slot flag.
+            item.enabled=slot.enabled;
+            if (slot.uid < ava::module_stack::originalCount)
+            {
+                if (module_order::isChain(slot.type) && processor != nullptr)
+                {
+                    const auto parameterId=ava::crossover::parameters::makeRangeParameterId(range,
+                        ava::modules::chain::blocks::descriptions[size_t(module_order::chainIndex(slot.type))].hiddenSuffix);
+                    if (auto* hidden=processor->getValueTreeState().getParameter(parameterId))
+                        item.enabled = item.enabled && hidden->getValue() < 0.5f;
+                }
+                else if (slot.type == module_order::eql || slot.type == module_order::dyn)
+                    item.enabled = item.enabled && !audioProcessor.isModuleHiddenForRange(range, slot.type);
+            }
+            item.canDelete = instancesByType[size_t(slot.type)] > 1;
+            items.push_back(std::move(item));
+        }
+        return items;
+    };
+    auto items=buildItems();
+    ModuleList::Order order;
+    for(const auto& item:items)order.push_back(item.id);
+    auto moduleListView = std::make_unique<ModuleList>(std::move(order),
+        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this),range](const ModuleList::Order& next)
+        {
+            if (safe == nullptr) return;
+            if (!safe->audioProcessor.moveModuleSlots(range,next))return;
+            safe->resized();
+            safe->scheduleHistorySnapshot();
+        }, std::move(items));
+    moduleListView->setInstanceActions(
+        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this),range](int id) -> int
+        {
+            if (safe == nullptr) return -1;
+            const int createdUid = safe->audioProcessor.addModuleCopy(range, id);
+            if (createdUid >= 0) {
+                // MODULES and ALL both reflect the processor stack, but ALL
+                // owns separate parameter-attached editors for its copies.
+                // Refresh these bindings before laying out the added instance.
+                // ADD must not change the ALL viewport's scroll position.
+                // The new slot appears in MODULES and ALL at its stack position.
+                safe->rebindActiveModuleEditors();
+                safe->updateSectionStates();
+                safe->resized();
+                if (safe->controlSearchPanel != nullptr)
+                    safe->controlSearchPanel->refreshMatches();
+                safe->scheduleHistorySnapshot();
+            }
+            return createdUid;
+        },
+        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this),range](int id) -> bool
+        {
+            if (safe == nullptr) return false;
+            // Remove parameter-attached copy editors while their processors
+            // are still alive. Deleting the processor first can leave JUCE
+            // attachments referring to freed parameters until resized().
+            const auto oldSlots = safe->audioProcessor.getModuleStackForRange(range);
+            const auto* removed = ava::module_stack::find(oldSlots, id);
+            if (removed == nullptr) return false;
+            const auto type = removed->type;
+            if (std::count_if(oldSlots.begin(), oldSlots.end(), [type](const auto& slot)
+                { return slot.type == type; }) <= 1) return false;
+            safe->copiedModuleEditors.erase(id);
+            safe->eqlCopyEditors.erase(id);
+            if (!safe->audioProcessor.deleteModuleSlot(range, id)) return false;
+            safe->scheduleHistorySnapshot();
+            safe->rebindActiveModuleEditors();
+            safe->resized();
+            return true;
+        },
+        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this),range](int id)
+        {
+            if(safe==nullptr)return;
+            const auto slots=safe->audioProcessor.getModuleStackForRange(range);
+            const auto* slot=ava::module_stack::find(slots,id);
+            if(slot==nullptr)return;
+            bool effectiveEnabled=slot->enabled;
+            if (id < ava::module_stack::originalCount)
+            {
+                if (module_order::isChain(slot->type))
+                {
+                    if (auto* chain=safe->audioProcessor.getBlockChainProcessor())
+                    {
+                        const auto parameterId=ava::crossover::parameters::makeRangeParameterId(range,
+                            ava::modules::chain::blocks::descriptions[size_t(module_order::chainIndex(slot->type))].hiddenSuffix);
+                        if (auto* hidden=chain->getValueTreeState().getParameter(parameterId))
+                            effectiveEnabled=effectiveEnabled && hidden->getValue() < 0.5f;
+                    }
+                }
+                else effectiveEnabled=effectiveEnabled
+                    && !safe->audioProcessor.isModuleHiddenForRange(range,slot->type);
+            }
+            if(safe->audioProcessor.setModuleSlotEnabled(range,id,!effectiveEnabled))
+                safe->scheduleHistorySnapshot();
+        },
+        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)](int id)
+        {
+            if(safe==nullptr)return;
+            safe->audioProcessor.selectModuleCopy(id);
+            safe->rebindActiveModuleEditors();
+            safe->resized();
+        },
+        buildItems);
+    moduleListView->setLayoutChanged(
+        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
+        {
+            if (safe != nullptr) safe->resized();
+        });
+    moduleList = std::move(moduleListView);
+    modulesContent.addAndMakeVisible(*moduleList);
 }

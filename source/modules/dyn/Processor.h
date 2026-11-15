@@ -19,21 +19,26 @@ public:
     void prepareToPlay(double sampleRate, int samplesPerBlock);
     void releaseResources();
     void resetProcessingState() noexcept;
-    void processBlock(juce::AudioBuffer<float>& buffer);
 
     void getStateInformation(juce::MemoryBlock& destData) const;
     bool setStateInformation(const void* data, int sizeInBytes);
+    static bool isCurrentState(const juce::ValueTree& state,
+                               juce::AudioProcessorValueTreeState& parameters);
 
     juce::AudioProcessorValueTreeState& getValueTreeState() noexcept;
     const juce::AudioProcessorValueTreeState& getValueTreeState() const noexcept;
-    juce::UndoManager& getUndoManager() noexcept;
-    const juce::UndoManager& getUndoManager() const noexcept;
     dyn::dsp::ProcessorBank::RangeLatencies getRangeLatencies() const noexcept;
     size_t ensureRangeCount(size_t rangeCount);
     size_t getCreatedRangeCount() const noexcept;
     void processRange(size_t rangeIndex, juce::AudioBuffer<float>& buffer,
                       const juce::AudioBuffer<float>* routingInputs = nullptr, int routingOffset = 0);
     bool syncParameters(bool force = false, bool readHostTempo = false);
+    double getTempoBpm() const noexcept
+    {
+        if (syncTypeParameter != nullptr && syncTypeParameter->load() >= 0.5f && bpmParameter != nullptr)
+            return juce::jlimit(1.0, 1000.0, double(bpmParameter->load()));
+        return hostTempoBpm.load();
+    }
     bool isSpectralRange(size_t rangeIndex) const noexcept;
     bool isCorrelationRange(size_t rangeIndex) const noexcept;
     bool isTransustRange(size_t rangeIndex) const noexcept;
@@ -46,16 +51,16 @@ private:
     static constexpr size_t numRanges = dyn::dsp::ProcessorBank::numRanges;
     static constexpr size_t numParameterSlots = dyn::parameters::numParameterSlots;
 
-    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void cacheParameterPointers();
-    double getHostBpm() const noexcept;
+    double readHostBpm() const noexcept;
     void setParameterListenersEnabled(bool enabled);
     void parameterChanged(const juce::String& parameterID, float newValue) override;
-    dyn::dsp::DspCore::Parameters readCrossoverRangeParameters(size_t rangeIndex, double hostBpm) const;
+    dyn::dsp::DspCore::Parameters readCrossoverRangeParameters(size_t rangeIndex, double tempoBpm) const;
 
+    std::atomic<float>* syncTypeParameter = nullptr;
+    std::atomic<float>* bpmParameter = nullptr;
     juce::AudioProcessor& ownerProcessor;
     ava::ModuleParameterHost moduleParameterHost;
-    juce::UndoManager undoManager;
     juce::AudioProcessorValueTreeState valueTreeState;
     dyn::dsp::ProcessorBank processorBank;
     std::array<std::unique_ptr<DynSpectralProcessor>, numRanges> spectralProcessors;
@@ -64,20 +69,19 @@ private:
     std::array<bool, numRanges> processingSpectral {};
     std::array<bool, numRanges> processingTransust {};
     std::array<bool, numRanges> processingCorrelation {};
-    std::array<std::array<float, 2>, numRanges> lastDomainOutput {};
-    std::array<int, numRanges> domainFadeRemaining {};
-    int domainFadeSamples = 240;
     double spectralSampleRate = 0.0;
     int spectralBlockSize = 0;
-    void applyDomainFade(size_t rangeIndex, juce::AudioBuffer<float>& buffer) noexcept;
     float loadParameter(size_t rangeIndex, dyn::parameters::ParameterSlot slot) const noexcept;
+    bool isParameterBypassed(size_t rangeIndex, dyn::parameters::ParameterSlot slot) const noexcept;
     void processSpectralRange(size_t rangeIndex, juce::AudioBuffer<float>& buffer,
                               const juce::AudioBuffer<float>* sidechain, int sidechainOffset);
     std::array<std::array<std::atomic<float>*, numParameterSlots>, numRanges> rawRangeParameters {};
-    std::array<std::array<juce::RangedAudioParameter*, dyn::parameters::linkedParameterSlots.size()>, numRanges> linkedParameters {};
+    std::array<std::array<std::atomic<float>*, numParameterSlots>, numRanges> rawRangeBypasses {};
+    std::array<std::array<juce::RangedAudioParameter*, 2 * dyn::parameters::linkedParameterSlots.size()>, numRanges> linkedParameters {};
     std::array<dyn::dsp::DspCore::Parameters, numRanges> currentRangeParameters {};
     std::atomic<bool> parametersDirty { true };
-    double lastHostBpm = 120.0;
+    double cachedTempoBpm = 120.0;
+    std::atomic<double> hostTempoBpm { 120.0 };
     std::atomic<bool> linkedParameterUpdateInProgress { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DynModuleProcessor)

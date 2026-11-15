@@ -57,10 +57,12 @@ private:
     void updateSplit(size_t splitIndex, double frequency);
 
     double currentSampleRate = 44100.0;
+    int coefficientRampRemaining = 0;
     SplitFrequencies frequencies { 134.0, 523.0, 2093.0, 5000.0, 10000.0 };
     size_t activeSplitCount = numSplits;
     std::array<Cascade, numSplits> lowpassCoefficients {};
     std::array<Cascade, numSplits> highpassCoefficients {};
+    std::array<Cascade, numSplits> targetLowpass {}, targetHighpass {};
 
     std::array<CascadeState, numSplits> mainLpLeft {};
     std::array<CascadeState, numSplits> mainLpRight {};

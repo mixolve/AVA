@@ -11,7 +11,12 @@ class PromptComponent : public juce::Component
 public:
     ~PromptComponent() override = default;
 
+    // A modal popup consumes wheel input outside its own scrolling children.
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override {}
     virtual void focusEditor() { grabKeyboardFocus(); }
+    virtual void followAnchor(juce::Component&) {}
+    virtual void setResetAction(std::function<void()>) {}
+
 };
 
 inline void requestPromptClose(juce::Component& owner,
@@ -44,7 +49,10 @@ std::unique_ptr<PromptComponent> makeTextPrompt(juce::String currentText,
                                                 juce::Rectangle<int> anchorBounds,
                                                 std::function<void()> onDismiss,
                                                 std::function<void()> onClose,
-                                                bool uppercaseInput = true, bool allowEmpty = false);
+                                                bool uppercaseInput = true, bool allowEmpty = false,
+                                                juce::Slider* numericControl = nullptr,
+                                                std::function<double(const juce::String&)> textToValue = {},
+                                                std::function<juce::String()> valueToText = {});
 
 std::unique_ptr<PromptComponent> makeChoicePrompt(juce::Rectangle<int> anchorBounds,
                                                   juce::StringArray choices,
@@ -54,7 +62,8 @@ std::unique_ptr<PromptComponent> makeChoicePrompt(juce::Rectangle<int> anchorBou
                                                   std::function<void(int)> onSelect,
                                                   std::function<void()> onDismiss,
                                                   std::function<void()> onClose,
-                                                  bool commitBeforeFade = false);
+                                                  bool commitBeforeFade = false,
+                                                  std::vector<bool> itemActiveStates = {},
+                                                  bool compactButtons = false);
 
-std::unique_ptr<PromptComponent> makeInfoPrompt(juce::String markdownText,
-                                                std::function<void()> onClose);
+std::unique_ptr<juce::Component> makeAboutPanel(juce::String markdownText, std::function<void()> onBackgroundClick = {});

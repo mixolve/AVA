@@ -1,100 +1,32 @@
+#include "EqlCopyEditor.h"
 #include "Editor.h"
+#include "EditorPreferences.h"
 #include "EditorStateSchema.h"
-#include "AnimationState.h"
 #include "FilterSection.h"
 #include "PresetSection.h"
 #include "EditorSetup.h"
-#include "../modules/tls/Processor.h"
+#include "../modules/shared/BlockChainProcessor.h"
 #include "../modules/dyn/Processor.h"
 #include "../modules/eql/Processor.h"
+#include "../modules/eql/RangeBank.h"
 
-juce::RangedAudioParameter* AvaAudioProcessorEditor::findHostAssignableParameter(const juce::String& parameterId) const noexcept
+void AvaAudioProcessorEditor::parameterChanged(const juce::String& parameterID, float)
 {
-    const auto trimmedParameterId = parameterId.trim();
-
-    if (trimmedParameterId.isEmpty())
-        return nullptr;
-
-    if (auto* parameter = valueTreeState.getParameter(trimmedParameterId))
-        return parameter;
-
-    const auto findInModule = [&trimmedParameterId] (auto* processor) -> juce::RangedAudioParameter*
-    {
-        if (processor == nullptr)
-            return nullptr;
-
-        return processor->getValueTreeState().getParameter(trimmedParameterId);
-    };
-
-    switch (audioProcessor.getActiveModule())
-    {
-        case AvaAudioProcessor::ActiveModule::eql: return findInModule(audioProcessor.getEqlModuleProcessor());
-        case AvaAudioProcessor::ActiveModule::tls: return findInModule(audioProcessor.getTlsModuleProcessor());
-        case AvaAudioProcessor::ActiveModule::dyn: return findInModule(audioProcessor.getDynModuleProcessor());
-        case AvaAudioProcessor::ActiveModule::none: break;
-    }
-
-    return nullptr;
-}
-
-void AvaAudioProcessorEditor::syncHostSlotAssignmentValue(const int slotIndex, const float normalizedValue)
-{
-    if (! juce::isPositiveAndBelow(slotIndex, static_cast<int>(hostSlotAssignments.size())))
-        return;
-
-    const auto& assignment = hostSlotAssignments[static_cast<size_t>(slotIndex)];
-
-    if (assignment.parameterId.isEmpty())
-        return;
-
-    if (auto* assignedParameter = findHostAssignableParameter(assignment.parameterId))
-    {
-        assignedParameter->setValueNotifyingHost(juce::jlimit(0.0f, 1.0f, normalizedValue));
-    }
-}
-
-void AvaAudioProcessorEditor::parameterChanged(const juce::String& parameterID, float newValue)
-{
-    if (parameterID.endsWith("_domain") || parameterID.endsWith("_mode"))
+    if (parameterID == AvaAudioProcessor::paramCrossoverActiveSplitCountId)
+        scheduleModuleControlsRefresh(true); // Refresh the per-band DYN controls on XOV automation.
+    else if (parameterID.endsWith(".hidden"))
+        scheduleModuleControlsRefresh(false);
+    else if (parameterID.endsWith("_domain") || parameterID.endsWith("_mode"))
         scheduleModuleControlsRefresh(true);
     else if (parameterID.startsWith("filter-") && parameterID.endsWith("_phase"))
         scheduleModuleControlsRefresh(false);
 
-    if (! suppressHostSlotAutomationSync)
-    {
-        juce::ScopedValueSetter<bool> scopedSyncGuard(suppressHostSlotAutomationSync, true);
-
-        for (int slotIndex = 0; slotIndex < static_cast<int>(hostSlotAssignments.size()); ++slotIndex)
-        {
-            const auto slotParameterId = AvaAudioProcessor::getHostSlotParameterId(slotIndex);
-
-            if (parameterID == slotParameterId)
-            {
-                scheduleHistorySnapshot();
-                return;
-            }
-        }
-
-        for (int slotIndex = 0; slotIndex < static_cast<int>(hostSlotAssignments.size()); ++slotIndex)
-        {
-            const auto& assignment = hostSlotAssignments[static_cast<size_t>(slotIndex)];
-
-            if (assignment.parameterId != parameterID)
-                continue;
-
-            auto* assignedParameter = findHostAssignableParameter(parameterID);
-            auto* slotParameter = valueTreeState.getParameter(AvaAudioProcessor::getHostSlotParameterId(slotIndex));
-
-            if (assignedParameter == nullptr || slotParameter == nullptr)
-                continue;
-
-            const auto normalizedSourceValue = juce::jlimit(0.0f, 1.0f, assignedParameter->convertTo0to1(newValue));
-            slotParameter->setValueNotifyingHost(normalizedSourceValue);
-            break;
-        }
-    }
-
-    scheduleHistorySnapshot();
+    // Root APVTS parameters are exposed to the DAW (including host slots).
+    // Their automation already creates a host Undo entry. Child-module
+    // parameters remain chunk-only and still need state notifications.
+    const bool hostParameter = !audioProcessor.isRoutingInstance()
+        && valueTreeState.getParameter(parameterID) != nullptr;
+    scheduleHistorySnapshot(!hostParameter);
 }
 
 void AvaAudioProcessorEditor::scheduleModuleControlsRefresh(const bool rebind)
@@ -113,6 +45,7 @@ void AvaAudioProcessorEditor::scheduleModuleControlsRefresh(const bool rebind)
                 safe->rebindActiveModuleEditors();
             safe->updateSectionStates();
             safe->resized();
+            if (safe->controlSearchPanel != nullptr) safe->controlSearchPanel->refreshMatches();
         });
     if (! scheduled)
         moduleControlsRefreshPending.store(false, std::memory_order_release);
@@ -121,17 +54,35 @@ void AvaAudioProcessorEditor::scheduleModuleControlsRefresh(const bool rebind)
 void AvaAudioProcessorEditor::resyncEditorFromProcessorState()
 {
     const juce::ScopedValueSetter<bool> restoreGuard(restoringEditorUiState, true);
+    const int scrollBeforeUndo = pendingHostRestoreScrollY;
+    pendingHostRestoreScrollY = -1;
     const auto restoredInstance = static_cast<int>(valueTreeState.state.getProperty(shell_editor_ui::key("active_instance"), 0));
-    if (routingInstanceId == 0) loadAnimationSettings(*animationSettings, valueTreeState.state);
+    if (routingInstanceId == 0)
+    {
+        updateEditorResizeLimits();
+        // Preserve the user's independently resized height during state reloads.
+        const auto height = juce::jlimit(getMinimumEditorHeight(), getMaximumEditorHeight(),
+            getHeight() > 0 ? getHeight() : getEditorHeight(*this));
+        setSize(getEditorWidth(*this), height);
+    }
     restoreEditorStateFromValueTree();
     refreshModuleStateListeners();
-    ensureModuleTitle();
     updateSectionStates();
     resized();
+    if (scrollBeforeUndo >= 0)
+    {
+        // Restore after the new module layout has its final height.
+        // The guard above prevents the intermediate 0 from being stored.
+        const auto maxY = juce::jmax(0, moduleContent.getHeight() - filterViewport.getHeight());
+        filterViewport.setViewPosition(0, juce::jlimit(0, maxY, scrollBeforeUndo));
+        valueTreeState.state.setProperty(shell_editor_ui::key("scroll.eql"),
+                                        filterViewport.getViewPositionY(), nullptr);
+    }
     repaint();
     if (routingInstanceId == 0)
     {
-        if (restoredInstance != activeInstanceId)
+        if (restoredInstance != activeInstanceId || (activeInstanceProcessor != nullptr
+            && audioProcessor.getRoutingInstanceHandle(restoredInstance) != activeInstanceProcessor))
         {
             closeRoutingInstance();
             openRoutingInstance(restoredInstance);
@@ -143,14 +94,6 @@ void AvaAudioProcessorEditor::resyncEditorFromProcessorState()
 
 void AvaAudioProcessorEditor::scheduleProcessorStateResync()
 {
-    if (auto* messageManager = juce::MessageManager::getInstanceWithoutCreating();
-        messageManager != nullptr && messageManager->isThisTheMessageThread())
-    {
-        processorStateResyncPending.store(false);
-        resyncEditorFromProcessorState();
-        return;
-    }
-
     if (processorStateResyncPending.exchange(true))
         return;
 
@@ -170,12 +113,36 @@ void AvaAudioProcessorEditor::scheduleProcessorStateResync()
 void AvaAudioProcessorEditor::valueTreePropertyChanged(juce::ValueTree& treeWhosePropertyHasChanged,
                                                        const juce::Identifier& property)
 {
+    // Actual value edits arrive through parameterChanged. APVTS flushing its
+    // PARAM nodes during serialization must not create another undo snapshot.
+    if (treeWhosePropertyHasChanged.hasType("PARAM")) return;
     if (treeWhosePropertyHasChanged == valueTreeState.state
         && property == juce::Identifier(AvaAudioProcessor::activeModuleStateKey)
         && ! suppressProcessorStateResync)
         scheduleProcessorStateResync();
 
-    scheduleHistorySnapshot();
+    if (property == juce::Identifier(EqlModuleProcessor::filterPresetSelectedStateKey))
+        scheduleModuleControlsRefresh(true);
+
+    if (treeWhosePropertyHasChanged == valueTreeState.state
+        && property.toString().startsWith("ava.block_hidden.band-"))
+        scheduleModuleControlsRefresh(false);
+
+    if (treeWhosePropertyHasChanged == valueTreeState.state
+        && property.toString().startsWith("ava.host_slot."))
+    {
+        refreshHostSlotButtons();
+        if (activeInstanceEditor != nullptr) activeInstanceEditor->refreshHostSlotButtons();
+    }
+    // Zoom and dock layout are presentation settings, not DAW undo events.
+    if (property == shell_editor_ui::key("dock_count"))
+    {
+        juce::MessageManager::callAsync([safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
+        {
+            if (safe != nullptr) safe->resized();
+        });
+    }
+    if (!isEditorViewProperty(property)) scheduleHistorySnapshot();
 }
 
 void AvaAudioProcessorEditor::valueTreeRedirected(juce::ValueTree& treeWhichHasBeenChanged)
@@ -248,43 +215,33 @@ void AvaAudioProcessorEditor::refreshModuleStateListeners()
 {
     clearModuleStateListeners();
 
-    observedModuleStates.reserve(1);
-    observedModuleParameterListeners.reserve(1);
-
-    juce::ValueTree moduleState;
-
-    auto observeModule = [this, &moduleState] (auto* processor)
-    {
-        if (processor == nullptr)
-            return;
-
-        auto& moduleValueTreeState = processor->getValueTreeState();
-        moduleState = moduleValueTreeState.state;
-        registerObservedModuleParameterListeners(moduleValueTreeState);
+    const auto observeModule = [this](auto* processor) {
+        if (processor == nullptr) return;
+        auto& state = processor->getValueTreeState();
+        registerObservedModuleParameterListeners(state);
+        auto tree = state.state;
+        tree.addListener(this);
+        observedModuleStates.push_back(tree);
     };
+    observeModule(audioProcessor.getBlockChainProcessor());
+    observeModule(audioProcessor.getDynModuleProcessor());
+    if (auto* bank = audioProcessor.getEqlProcessorBank())
+        for (size_t band = 0; band < bank->getCreatedRangeCount(); ++band) observeModule(bank->getProcessor(band));
 
-    switch (audioProcessor.getActiveModule())
+    // A copy has its own APVTS. The original three listeners do not observe
+    // changes to the added instances, so ALL can retain stale controls even
+    // when the MODULES stack is already updated.
+    for (const auto& slot : audioProcessor.getModuleStackForRange(audioProcessor.getSelectedCrossoverRange()))
     {
-        case AvaAudioProcessor::ActiveModule::eql:
-            observeModule(audioProcessor.getEqlModuleProcessor());
-            break;
-
-        case AvaAudioProcessor::ActiveModule::tls:
-            observeModule(audioProcessor.getTlsModuleProcessor());
-            break;
-
-        case AvaAudioProcessor::ActiveModule::dyn:
-            observeModule(audioProcessor.getDynModuleProcessor());
-            break;
-
-        case AvaAudioProcessor::ActiveModule::none:
-            break;
-    }
-
-    if (moduleState.isValid())
-    {
-        moduleState.addListener(this);
-        observedModuleStates.push_back(moduleState);
+        if (slot.uid < ava::module_stack::originalCount)
+            continue;
+        if (auto* chain = audioProcessor.getCopiedBlockChainProcessor(slot.uid))
+            observeModule(chain);
+        if (auto* dyn = audioProcessor.getCopiedDynProcessor(slot.uid))
+            observeModule(dyn);
+        if (slot.type == module_order::eql)
+            observeModule(audioProcessor.getCopiedEqlProcessor(slot.uid,
+                audioProcessor.getSelectedCrossoverRange()));
     }
 }
 
@@ -310,13 +267,18 @@ void AvaAudioProcessorEditor::clearModuleStateListeners()
 
 void AvaAudioProcessorEditor::detachModuleEditorBindings()
 {
+    dismissTextPrompt();
     clearModuleStateListeners();
     boundEqlState = nullptr;
+    // Existing copied editors can still hold parameter attachments to the
+    // previous processors. Destroy them before state restore replaces copies.
+    copiedModuleEditors.clear();
+    eqlCopyEditors.clear();
 
     for (auto& section : filterSections)
         if (section != nullptr)
             section->detach();
 
-    shell_setup_support::removeOwnedChild(*this, tlsModuleEditor);
+    shell_setup_support::removeOwnedChild(*this, blockChainModuleEditor);
     shell_setup_support::removeOwnedChild(*this, dynModuleEditor);
 }

@@ -1,98 +1,50 @@
 #include "Controls.h"
-#include "TablerIcons.h"
+#include "ValueEditor.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <utility>
-
-class BoxTextButton::PromptDismissListener final : public juce::MouseListener
-{
-public:
-    explicit PromptDismissListener(BoxTextButton& ownerIn) : owner(ownerIn) {}
-
-    void mouseDown(const juce::MouseEvent& event) override
-    {
-        if (event.eventComponent != &owner)
-            owner.dismissActionPrompt();
-    }
-
-private:
-    BoxTextButton& owner;
-};
 
 void BoxTextButton::setCancelClickOnLeave(const bool shouldEnable) noexcept
 {
     cancelClickOnLeave = shouldEnable;
 }
 
-BoxTextButton::BoxTextButton(const juce::Colour accent)
-    : accentColour(accent)
+BoxTextButton::BoxTextButton()
 {
     setWantsKeyboardFocus(false);
     setMouseClickGrabsKeyboardFocus(false);
     (void) getMouseCursor();
 }
 
-BoxTextButton::~BoxTextButton()
+void BoxTextButton::setSelectionHighlighted(const bool shouldBeActive)
 {
-    dismissActionPrompt();
-    stopTimer();
-}
-
-void BoxTextButton::setActiveFill(const bool shouldBeActive)
-{
-    if (activeFillEnabled == shouldBeActive)
+    if (selectionHighlighted == shouldBeActive)
         return;
 
-    activeFillEnabled = shouldBeActive;
+    selectionHighlighted = shouldBeActive;
     repaint();
 }
 
 bool BoxTextButton::hasActiveHighlight() const noexcept
 {
-    return isEnabled() && (confirmationFlashActive || dragTargetHighlighted
-        || (accentColour==uiWhite && (activeFillEnabled || (toggleActiveFillEnabled && getToggleState()))));
+    return isEnabled() && (selectionHighlighted || getToggleState());
 }
 
 void BoxTextButton::paintOutline(juce::Graphics& graphics,const juce::Rectangle<int> bounds) const
 {
-    ControlAppearance style(hasActiveHighlight() && !actionPromptActive,hoverOutlineAmount);
-    style.normalFrameVisible=borderVisible;
-    style.paintFrame(graphics,bounds);
+    ControlAppearance style;
+    style.frameVisible=borderVisible;
+    const juce::Graphics::ScopedSaveState saved(graphics);
+    graphics.reduceClipRegion(bounds);
+    style.paintFrame(graphics, bounds);
 }
 
-void BoxTextButton::setTablerIcon(const char* iconName)
-{
-    tablerIconImage = loadTablerIcon(iconName, iconGlyphSize);
-    repaint();
-}
-
-bool BoxTextButton::usesIconOnlyContent() const noexcept
-{
-    return tablerIconImage.isValid();
-}
-
-void BoxTextButton::setToggleActiveFillEnabled(const bool shouldShow) noexcept
-{
-    if (toggleActiveFillEnabled == shouldShow)
-        return;
-
-    toggleActiveFillEnabled = shouldShow;
-    repaint();
-}
 
 void BoxTextButton::setInteractionOutlineEnabled(const bool shouldEnable) noexcept
 {
     interactionOutlineEnabled = shouldEnable;
-}
-
-void BoxTextButton::setFillVisible(const bool shouldShow) noexcept
-{
-    if (fillVisible == shouldShow)
-        return;
-
-    fillVisible = shouldShow;
-    repaint();
 }
 
 void BoxTextButton::setFillColour(const juce::Colour colour) noexcept
@@ -104,13 +56,31 @@ void BoxTextButton::setFillColour(const juce::Colour colour) noexcept
     repaint();
 }
 
-void BoxTextButton::setDividerLineVisible(const bool shouldShow) noexcept
+void BoxTextButton::setBottomIndicator(int index, ValueBoxComponent::BottomIndicator indicator, juce::String label)
 {
-    if (dividerLineVisible == shouldShow)
-        return;
-
-    dividerLineVisible = shouldShow;
+    jassert(juce::isPositiveAndBelow(index, int(bottomIndicators.size())));
+    if (!juce::isPositiveAndBelow(index, int(bottomIndicators.size()))) return;
+    if (label.isNotEmpty()) bottomIndicatorLabels[size_t(index)] = std::move(label);
+    bottomIndicators[static_cast<size_t>(index)] = std::move(indicator);
+    bottomIndicatorVisible[static_cast<size_t>(index)] = true;
     repaint();
+}
+
+juce::Rectangle<int> BoxTextButton::getBottomIndicatorBounds(int index) const
+{
+    const auto columns = juce::jmax(1, int(std::count(bottomIndicatorVisible.begin(), bottomIndicatorVisible.end(), true)));
+    const auto slot = int(std::count(bottomIndicatorVisible.begin(), bottomIndicatorVisible.begin() + index, true));
+    const auto area = RangeIndicator::boundsInside(*this, getLocalBounds());
+    const auto height = RangeIndicator::bottomControlSize(*this, getLocalBounds());
+    return controlStripCell(area.withTop(area.getBottom() - height), slot, columns);
+}
+
+int BoxTextButton::bottomIndicatorAt(juce::Point<int> point) const
+{
+    for (int index = 0; index < int(bottomIndicators.size()); ++index)
+        if (bottomIndicatorVisible[static_cast<size_t>(index)] && getBottomIndicatorBounds(index).contains(point))
+            return index;
+    return -1;
 }
 
 void BoxTextButton::setTextJustification(const juce::Justification justification) noexcept
@@ -128,64 +98,11 @@ void BoxTextButton::setBorderVisible(const bool shouldShow) noexcept
     repaint();
 }
 
-void BoxTextButton::setTextColourOverride(const juce::Colour colour)
-{
-    hasTextColourOverride = true;
-    textColourOverride = colour;
-    repaint();
-}
-
-void BoxTextButton::setLongPressPromptActions(std::function<void()> resetAction,
-                                               std::function<void()> secondaryAction)
-{
-    longPressResetAction = std::move(resetAction);
-    longPressSecondaryAction = std::move(secondaryAction);
-    longPressPrimaryPromptIconImage = longPressResetAction != nullptr
-        ? loadTablerIcon("refresh", iconGlyphSize) : juce::Image {};
-    longPressPrimaryPromptEnabled = true;
-    longPressSecondaryPromptIconImage = longPressSecondaryAction != nullptr
-        ? loadTablerIcon("map-pin-share", iconGlyphSize) : juce::Image {};
-    longPressSecondaryPromptActive = false;
-}
-
-void BoxTextButton::setLongPressPrimaryPromptIcon(const char* iconName)
-{
-    longPressPrimaryPromptIconImage = loadTablerIcon(iconName, iconGlyphSize);
-    repaint();
-}
-
-void BoxTextButton::setLongPressPrimaryPromptEnabled(const bool shouldEnable)
-{
-    longPressPrimaryPromptEnabled = shouldEnable;
-    repaint();
-}
-
-void BoxTextButton::setLongPressSecondaryPromptIcon(const char* iconName)
-{
-    longPressSecondaryPromptIconImage = loadTablerIcon(iconName, iconGlyphSize);
-    repaint();
-}
-
-void BoxTextButton::setLongPressSecondaryPromptActive(const bool shouldBeActive)
-{
-    if (longPressSecondaryPromptActive == shouldBeActive)
-        return;
-    longPressSecondaryPromptActive = shouldBeActive;
-    repaint();
-}
-
-void BoxTextButton::setLongPressTrailingPromptIconAction(std::function<void()> action,
-                                                        const char* iconName)
-{
-    longPressTrailingAction = std::move(action);
-    longPressTrailingPromptIconImage = loadTablerIcon(iconName, iconGlyphSize);
-}
-
-void BoxTextButton::flashConfirmationFill()
+void BoxTextButton::flashConfirmation()
 {
     confirmationFlashActive = true;
     repaint();
-    juce::Timer::callAfterDelay(500, [safeThis = juce::Component::SafePointer<BoxTextButton>(this)]
+    juce::Timer::callAfterDelay(120, [safeThis = juce::Component::SafePointer<BoxTextButton>(this)]
     {
         if (safeThis == nullptr)
             return;
@@ -197,7 +114,7 @@ void BoxTextButton::flashConfirmationFill()
 juce::MouseCursor BoxTextButton::getMouseCursor()
 {
     static const juce::MouseCursor moveCursor(juce::MouseCursor::DraggingHandCursor);
-    return moveTargetAvailable ? moveCursor : juce::TextButton::getMouseCursor();
+    return (controlDragActive || moveTargetAvailable) ? moveCursor : juce::TextButton::getMouseCursor();
 }
 
 void BoxTextButton::setMoveTargetAvailable(const bool available)
@@ -217,209 +134,80 @@ void BoxTextButton::setDragTargetHighlighted(const bool shouldShow) noexcept
     repaint();
 }
 
-void BoxTextButton::showActionPrompt()
-{
-    if (getActionPromptCount() == 0)
-        return;
-
-    stopTimer();
-    pointerDown = false;
-    dragActive = false;
-    pressHighlight = false;
-    pressCanceled = false;
-    longPressEligible = false;
-    actionPromptOriginalText = getButtonText();
-    ++pendingClickGeneration;
-    actionPromptActive = true;
-    actionPromptPressedIndex = -1;
-    // A long press still owns the pointer. Preserve the hovered action even
-    // while the mouse button is held; general hover deliberately excludes dragging.
-    actionPromptHoverIndex = getActionPromptHitIndex(getMouseXYRelative());
-    consumeNextMouseUp = true;
-
-    if (promptDismissListener == nullptr)
-        promptDismissListener = std::make_unique<PromptDismissListener>(*this);
-
-    juce::Desktop::getInstance().addGlobalMouseListener(promptDismissListener.get());
-    actionPromptGlobalListenerActive = true;
-    repaint();
-}
-
-int BoxTextButton::getActionPromptCount() const noexcept
-{
-    return (longPressResetAction != nullptr ? 1 : 0)
-        + (longPressSecondaryAction != nullptr ? 1 : 0)
-        + ((onMoveArmed != nullptr) ? 1 : 0)
-        + (longPressTrailingAction != nullptr ? 1 : 0);
-}
-
-juce::Rectangle<int> BoxTextButton::getActionPromptBounds(const int requestedIndex) const noexcept
-{
-    const auto actionCount = getActionPromptCount();
-    if (! juce::isPositiveAndBelow(requestedIndex, actionCount))
-        return {};
-    const auto bounds = getLocalBounds();
-    const auto left = bounds.getX() + bounds.getWidth() * requestedIndex / actionCount;
-    const auto right = bounds.getX() + bounds.getWidth() * (requestedIndex + 1) / actionCount;
-    return { left, bounds.getY(), right - left, bounds.getHeight() };
-}
-
-int BoxTextButton::getActionPromptHitIndex(const juce::Point<int> position) const noexcept
-{
-    const auto actionCount = getActionPromptCount();
-    const auto moveIndex = (longPressResetAction != nullptr ? 1 : 0) + (longPressSecondaryAction != nullptr ? 1 : 0);
-    for (auto index = 0; index < actionCount; ++index)
-        if (getActionPromptBounds(index).contains(position))
-            return (index == 0 && longPressResetAction != nullptr && !longPressPrimaryPromptEnabled)
-                || (index == moveIndex && (onMoveArmed != nullptr) && !longPressMovePromptEnabled)
-                ? -1 : index;
-
-    return -1;
-}
-
-void BoxTextButton::dismissActionPrompt()
-{
-    if (! actionPromptActive && ! actionPromptGlobalListenerActive)
-        return;
-
-    if (actionPromptGlobalListenerActive && promptDismissListener != nullptr)
-        juce::Desktop::getInstance().removeGlobalMouseListener(promptDismissListener.get());
-
-    actionPromptGlobalListenerActive = false;
-    actionPromptActive = false;
-    actionPromptPressedIndex = -1;
-    actionPromptHoverIndex = -1;
-
-    if (actionPromptOriginalText.isNotEmpty() && getButtonText() != actionPromptOriginalText)
-        setButtonText(actionPromptOriginalText);
-
-    actionPromptOriginalText.clear();
-    repaint();
-}
-
-void BoxTextButton::paintButton(juce::Graphics& graphics, const bool shouldDrawButtonAsHighlighted, bool)
+void BoxTextButton::paintButton(juce::Graphics& graphics, const bool shouldDrawButtonAsHighlighted, const bool shouldDrawButtonAsDown)
 {
     const auto active=hasActiveHighlight();
-    const auto interactionHighlight = isEnabled()
-        && (interactionOutlineEnabled || active)
-        && (isMouseHovering(*this) || (dragTargetHighlighted && shouldDrawButtonAsHighlighted)
-            || (pressHighlight && ! dragActive));
-    const auto pointerHover=hoverAnimation.amount(interactionHighlight);
-    hoverOutlineAmount=actionPromptActive?0.0f:pointerHover;
-    ControlAppearance style(active && !actionPromptActive,pointerHover);
-    style.normalFill=actionPromptActive?uiGreyDark:fillColour;
-    style.fillVisible=actionPromptActive || fillVisible;
-    style.normalContent=hasTextColourOverride?textColourOverride:uiWhite;
-    activeFillAmount=active?1.0f:0.0f;
+    if (bool(getProperties().getWithDefault("routingPinnedTile", false)))
+    {
+        // Use the same 80px-wide outer frame as an ordinary control, without
+        // its top potentiometer or bottom SL/BP strip.  The 4px inset around
+        // the 72x44 caption stays dark (#444444); only the caption is #BBBBBB.
+        ControlAppearance tileAppearance;
+        tileAppearance.frameColour = uiWhite;
+        tileAppearance.fillColour = uiGreyDark;
+        tileAppearance.paint(graphics, getLocalBounds());
+
+        const auto caption = getControlTextBounds(*this, getLocalBounds());
+        const auto hover = isHoverInversionReady(*this,
+            isEnabled() && isMouseHovering(*this, caption), "routing.pinned.caption");
+        paintControlTextButton(graphics, caption, hover, isEnabled() && active,
+                               isEnabled() && (pressHighlight || shouldDrawButtonAsDown),
+                               isEnabled() ? uiGreyLight : uiIndicatorDisabled);
+        if (drawSquareControlText(graphics, getButtonText(), caption, textJustification))
+            scheduleMarqueeRepaint(*this, marqueeRepaintPending);
+        return;
+    }
+    ControlAppearance style;
+    juce::ignoreUnused(shouldDrawButtonAsHighlighted);
+    style.fillColour=fillColour;
     style.paintBackground(graphics,getLocalBounds());
 
     const auto drawOuterBorder = [&graphics, this]
     {
+        for (int index = 0; index < int(bottomIndicators.size()); ++index)
+            if (bottomIndicatorVisible[static_cast<size_t>(index)])
+            {
+                const auto& indicator = bottomIndicators[static_cast<size_t>(index)];
+                const auto bounds = getBottomIndicatorBounds(index);
+                indicator.paint(graphics, bounds, isEnabled(), float(defaultUiCornerRadius));
+                const auto* region = index == 0 ? "box.bottom0" : index == 1 ? "box.bottom1" : "box.bottom2";
+                RangeIndicator::paintHover(graphics, *this, *this, bounds,
+                    isEnabled() && indicator.write != nullptr && indicator.state() >= 0,
+                    pressedBottomIndicator == index, region);
+                const auto canHover = isEnabled() && indicator.write != nullptr && indicator.state() >= 0;
+                const auto inverted = pressedBottomIndicator != index
+                    && isHoverInversionReady(*this, canHover && isMouseHovering(*this, bounds), region);
+                drawEmbeddedButtonText(graphics, bottomIndicatorLabels[size_t(index)], bounds,
+                    inverted ? uiWhite : juce::Colour(0xff222222));
+            }
         paintOutline(graphics, getLocalBounds());
     };
 
-    const auto textColour=isEnabled()?style.contentColour():uiGreyLight;
-    const auto drawBottomDivider = [&graphics, this]
-    {
-        if (! dividerLineVisible)
-            return;
-
-        const auto bounds = getLocalBounds().toFloat();
-        constexpr auto dividerThickness = static_cast<float>(frameLineThickness);
-        const auto divider = bounds.withY(bounds.getBottom() - dividerThickness).withHeight(dividerThickness);
-
-        graphics.setColour(uiGreyLight);
-        graphics.fillRect(divider);
-    };
-
-    if (actionPromptActive)
-    {
-        juce::Array<juce::Image> promptIcons;
-
-        if (longPressResetAction != nullptr)
-        {
-            promptIcons.add(longPressPrimaryPromptIconImage);
-        }
-        if (longPressSecondaryAction != nullptr)
-        {
-            promptIcons.add(longPressSecondaryPromptIconImage);
-        }
-        if (onMoveArmed != nullptr)
-        {
-            static const auto movePromptIcon = loadTablerIcon("transfer-vertical", iconGlyphSize);
-            promptIcons.add(movePromptIcon);
-        }
-        if (longPressTrailingAction != nullptr)
-        {
-            promptIcons.add(longPressTrailingPromptIconImage);
-        }
-
-        const auto singlePrompt = promptIcons.size() == 1;
-        for (int index = 0; index < promptIcons.size(); ++index)
-        {
-            const auto actionBounds = getActionPromptBounds(index);
-            const auto moveIndex = (longPressResetAction != nullptr ? 1 : 0) + (longPressSecondaryAction != nullptr ? 1 : 0);
-            const auto promptEnabled = (index != 0 || longPressResetAction == nullptr || longPressPrimaryPromptEnabled)
-                && (index != moveIndex || (onMoveArmed == nullptr) || longPressMovePromptEnabled);
-            const auto promptHighlighted = promptEnabled && (actionPromptPressedIndex == index
-                || (actionPromptPressedIndex < 0 && actionPromptHoverIndex == index));
-            const auto secondaryIndex = longPressResetAction != nullptr ? 1 : 0;
-            const auto promptActive = promptEnabled && longPressSecondaryAction != nullptr
-                && index == secondaryIndex && longPressSecondaryPromptActive;
-
-            ControlAppearance promptStyle(promptActive,promptHighlighted?1.0f:0.0f);
-            promptStyle.fillVisible=!singlePrompt || promptHighlighted || promptActive;
-            promptStyle.paintBackground(graphics,actionBounds);
-            if(promptIcons[index].isValid()) {
-                juce::DrawableImage drawable;
-                drawable.setImage(promptIcons[index]);
-                drawable.setOverlayColour(!promptEnabled?uiGreyLight:promptStyle.contentColour());
-                drawable.drawWithin(graphics,actionBounds.withSizeKeepingCentre(
-                    static_cast<int>(iconGlyphSize),static_cast<int>(iconGlyphSize)).toFloat(),
-                    juce::RectanglePlacement::centred,1.0f);
-            }
-
-            if (index > 0)
-            {
-                graphics.setColour(uiGreyLight);
-                graphics.fillRect(actionBounds.getX(), 1, 1, juce::jmax(0, getHeight() - 2));
-            }
-        }
-
-        drawBottomDivider();
-        drawOuterBorder();
-        const auto hoveredAction=actionPromptPressedIndex>=0?actionPromptPressedIndex:actionPromptHoverIndex;
-        if(hoveredAction>=0 && getActionPromptHitIndex(getActionPromptBounds(hoveredAction).getCentre())>=0)
-        {
-            ControlAppearance hovered(false,1.0f);hovered.normalFrameVisible=false;
-            hovered.paintFrame(graphics,getActionPromptBounds(hoveredAction));
-        }
-        return;
-    }
-
     drawOuterBorder();
-    const auto iconBounds = getLocalBounds()
-        .withSizeKeepingCentre(static_cast<int>(iconGlyphSize), static_cast<int>(iconGlyphSize))
-        .toFloat();
 
-    if (tablerIconImage.isValid())
-    {
-        juce::DrawableImage drawable;
-        drawable.setImage(tablerIconImage);
-        drawable.setOverlayColour(textColour);
-        drawable.drawWithin(graphics, iconBounds, juce::RectanglePlacement::centred, 1.0f);
-        drawBottomDivider();
-        return;
-    }
 
-    graphics.setColour(textColour);
     const auto font = makeUiFont();
+    const auto textBounds = getControlTextBounds(*this,getLocalBounds());
+    const auto delayedHover = isHoverInversionReady(*this,
+        isEnabled() && interactionOutlineEnabled && isMouseHovering(*this, textBounds), "box.body");
+    paintControlTextButton(graphics, textBounds, delayedHover
+        || (isEnabled() && bool(getProperties().getWithDefault("osc.move.highlighted", false))), isEnabled() && active,
+        isEnabled() && (bool(getProperties().getWithDefault("routing.instance.dragging", false))
+            || (!dragActive && (pressHighlight || shouldDrawButtonAsDown || confirmationFlashActive))), isEnabled() ? uiGreyLight : uiIndicatorDisabled);
+    const auto textInkBounds = textBounds.reduced(int(getProperties().getWithDefault("textContentInset", 0)), 0);
     graphics.setFont(font);
-    const auto textBounds = getLocalBounds().reduced(textHorizontalPadding, 0);
-
-    if (!textScrollingEnabled)
-        graphics.drawText(getButtonText(), textBounds, textJustification, true);
-    else if (drawLoopingText(graphics, getButtonText(), textBounds, font, textJustification))
-        scheduleMarqueeRepaint(*this, marqueeRepaintPending);
-    drawBottomDivider();
+    bool scrolling = false;
+    if (getHeight() <= getCompactControlSize(*this) + 2
+        && getWidth() <= getCompactControlSize(*this) + 2)
+        scrolling = drawCompactControlText(graphics, getButtonText(), textInkBounds, textJustification);
+    else if (bool(getProperties().getWithDefault("singleLineText", false)))
+        scrolling = drawLoopingText(graphics, getButtonText(), textInkBounds, font, textJustification);
+    else if (bool(getProperties().getWithDefault("twoLineText", false))
+             || std::abs(getHeight() - getSquareControlSize(*this)) <= 1)
+        scrolling = drawSquareControlText(graphics, getButtonText(), textInkBounds, textJustification);
+    else
+    {
+        scrolling = drawLoopingText(graphics, getButtonText(), textInkBounds, font, textJustification);
+    }
+    if (scrolling) scheduleMarqueeRepaint(*this, marqueeRepaintPending);
 }

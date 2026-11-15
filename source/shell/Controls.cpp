@@ -1,44 +1,249 @@
 #include "Controls.h"
 #include "Editor.h"
 #include "ChoiceControl.h"
-#include "LocalParameterControl.h"
 #include "ParameterControl.h"
 #include "Prompt.h"
 
 #include <utility>
 
-void FlatScrollBarLookAndFeel::drawScrollbar(juce::Graphics& graphics, juce::ScrollBar& scrollbar,
-                                            int x, int y, int width, int height, bool vertical,
-                                            int thumbStart, int thumbSize, bool hovered, bool pressed)
+void ControlBlockComponent::bindCollapseState(juce::AudioProcessorValueTreeState& state,
+                                              juce::String scope)
 {
-    juce::ignoreUnused(scrollbar, hovered, pressed);
-    graphics.setColour(uiWhite);
-    if (vertical)
-        graphics.fillRect(x, thumbStart, width, thumbSize);
+    collapseState = &state;
+    collapseScope = std::move(scope);
+}
+
+juce::Identifier ControlBlockComponent::collapseProperty(const juce::String& title) const
+{
+    // All block titles are ASCII. Do not use the component's address or index
+    // in the key: sorting/rebinding must not change the identity.
+    auto name = title.toLowerCase().replaceCharacter(' ', '-').replaceCharacter('/', '-')
+                     .replace("+", "plus");
+    return juce::Identifier("ava.editor.ui.collapsed." + collapseScope + "." + name);
+}
+
+bool ControlBlockComponent::isBlockCollapsed(const juce::String& title) const
+{
+    if (!collapsible) return false;
+    const auto defaultCollapsed = collapsedBlockTitles.contains(title);
+    if (collapseState == nullptr || collapseScope.isEmpty()) return defaultCollapsed;
+    return bool(collapseState->state.getProperty(collapseProperty(title), defaultCollapsed));
+}
+
+void ControlBlockComponent::setBlockCollapsed(const juce::String& title, const bool collapsed)
+{
+    if (!collapsible || title.isEmpty() || isBlockCollapsed(title) == collapsed)
+        return;
+    if (collapseState != nullptr && collapseScope.isNotEmpty())
+        collapseState->state.setProperty(collapseProperty(title), collapsed, nullptr);
+    else if (collapsed)
+        collapsedBlockTitles.addIfNotAlreadyThere(title);
     else
-        graphics.fillRect(thumbStart, y, thumbSize, height);
+        collapsedBlockTitles.removeString(title);
+    repaint();
+}
+
+bool ControlBlockComponent::expandAllBlocks()
+{
+    juce::StringArray titles = collapsedBlockTitles;
+    for (const auto& frame : controlBlockFrames) titles.addIfNotAlreadyThere(frame.title);
+    bool changed = false;
+    for (const auto& title : titles)
+        if (isBlockCollapsed(title))
+        {
+            setBlockCollapsed(title, false);
+            changed = true;
+        }
+    return changed;
+}
+
+bool ControlBlockComponent::collapseAllBlocks()
+{
+    juce::StringArray titles = collapsedBlockTitles;
+    for (const auto& frame : controlBlockFrames) titles.addIfNotAlreadyThere(frame.title);
+    bool changed = false;
+    for (const auto& title : titles)
+        if (!isBlockCollapsed(title))
+        {
+            setBlockCollapsed(title, true);
+            changed = true;
+        }
+    return changed;
+}
+
+juce::String ControlBlockComponent::blockHeaderAt(juce::Point<int> position) const
+{
+    // Header hover/click is disabled only for non-collapsible pages.
+    if (!collapsible) return {};
+    for (auto it = controlBlockFrames.rbegin(); it != controlBlockFrames.rend(); ++it)
+        if (it->bounds.withHeight(controlBlockHeaderHeight).contains(position))
+            return it->title;
+    return {};
+}
+
+void ControlBlockComponent::updateHoveredBlock(juce::Point<int> position)
+{
+    const auto title = blockHeaderAt(position);
+    if (hoveredBlockTitle == title) return;
+    hoveredBlockTitle = title;
+    hoveredBlockVisualReady = false;
+    const auto generation = ++hoverGeneration;
+    if (title.isNotEmpty())
+        juce::Timer::callAfterDelay(50,
+            [safe = juce::Component::SafePointer<ControlBlockComponent>(this), title, generation]
+            {
+                if (safe == nullptr || safe->hoverGeneration != generation
+                    || safe->hoveredBlockTitle != title) return;
+                safe->hoveredBlockVisualReady = true;
+                safe->repaint();
+            });
+    repaint();
+}
+
+void ControlBlockComponent::mouseDown(const juce::MouseEvent& event)
+{
+    if (event.mods.isPopupMenu()) return;
+    // A click on a block's background/header is a neutral focus target.
+    // Keep Enter routed to the editor instead of leaving the host focused.
+    if (auto* editor = findParentComponentOfClass<AvaAudioProcessorEditor>())
+        editor->grabKeyboardFocus();
+}
+
+void ControlBlockComponent::mouseMove(const juce::MouseEvent& event)
+{
+    updateHoveredBlock(event.getPosition());
+}
+
+void ControlBlockComponent::mouseEnter(const juce::MouseEvent& event)
+{
+    updateHoveredBlock(event.getPosition());
+}
+
+void ControlBlockComponent::mouseExit(const juce::MouseEvent&)
+{
+    if (hoveredBlockTitle.isEmpty()) return;
+    hoveredBlockTitle.clear();
+    hoveredBlockVisualReady = false;
+    ++hoverGeneration;
+    repaint();
+}
+
+juce::MouseCursor ControlBlockComponent::getMouseCursor()
+{
+    // Collapsible module headers remain clickable but use the normal cursor.
+    return juce::MouseCursor::NormalCursor;
+}
+
+void ControlBlockComponent::mouseUp(const juce::MouseEvent& event)
+{
+    if (event.mods.isPopupMenu() || event.mouseWasDraggedSinceMouseDown()) return;
+    const auto title = blockHeaderAt(event.getPosition());
+    if (title.isEmpty()) return;
+    setBlockCollapsed(title, !isBlockCollapsed(title));
+    // Reflow the entire shared block page; it recalculates every frame height
+    // and preserves scroll position when the section is collapsed or expanded.
+    if (auto* editor = findParentComponentOfClass<AvaAudioProcessorEditor>()) editor->resized();
+    else resized();
+    repaint();
+}
+
+bool isManualControlSelected(const juce::Component& component)
+{
+    // The docking selection highlight belongs to the source in the main
+    // viewport, not to its mirrored quick-access control. Ctrl+click on a
+    // mirror still uses the same saved selection key to unpin it.
+    for (auto* node = &component; node != nullptr; node = node->getParentComponent())
+        if (bool(node->getProperties().getWithDefault("suppressManualSelectionHighlight", false)))
+            return false;
+    if (const auto* editor = component.findParentComponentOfClass<AvaAudioProcessorEditor>())
+        return editor->isControlManuallySelected(component);
+    return false;
+}
+
+bool ControlSelectionGesture::begin(juce::Component& source, const juce::MouseEvent& event)
+{
+    target = nullptr;
+    // macOS may report Ctrl+click as a right-button event. Dock selection
+    // is independent of whether the parameter can currently be edited.
+    if (!(event.mods.isLeftButtonDown() || event.mods.isRightButtonDown())
+        || !event.mods.isCtrlDown() || event.mods.isShiftDown()
+        || event.mods.isAltDown() || event.mods.isCommandDown()) return false;
+    auto* control = &source;
+    if (!bool(source.getProperties().getWithDefault("independentDockSelection", false)))
+        if (auto* field = source.findParentComponentOfClass<ParameterField>()) control = field;
+    target = control;
+    return true;
+}
+
+bool ControlSelectionGesture::finish(const juce::MouseEvent& event)
+{
+    auto* control = target.getComponent();
+    if (control == nullptr) return false;
+    target = nullptr;
+    if (!event.mouseWasDraggedSinceMouseDown()
+        && control->getLocalBounds().contains(event.getEventRelativeTo(control).getPosition()))
+    {
+        if (auto* editor = control->findParentComponentOfClass<AvaAudioProcessorEditor>())
+        {
+            if (!(editor->isDockOnly() && control->getProperties().contains("quickAccessSelectionKey")))
+                editor->toggleControlManualSelection(*control);
+        }
+        repaintValueOverlay(*control);
+    }
+    return true;
 }
 
 CopyPasteTextEditor::CopyPasteTextEditor()
 {
-    setInputFilter(new UppercaseEditorInputFilter(), true);
+    setInputFilter(new KeyboardLayoutEditorInputFilter(), true);
     setMouseCursor(juce::MouseCursor::NormalCursor);
     // TextEditor reserves two pixels on the right for the caret.
     // Match that on the left so centred text stays centred when editing.
     setIndents(2, 0);
     setBorder(juce::BorderSize<int>(1));
-    setColour(juce::CaretComponent::caretColourId, uiWhite);
-    setColour(juce::TextEditor::highlightColourId, uiGreyLight);
-    setColour(juce::TextEditor::highlightedTextColourId, uiBlack);
+    setColour(juce::CaretComponent::caretColourId, juce::Colour(0xff222222));
+    // Paint the opaque selection below the glyphs ourselves: JUCE halves
+    // the native selection opacity whenever the editor loses keyboard focus.
+    setColour(juce::TextEditor::highlightColourId, juce::Colours::transparentBlack);
+    setColour(juce::TextEditor::highlightedTextColourId, uiWhite);
 }
 
-CopyPasteTextEditor::~CopyPasteTextEditor()
+CopyPasteTextEditor::~CopyPasteTextEditor() = default;
+
+bool CopyPasteTextEditor::keyPressed(const juce::KeyPress& key)
 {
-    contextMenu.reset();
+    if (key.isKeyCode(juce::KeyPress::escapeKey)) return true;
+    return juce::TextEditor::keyPressed(key);
+}
+
+void CopyPasteTextEditor::paint(juce::Graphics& g)
+{
+    const auto background = findColour(juce::TextEditor::backgroundColourId);
+    if (bool(getProperties().getWithDefault("controlTextButtonEditor", false)))
+    {
+        paintControlFill(g, getLocalBounds(), uiGreyDark);
+        paintControlTextButton(g, getControlTextBounds(*this, getLocalBounds()), false, true);
+    }
+    else
+        paintControlFill(g, getLocalBounds(), background);
+
+    const auto selection = getHighlightedRegion();
+    if (!selection.isEmpty())
+    {
+        const juce::Graphics::ScopedSaveState saved(g);
+        g.setColour(juce::Colour(0xff222222));
+        auto clip = getLocalBounds();
+        for (auto* child : getChildren())
+            if (auto* viewport = dynamic_cast<juce::Viewport*>(child))
+                clip = getLocalArea(viewport, viewport->getLocalBounds());
+        g.reduceClipRegion(clip);
+        for (const auto& area : getTextBounds(selection)) g.fillRect(area);
+    }
 }
 
 void CopyPasteTextEditor::mouseDown(const juce::MouseEvent& event)
 {
+    if (event.mods.isCtrlDown() && !event.mods.isRightButtonDown()) return;
     if (!isPopupMenuEnabled() || !event.mods.isPopupMenu() || getParentComponent() == nullptr)
     {
         juce::TextEditor::mouseDown(event);
@@ -50,7 +255,8 @@ void CopyPasteTextEditor::mouseDown(const juce::MouseEvent& event)
     if (scope == nullptr) scope = getTopLevelComponent();
     contextMenu.reset();
     const auto selection = getHighlightedRegion();
-    auto anchor = juce::Rectangle<int>(juce::jmax(96, getWidth()), rowHeight);
+    const auto compactSize = getCompactControlSize(*this);
+    auto anchor = juce::Rectangle<int>(2 * compactSize + getUiGap(*this), compactSize);
     anchor.setCentre(scope->getLocalPoint(this, event.getPosition()));
     auto popup = makeChoicePrompt(anchor, { "COPY", "PASTE" }, -1,
         { !selection.isEmpty(), !isReadOnly() }, juce::Justification::centred,
@@ -67,7 +273,7 @@ void CopyPasteTextEditor::mouseDown(const juce::MouseEvent& event)
             if (safeThis == nullptr) return;
             safeThis->contextMenu.reset();
             if (safeThis->isShowing()) safeThis->grabKeyboardFocus();
-        });
+        }, false, {}, true);
     popup->setName("text-edit-context-menu");
     scope->addAndMakeVisible(*popup);
     popup->setBounds(scope->getLocalBounds());
@@ -95,219 +301,4 @@ void CopyPasteTextEditor::performPopupMenuAction(const int menuItemID)
 
     if (menuItemID == juce::StandardApplicationCommandIDs::paste)
         pasteFromClipboard();
-}
-
-NoTickComboBox::NoTickComboBox()
-{
-    setScrollWheelEnabled(false);
-}
-
-void NoTickComboBox::showPopup()
-{
-    if (! isEnabled())
-        return;
-
-    if (promptStylePopupEnabled)
-    {
-        const auto itemCount = getNumItems();
-
-        if (itemCount > 0)
-        {
-            juce::StringArray itemTexts;
-            std::vector<bool> itemEnabledStates;
-            itemTexts.ensureStorageAllocated(itemCount);
-            itemEnabledStates.reserve(static_cast<size_t>(itemCount));
-
-            for (int index = 0; index < itemCount; ++index)
-            {
-                itemTexts.add(getItemText(index));
-                itemEnabledStates.push_back(isItemEnabled(getItemId(index)));
-            }
-
-            const auto currentSelectedItemIndex = getSelectedItemIndex();
-            auto onSelect = [safePointer = juce::Component::SafePointer<NoTickComboBox>(this), currentSelectedItemIndex] (int selectedIndex)
-            {
-                if (safePointer == nullptr)
-                    return;
-
-                const auto shouldReSelectCurrentItem = selectedIndex == currentSelectedItemIndex;
-                safePointer->setSelectedItemIndex(selectedIndex, juce::sendNotificationSync);
-
-                if (shouldReSelectCurrentItem && safePointer->onReselectedCurrentItem != nullptr)
-                    safePointer->onReselectedCurrentItem();
-
-                if (auto* handler = safePointer->getAccessibilityHandler())
-                    handler->grabFocus();
-            };
-
-            if (choicePromptPresenter != nullptr)
-            {
-                choicePromptPresenter(itemTexts,
-                                      currentSelectedItemIndex,
-                                      std::move(itemEnabledStates),
-                                      popupMenuTextJustification,
-                                      std::move(onSelect));
-                return;
-            }
-
-            if (auto* owner = findParentComponentOfClass<AvaAudioProcessorEditor>())
-            {
-                owner->showChoicePrompt(owner->getLocalArea(this, getLocalBounds()),
-                                        itemTexts,
-                                        currentSelectedItemIndex,
-                                        std::move(itemEnabledStates),
-                                        popupMenuTextJustification,
-                                        std::move(onSelect));
-                return;
-            }
-        }
-    }
-
-    auto menu = *getRootMenu();
-
-    if (menu.getNumItems() == 0)
-        menu.addItem(1, getTextWhenNoChoicesAvailable(), false, false);
-
-    auto* label = dynamic_cast<juce::Label*>(getChildComponent(0));
-
-    if (label == nullptr)
-    {
-        juce::ComboBox::showPopup();
-        return;
-    }
-
-    auto& lf = getLookAndFeel();
-    menu.setLookAndFeel(&lf);
-    const auto currentSelectedId = getSelectedId();
-    const auto shouldMarkSelectedItem = getNumItems() > 2;
-
-    for (juce::PopupMenu::MenuItemIterator iterator(menu, true); iterator.next();)
-    {
-        auto& item = iterator.getItem();
-
-        if (item.itemID != 0)
-            item.isTicked = shouldMarkSelectedItem && item.itemID == currentSelectedId;
-    }
-
-    menu.showMenuAsync(lf.getOptionsForComboBoxPopupMenu(*this, *label),
-                       juce::ModalCallbackFunction::create(
-                           [safePointer = juce::Component::SafePointer<NoTickComboBox>(this), currentSelectedId] (int result)
-                           {
-                               if (safePointer == nullptr)
-                                   return;
-
-                               safePointer->hidePopup();
-
-                               if (result != 0)
-                               {
-                                   const auto shouldReSelectCurrentItem = result == currentSelectedId;
-                                   safePointer->setSelectedId(result);
-
-                                   if (shouldReSelectCurrentItem && safePointer->onReselectedCurrentItem != nullptr)
-                                       safePointer->onReselectedCurrentItem();
-                               }
-
-                               if (auto* handler = safePointer->getAccessibilityHandler())
-                                   handler->grabFocus();
-                           }));
-}
-
-void NoTickComboBox::mouseDown(const juce::MouseEvent& event)
-{
-    if (! isEnabled() || (! event.mods.isLeftButtonDown() && ! event.mods.isPopupMenu()))
-        return;
-
-    pointerDown = true;
-    dragDetected = false;
-    pressHighlight = true;
-    repaint();
-
-    if (event.mods.isPopupMenu())
-    {
-        showPopup();
-        pointerDown = false;
-        pressHighlight = false;
-        return;
-    }
-}
-
-void NoTickComboBox::mouseDrag(const juce::MouseEvent& event)
-{
-    if (pointerDown && ! dragDetected && event.mouseWasDraggedSinceMouseDown())
-    {
-        dragDetected = true;
-
-        if (pressHighlight)
-        {
-            pressHighlight = false;
-            repaint();
-        }
-    }
-}
-
-void NoTickComboBox::mouseUp(const juce::MouseEvent& event)
-{
-    if (! isEnabled())
-        return;
-
-    const auto shouldOpenPopup = pointerDown
-        && ! dragDetected
-        && ! event.mouseWasDraggedSinceMouseDown()
-        && ! event.mods.isPopupMenu()
-        && contains(event.getPosition());
-
-    pointerDown = false;
-    dragDetected = false;
-    pressHighlight = false;
-    repaint();
-
-    if (shouldOpenPopup)
-        showPopup();
-}
-
-void NoTickComboBox::mouseExit(const juce::MouseEvent&)
-{
-    if (pointerDown)
-        pressHighlight = false;
-
-    repaint();
-}
-
-void NoTickComboBox::mouseEnter(const juce::MouseEvent&)
-{
-    repaint();
-}
-
-void NoTickComboBox::resized()
-{
-    juce::ComboBox::resized();
-
-    for (int childIndex = 0; childIndex < getNumChildComponents(); ++childIndex)
-        if (auto* child = getChildComponent(childIndex))
-            child->setMouseCursor(juce::MouseCursor::NormalCursor);
-}
-
-void NoTickComboBox::setPopupMenuTextJustification(const juce::Justification justification) noexcept
-{
-    popupMenuTextJustification = justification;
-}
-
-juce::Justification NoTickComboBox::getPopupMenuTextJustification() const noexcept
-{
-    return popupMenuTextJustification;
-}
-
-void NoTickComboBox::setPromptStylePopupEnabled(const bool shouldEnable) noexcept
-{
-    promptStylePopupEnabled = shouldEnable;
-}
-
-void NoTickComboBox::setChoicePromptPresenter(ChoicePromptPresenter presenter)
-{
-    choicePromptPresenter = std::move(presenter);
-}
-
-bool NoTickComboBox::isPressedHighlightEnabled() const noexcept
-{
-    return isEnabled() && ((pressHighlight && ! dragDetected) || isMouseHovering(*this));
 }

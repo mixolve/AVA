@@ -4,7 +4,6 @@
 
 #include "../shell/ChoiceControl.h"
 #include "../shell/EditorSetup.h"
-#include "../shell/LocalParameterControl.h"
 #include "../shell/ParameterControl.h"
 
 #include <algorithm>
@@ -19,7 +18,6 @@ void CrossoverModuleComponent::loadUiState()
 
     autoSoloEnabled = getBool(state, config.moduleKey, "auto_solo_enabled", false);
     manualSoloInclusive = getBool(state, config.moduleKey, "manual_solo_inclusive", false);
-    crossoverSettingsActive = getBool(state, config.moduleKey, "crossover_settings_active", false);
     visibleRangeIndex = static_cast<size_t>(juce::jlimit(0,
                                                        static_cast<int>(numRanges - 1),
                                                        getInt(state, config.moduleKey, "visible_band_index", 0)));
@@ -42,6 +40,8 @@ void CrossoverModuleComponent::loadUiState()
 
 void CrossoverModuleComponent::saveUiState()
 {
+    const auto wasWriting = writingUiState.exchange(true);
+    const juce::ScopeGuard complete {[this, wasWriting] { writingUiState.store(wasWriting); }};
     auto& state = valueTreeState.state;
 
     if (pageScrollRestored)
@@ -49,7 +49,6 @@ void CrossoverModuleComponent::saveUiState()
 
     setBool(state, config.moduleKey, "auto_solo_enabled", autoSoloEnabled);
     setBool(state, config.moduleKey, "manual_solo_inclusive", manualSoloInclusive);
-    setBool(state, config.moduleKey, "crossover_settings_active", crossoverSettingsActive);
     setInt(state, config.moduleKey, "visible_band_index", static_cast<int>(visibleRangeIndex));
     setInt(state, config.moduleKey, "page_scroll_y", restoredPageScrollY);
     setBool(state, config.moduleKey, "has_ui_state", true);
@@ -70,7 +69,7 @@ bool CrossoverModuleComponent::restoreUiStateIfChanged()
 
     loadUiState();
     visibleRangeIndex = juce::jmin(visibleRangeIndex, getActiveRangeCount() - 1);
-    updateMonitorButtons();
+    updateRangeNavigation();
     updatePageVisibility();
     refreshRangeControls();
     resized();
@@ -84,7 +83,6 @@ juce::String CrossoverModuleComponent::getUiStateSignature() const
     values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "has_ui_state"), false).toString());
     values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "auto_solo_enabled"), false).toString());
     values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "manual_solo_inclusive"), false).toString());
-    values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "crossover_settings_active"), false).toString());
     values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "visible_band_index"), 0).toString());
     values.add(state.getProperty(makeStatePropertyId(config.moduleKey, "page_scroll_y"), 0).toString());
 

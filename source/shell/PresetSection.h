@@ -1,9 +1,7 @@
 #pragma once
 
 #include "Editor.h"
-#include "DisclosureAnimation.h"
 #include "ChoiceControl.h"
-#include "LocalParameterControl.h"
 #include "ParameterControl.h"
 
 struct AvaAudioProcessorEditor::PresetsSection
@@ -14,15 +12,14 @@ struct AvaAudioProcessorEditor::PresetsSection
     juce::String getSelectedPresetName() const;
     void setPresetNames(const juce::StringArray& names, const juce::String& preferredSelection);
 
-    juce::Component presetClip, actionsClip;
-    DisclosureAnimation actionsReveal;
-    NoTickComboBox presetCombo;
-    std::unique_ptr<BoxTextButton> actionsToggleButton;
-    std::unique_ptr<BoxTextButton> addButton;
-    std::unique_ptr<BoxTextButton> saveButton;
-    std::unique_ptr<BoxTextButton> renameButton;
-    std::unique_ptr<BoxTextButton> defaultButton;
-    std::unique_ptr<BoxTextButton> deleteButton;
+    LocalChoiceControl presetChoice { "PRESET\nSELECT", juce::StringArray { "DEFAULT" }, 0 };
+    std::unique_ptr<PushControl> addButton;
+    std::unique_ptr<PushControl> saveButton;
+    std::unique_ptr<PushControl> renameButton;
+    std::unique_ptr<PushControl> defaultButton;
+    std::unique_ptr<PushControl> deleteButton;
+    std::unique_ptr<PushControl> copyFiltersButton;
+    std::unique_ptr<PushControl> pasteFilterButton;
     bool ignorePresetCallbacks = false;
     juce::StringArray presetNames;
     juce::String selectedPresetName;

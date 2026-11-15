@@ -21,14 +21,6 @@ Licensed under the SIL Open Font License, Version 1.1.
 
 Licence: https://openfontlicense.org/open-font-license-official-text/
 
-## Tabler Icons
-
-Copyright 2020-2026 Paweł Kuna.
-
-Licensed under the MIT License.
-
-Licence: https://github.com/tabler/tabler-icons/blob/main/LICENSE
-
 ## Steinberg VST3 SDK
 
 Copyright Steinberg Media Technologies GmbH.
@@ -53,15 +45,27 @@ JUCE and SDK source distributions used to build AVA.
 
 JUCE dependency notices: https://github.com/juce-framework/JUCE/blob/8.0.12/LICENSE.md
 
+## Rubber Band Library 4.0.0
 
-## Radiant — Burning Film and Topographic
+Copyright 2007–2024 Particular Programs Ltd.
 
-Native adaptation of https://github.com/pbakaus/radiant/blob/main/static/burning-film.html
-and https://github.com/pbakaus/radiant/blob/main/static/topographic.html
+Licensed under GPL-2.0-or-later, or a separately obtained commercial licence.
+
+Source and licence: https://github.com/breakfastquay/rubberband/tree/v4.0.0
+
+## SoundTouch 2.4.1
+
+Copyright Olli Parviainen and contributors.
+
+Licensed under LGPL-2.1-or-later, or a separately obtained commercial licence.
+
+Source and licence: https://codeberg.org/soundtouch/soundtouch/src/tag/2.4.1/COPYING.TXT
+
+## r8brain-free-src
 
 MIT License
 
-Copyright (c) 2025 Paul Bakaus
+Copyright (c) 2013-2026 Aleksey Vaneev
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -80,3 +84,4 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+

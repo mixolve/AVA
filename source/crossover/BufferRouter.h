@@ -78,7 +78,7 @@ public:
                                     soloMask.begin() + static_cast<std::ptrdiff_t>(activeRangeCount),
                                     [] (const bool soloed) { return soloed; });
 
-        if (splitCountChanged || frequenciesChanged)
+        if (splitCountChanged)
         {
             for (auto& rangeBuffer : rangeBuffers)
                 rangeBuffer.clear();
@@ -105,7 +105,6 @@ public:
 
         rangeLatencies = constrainedLatencies;
         updateLatencyCompensation();
-        clearAlignmentBuffers();
     }
 
     template <typename ProcessRange>
@@ -173,7 +172,7 @@ public:
                     leftAlignment[static_cast<size_t>(alignmentWritePosition)] = rangeBuffers[rangeIndex].getSample(0, sampleIndex);
 
                     if (! anySoloActive || soloMask[rangeIndex])
-                        sumLeft += leftAlignment[static_cast<size_t>(readPosition)];
+                        sumLeft += alignmentFilled >= compensationSamples ? leftAlignment[static_cast<size_t>(readPosition)] : 0.0f;
 
                     if (channelCount > 1)
                     {
@@ -181,7 +180,7 @@ public:
                         rightAlignment[static_cast<size_t>(alignmentWritePosition)] = rangeBuffers[rangeIndex].getSample(1, sampleIndex);
 
                         if (! anySoloActive || soloMask[rangeIndex])
-                            sumRight += rightAlignment[static_cast<size_t>(readPosition)];
+                            sumRight += alignmentFilled >= compensationSamples ? rightAlignment[static_cast<size_t>(readPosition)] : 0.0f;
                     }
                 }
 
@@ -190,6 +189,7 @@ public:
                 if (channelCount > 1)
                     buffer.setSample(1, blockStart + sampleIndex, sumRight);
 
+                alignmentFilled = juce::jmin(alignmentBufferSize, alignmentFilled + 1);
                 if (++alignmentWritePosition == alignmentBufferSize)
                     alignmentWritePosition = 0;
             }
@@ -199,10 +199,7 @@ public:
 private:
     void clearAlignmentBuffers()
     {
-        for (auto& rangeChannels : alignmentBuffers)
-            for (auto& channel : rangeChannels)
-                std::fill(channel.begin(), channel.end(), 0.0f);
-
+        alignmentFilled = 0;
         alignmentWritePosition = 0;
     }
 
@@ -223,7 +220,7 @@ private:
     int preparedChannels = 2;
     int preparedBlockSize = 1;
     int alignmentBufferSize = 1;
-    int alignmentWritePosition = 0;
+    int alignmentWritePosition = 0, alignmentFilled = 0;
     int targetLatencySamples = 0;
     bool anySoloActive = false;
 };

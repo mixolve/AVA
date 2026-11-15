@@ -1,11 +1,14 @@
 #pragma once
+#include "../shell/Controls.h"
 
-#include "../modules/tls/BlockOrder.h"
-#include "../modules/tls/GainOrder.h"
+#include "../modules/shared/BlockCatalog.h"
+#include "../modules/gain/GainOrder.h"
 
 #include "Splitter.h"
+#include "Page.h"
 
 #include <JuceHeader.h>
+#include "../modules/shared/ParameterLayout.h"
 
 #include <array>
 #include <functional>
@@ -14,26 +17,26 @@
 
 class BoxTextButton;
 class ChoiceControl;
+class LocalChoiceControl;
+class PushControl;
 class ParameterControl;
+class AccessoryButton;
 class CrossoverModulePage;
 class CrossoverRangePage;
 class CrossoverSettingsPage;
 
-class CrossoverModuleComponent final : public juce::Component
+class CrossoverModuleComponent final : public juce::Component, private juce::AudioProcessorValueTreeState::Listener, private juce::ValueTree::Listener
 {
 public:
     enum class ControlKind
     {
-        heading,
         parameter,
         choice,
         toggle,
-        inactive,
         readout,
+        custom,
         time
     };
-
-    enum class ExclusiveScope { none, mode, domain };
 
     struct CrossoverControlSpec
     {
@@ -41,42 +44,28 @@ public:
         const char* suffix = "";
         const char* label = "";
         int decimals = 2;
-        const char* enabledLabel = "";
-        const char* disabledLabel = "";
         const char* modeSuffix = "";
-        const char* syncSuffix = "";
-        const char* exclusiveGroup = "";
-        const char* auxiliaryToggleSuffix = "";
-        const char* auxiliaryChoiceSuffix = "";
-        const char* auxiliaryToggleLabel = "";
-        const char* auxiliaryToggleIcon = "";
-        const char* enabledWhenSuffix = "";
-        std::vector<const char*> enabledWhenAnyNonZeroSuffixes;
-        bool interactionDisabled = false;
-        ExclusiveScope exclusiveScope = ExclusiveScope::none;
-        bool toggleActiveFillEnabled = true;
-        bool auxiliaryToggleInverted = false;
-        bool enabledWhenBelowMaximum = false;
-        bool enabledWhenAboveMinimum = false;
-        bool showTimeModeButton = true;
-        int topGapMultiplier = 1;
-        int parameterTitleWidth = 0;
-        int auxiliaryToggleWidth = 0;
+        bool hasTopGap = true;
         int sourceRangeIndex = -1;
         int controlsInRow = 1;
+        bool startNewControlRow = false;
     };
 
-    using BlockOrder = tls::blocks::Order;
 
     struct Config
     {
         void* processorIdentity = nullptr;
         juce::String moduleKey;
+        // Unique, persistent identity for UI collapse state. Copied modules
+        // must not share the original module's collapsed.* properties.
+        juce::String collapseScope;
         juce::AudioProcessorValueTreeState* valueTreeState = nullptr;
-        juce::UndoManager* undoManager = nullptr;
+        // UI-only collapse metadata is saved by the owning instance, never the
+        // transient per-module DSP state.
+        juce::AudioProcessorValueTreeState* uiState = nullptr;
         std::function<void()> markParametersDirty;
-        std::function<bool()> refreshExternalState;
-        std::function<bool(const juce::String&, const juce::String&, float)> assignHostSlot;
+        std::function<bool()> copyInstanceAll;
+        std::function<bool()> pasteInstanceAll;
         std::function<juce::String(size_t, const char*)> makeRangeParameterId;
         std::function<juce::String(const char*)> makeCrossoverParameterId;
         std::function<juce::String(size_t)> makeCrossoverSoloParameterId;
@@ -86,36 +75,18 @@ public:
         juce::String soloChannelParameterId;
         std::function<bool(int)> isProcessingInputAvailable;
         std::function<bool(const juce::String&, int)> isRangeChoiceAvailable;
-        std::function<BlockOrder(size_t)> getBlockOrder;
-        std::function<void(size_t, const BlockOrder&)> setBlockOrder;
-        std::function<void(size_t, BlockOrder, std::function<void(const BlockOrder&)>,
-                           std::function<void(const BlockOrder&)>, std::function<void()>)> showArrangePrompt;
-        std::function<tls::gain::Order(size_t)> getGainOrder;
-        std::function<void(size_t, const tls::gain::Order&)> setGainOrder;
-        std::function<void(size_t, tls::gain::Order, std::function<void(const tls::gain::Order&)>,
-                           std::function<void(const tls::gain::Order&)>, std::function<void()>)> showGainArrangePrompt;
+        std::function<ava::modules::chain::gain::Order(size_t)> getGainOrder;
         std::vector<CrossoverControlSpec> rangeControls;
-        std::vector<CrossoverControlSpec> rangeTailControls;
+        std::function<std::unique_ptr<juce::Component>(size_t,const juce::String&)> makeCustomControl;
+        std::function<ava::modules::parameters::ControlPolicy(size_t, const juce::String&)> getControlPolicy;
         int crossoverDecimals = 0;
-        bool showAutoSolo = true;
-        bool startOnCrossoverSettings = false;
         bool showCrossoverControls = true;
-        bool showModuleHeading = true;
-        bool pinModuleHeading = false;
         bool showCrossoverNavigation = true;
         bool showCrossoverSolo = true;
         std::function<void()> onPageChanged;
-        std::function<void()> onModuleCloseRequest;
-        std::function<juce::StringArray()> getHostSyncChoices;
-        std::function<int()> getDefaultHostSyncChoiceIndex;
-        std::function<void(const juce::Rectangle<int>&,
-                           const juce::StringArray&,
-                           int,
-                           std::vector<bool>,
-                           juce::Justification,
-                           std::function<void(int)>,
-                           std::function<void()>,
-                           std::function<void()>)> showChoicePrompt;
+        std::function<juce::StringArray()> getNoteChoices;
+        std::function<double()> getTempoBpm;
+
         std::function<void()> clearKeyboardFocus;
     };
 
@@ -124,79 +95,74 @@ public:
 
     void* getProcessorIdentity() const noexcept { return config.processorIdentity; }
 
-    void paint(juce::Graphics&) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
     void refreshExternalState();
     void refreshRangeControls();
-    void showBlockArrange();
     void setInstanceName(const juce::String& name);
-    void setModuleActionButtons(BoxTextButton& addButton, BoxTextButton& titleButton);
+    void setModuleDisplayTitle(const juce::String& title);
+    std::vector<juce::Component*> getMainControls();
+    std::array<juce::Component*, 2> getMainSyncControls() const;
+    std::vector<juce::Component*> getInstanceSettingsControls() const;
+    InstanceMainRows getInstanceMainRows() const;
+    CrossoverModulePage* sharedSettingsPage(juce::Component& parent, int width);
+    std::vector<std::pair<int, juce::Component*>> independentBlocks(juce::Component& parent, int width);
     int getPreferredHeight() const noexcept;
-    bool isCrossoverSettingsSelected() const noexcept { return crossoverSettingsActive; }
     size_t getVisibleCrossoverRange() const noexcept { return visibleRangeIndex; }
     void setExternalCrossoverRange(size_t rangeIndex);
+    void selectCrossoverRange(size_t rangeIndex);
 
 private:
     static constexpr size_t numRanges = ava::crossover::Splitter::numRanges;
-    static constexpr size_t numMonitorButtons = numRanges + 1;
 
     void loadUiState();
     void saveUiState();
     bool restoreUiStateIfChanged();
     juce::String getUiStateSignature() const;
-    void selectCrossoverRange(size_t rangeIndex);
     void toggleManualSolo(size_t rangeIndex);
-    void showCrossoverSettings();
     void setAutoSoloEnabled(bool shouldBeEnabled);
     void setManualSoloInclusive(bool shouldBeInclusive);
-    void changeActiveSplitCount(int delta);
+    void activeSplitCountChanged();
     void syncMonitorParameters();
     void synchroniseManualSoloMaskFromParameters();
     bool isRangeSoloEnabled(size_t rangeIndex) const noexcept;
-    void updateMonitorButtons();
-    void updateHeaderSoloState();
+    void updateRangeNavigation();
+    void updateSoloState();
     void updatePageVisibility();
-    void updatePinnedComponents();
     void scrollPageViewport(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel);
     void updatePageViewport();
     CrossoverModulePage* getCurrentPageComponent() const noexcept;
     int getCurrentPagePreferredHeight() const noexcept;
-    int getCurrentPinnedHeaderHeight() const noexcept;
-    int getCurrentPinnedTailHeight() const noexcept;
     size_t getActiveSplitCount() const;
     size_t getActiveRangeCount() const;
-    bool constrainSplitFrequency(size_t splitIndex);
-    bool setParameterPlainValue(const juce::String& parameterId, float plainValue);
     bool setParameterNormalisedValue(juce::RangedAudioParameter& parameter, float normalisedValue);
-    bool assignButtonToHostSlot(const juce::String& parameterId,
-                                const juce::String& fallbackName,
-                                const BoxTextButton* button);
     void clearFocus();
     void notifyPageChanged();
 
+    void parameterChanged(const juce::String&, float) override { externalStateDirty.store(true); }
+    void valueTreePropertyChanged(juce::ValueTree&, const juce::Identifier&) override { if (!writingUiState.load()) externalStateDirty.store(true); }
+    void valueTreeRedirected(juce::ValueTree&) override { externalStateDirty.store(true); }
+    std::atomic<bool> externalStateDirty { true }, writingUiState { false };
+    juce::ValueTree observedState;
+    std::vector<juce::String> observedParameterIds;
+    uint32_t lastAvailabilityRefresh = 0;
     Config config;
     juce::AudioProcessorValueTreeState& valueTreeState;
-    std::array<std::unique_ptr<BoxTextButton>, numMonitorButtons> monitorButtons;
+    std::array<std::unique_ptr<PushControl>, numRanges> bandControls;
+    std::array<std::unique_ptr<AccessoryButton>, numRanges> bandSoloIndicators;
     std::unique_ptr<BoxTextButton> instanceHeading;
-    std::unique_ptr<BoxTextButton> headerSoloButton;
-    BoxTextButton* moduleAddButton = nullptr;
-    BoxTextButton* moduleTitleButton = nullptr;
     std::array<juce::RangedAudioParameter*, numRanges> soloParameters {};
     juce::RangedAudioParameter* activeSplitCountParameter = nullptr;
     std::array<std::unique_ptr<CrossoverModulePage>, numRanges> rangePages;
     std::unique_ptr<CrossoverModulePage> crossoverSettingsPage;
-    juce::Viewport pageViewport;
-    juce::Component* pinnedHeaderComponent = nullptr;
-    juce::Component* pinnedTailComponent = nullptr;
+    UiScrollViewport pageViewport;
     bool uiStateLoaded = false;
     bool pageScrollRestored = false;
     size_t visibleRangeIndex = 0;
     int restoredPageScrollY = 0;
     juce::String uiStateSignature;
     std::array<bool, numRanges> manualSoloMask {};
-    bool crossoverSettingsActive = false;
     bool autoSoloEnabled = false;
     bool manualSoloInclusive = false;
 

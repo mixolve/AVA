@@ -79,6 +79,19 @@ MarkdownLink parseMarkdownLinkLine(const juce::String& line)
     return link;
 }
 
+void paintAboutText(juce::Graphics& graphics, juce::Component& owner,
+                    const juce::TextLayout& layout, const juce::String& key)
+{
+    const auto area = owner.getLocalBounds().toFloat();
+    const auto zone = juce::Justification(juce::Justification::centred)
+        .appliedToRectangle(juce::Rectangle<float>(layout.getWidth(), layout.getHeight()), area)
+        .getSmallestIntegerContainer();
+    graphics.setColour(uiGreyLight);
+    graphics.fillRect(zone.expanded(getUiGap(owner), 0));
+    juce::ignoreUnused(key);
+    layout.draw(graphics, area);
+}
+
 class MarkdownLinkRow final : public juce::Component
 {
 public:
@@ -90,6 +103,7 @@ public:
                          : juce::URL(urlText))
     {
         setOpaque(false);
+        setPaintingIsUnclipped(true);
         setWantsKeyboardFocus(false);
         setMouseClickGrabsKeyboardFocus(false);
         setInterceptsMouseClicks(false, true);
@@ -97,7 +111,13 @@ public:
         const auto linkFont = std::move(rowFont);
         linkButton.setFont(linkFont, false);
         linkButton.setJustificationType(juce::Justification::centred);
-        linkButton.setColour(juce::HyperlinkButton::textColourId, uiAccent);
+        // Keep the native hyperlink hit target and custom text rendering.
+        linkButton.setColour(juce::HyperlinkButton::textColourId, juce::Colours::transparentBlack);
+        juce::AttributedString attributed(linkButton.getButtonText());
+        attributed.setFont(linkFont);
+        attributed.setColour(juce::Colour(0xff222222));
+        attributed.setJustification(juce::Justification::centred);
+        textLayout.createLayout(attributed, 10000.0f);
         linkButton.setMouseClickGrabsKeyboardFocus(false);
         linkButton.setWantsKeyboardFocus(false);
         linkButton.setSize(1, rowHeight);
@@ -131,6 +151,11 @@ public:
         addAndMakeVisible(linkButton);
     }
 
+    void paint(juce::Graphics& graphics) override
+    {
+        paintAboutText(graphics, *this, textLayout, linkButton.getButtonText());
+    }
+
     void resized() override
     {
         const auto buttonBounds = linkButton.getBounds().withCentre(getLocalBounds().getCentre());
@@ -139,6 +164,7 @@ public:
 
 private:
     juce::HyperlinkButton linkButton;
+    juce::TextLayout textLayout;
 };
 
 }

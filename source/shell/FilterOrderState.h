@@ -1,32 +1,13 @@
 #pragma once
 
-#include <JuceHeader.h>
+#include "../modules/shared/StateValidation.h"
 
 #include <optional>
 #include <vector>
 
 namespace shell_filter_order_state
 {
-inline bool isPermutation(const std::vector<int>& order, const int count) noexcept
-{
-    if (count < 0 || static_cast<int>(order.size()) < count)
-        return false;
-
-    std::vector<bool> used(static_cast<size_t>(count), false);
-
-    for (int orderIndex = 0; orderIndex < count; ++orderIndex)
-    {
-        const auto filterIndex = order[static_cast<size_t>(orderIndex)];
-
-        if (! juce::isPositiveAndBelow(filterIndex, count)
-            || used[static_cast<size_t>(filterIndex)])
-            return false;
-
-        used[static_cast<size_t>(filterIndex)] = true;
-    }
-
-    return true;
-}
+using ava::modules::state::isPermutation;
 
 inline juce::String encode(const std::vector<int>& order, const int activeCount)
 {

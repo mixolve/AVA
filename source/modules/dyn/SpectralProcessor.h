@@ -1,8 +1,10 @@
 #pragma once
 
+#include "AdaptiveFrameWindow.h"
 #include "CorrelationEnvelope.h"
 #include "PeakCrest.h"
 #include "ThresholdHysteresis.h"
+#include "LookaheadGainShaper.h"
 
 #include <JuceHeader.h>
 
@@ -31,26 +33,23 @@ class DynSpectralProcessor final
         float correlationImpact = 0.0f;
         float adaptiveAmount = 0.0f;
         float adaptiveOffset = 0.0f;
-        float adaptiveAttackMs = 30.0f;
-        float adaptiveHoldMs = 0.0f;
-        float adaptiveReleaseMs = 300.0f;
         float slopeDbPerOct = 4.5f;
         float attackMs = 0.0f;
         float autoRelease = 0.0f, releaseMemoryMs = 200.0f, releaseDepth = 0.0f;
-        float releasePeakMs = 0.0f, releaseRmsMs = 150.0f;
+        float releasePeakMs = 10.0f, releaseRmsMs = 150.0f;
         float kneeDb = 0.0f;
         float ratio = 100.0f;
-        float progression = 0.0f, progressionSpan = 12.0f;
         float makeupDb = 0.0f;
         float inputDb = 0.0f, outputDb = 0.0f, mix = 1.0f;
         float rangeDb = 96.0f, rangeCurve = 0.0f;
-        float delayMs = 0.0f, holdMs = 0.0f, attackCurve = 0.0f, releaseCurve = 0.0f;
+        float holdMs = 0.0f, attackCurve = 0.0f, releaseCurve = 0.0f;
         float adaptiveTimeMs = 0.0f;
-        float releaseType = 0.0f, tension = 0.0f, tensionFloorDb = -96.0f;
+        float tension = 0.0f, tensionFloorDb = -96.0f;
         float correlationTensionFloor = -1.0f, tensionHysteresis = 0.0f;
         bool useSidechainInput = false, sidechainListen = false, separateDetector = false;
         float rmsMix = 0.0f;
-        float lookaheadMs = 0.0f, peakCrestDb = 0.0f, correlationPeakCrest = 0.0f, rmsTimeMs = 50.0f;
+        float lookaheadMs = 0.0f, lookaheadCurve = 0.0f;
+        float peakCrestDb = 0.0f, correlationPeakCrest = 0.0f, rmsTimeMs = 50.0f;
     };
 
     explicit DynSpectralProcessor(juce::AudioProcessor& ownerProcessor);
@@ -66,7 +65,7 @@ class DynSpectralProcessor final
     bool refreshLatencyState() noexcept;
 
   private:
-    static float calculateReduction(float detectorValue, float threshold, float ratio, float knee, float progression = 0.0f, float span = 12.0f) noexcept;
+    static float calculateReduction(float detectorValue, float threshold, float ratio, float knee) noexcept;
     static float calculateTimeCoefficient(float timeMs, float frameDurationSeconds) noexcept;
 
     void resetDeltaDelay() noexcept;
@@ -134,6 +133,7 @@ class DynSpectralProcessor final
                                       double accumulatedCorrelation, double accumulatedCorrelationWeight) noexcept;
         void synthesiseFrame(int channelsToUse, int fftIndex, int fftSize) noexcept;
         void pushOutputChunk(ChannelState& state, int fftSize, int hopSize) noexcept;
+        void resetCorrelationState() noexcept;
         void reconfigure(int channelsToUse, int fftSize, int hopSize) noexcept;
         int getFftIndexForSize(int fftSize) const noexcept;
         void updateCorrelationDetector(const ProcessingSettings& settings, int fftSize) noexcept;
@@ -155,24 +155,24 @@ class DynSpectralProcessor final
             dyn::detector::ReleaseMemory releaseMemory;
             float releaseDurationMs = 0.0f;
             float value = 0.0f, start = 0.0f, target = 0.0f, elapsedMs = 0.0f;
-            float delayMs = 0.0f, holdMs = 0.0f;
+            float holdMs = 0.0f, holdConfiguredMs = 0.0f;
             bool attacking = false;
         };
         std::array<std::array<SpectralEnvelope, (maxFftSize / 2) + 1>, dyn::detector::count> spectralEnvelopes{};
         std::array<std::array<dyn_spectral_envelope::Envelope, (maxFftSize / 2) + 1>, dyn::detector::count> correlationEnvelopes{};
         std::array<float, (maxFftSize / 2) + 1> correlationRmsCrossPower{}, correlationRmsPower{};
-        double correlationAdaptiveCrossPower = 0.0, correlationAdaptivePower = 0.0;
         std::array<std::array<dyn_spectral_envelope::Envelope, (maxFftSize / 2) + 1>, dyn::detector::count> tensionEnvelopes{};
         std::array<std::array<float, (maxFftSize / 2) + 1>, dyn::detector::count> tensionDirections{}, correlationResponseDistances{}, correlationActionDistances{};
         std::array<std::array<dyn::detector::ThresholdHysteresis, (maxFftSize / 2) + 1>, dyn::detector::count> thresholdHysteresis{}, tensionThresholdHysteresis{};
-        float smoothedTension = 0.0f;
-        float spectralAdaptivePower = 0.0f;
+        DynAdaptiveFrameWindow adaptiveFrameWindow;
         std::array<float, (maxFftSize / 2) + 1> spectralRmsPower{};
+        // Reuse the sample-domain lookahead curve at FFT-hop resolution.
+        // Buffers are allocated in prepare(), never during processFrame().
+        std::array<dyn::dsp::LookaheadGainShaper, (maxFftSize / 2) + 1> lookaheadGainCurves{};
+        // Per-bin sustain phase follows the same user-defined slope and release.
         double sampleRate = 44100.0;
         float linkedAdaptiveReferenceDb = 0.0f;
         float correlationAdaptiveReference = -1.0f;
-        float linkedAdaptiveHoldRemainingMs = 0.0f;
-        float correlationAdaptiveHoldRemainingMs = 0.0f;
         int configuredChannels = 0;
         int currentFftSize = 0;
         int currentHopSize = 0;
@@ -209,7 +209,7 @@ class DynSpectralProcessor final
     int sidechainDelayWriteIndex = 0;
     int preparedBlockSize = 0;
     int deltaDelayWriteIndex = 0;
-    int activeLatencySamples = 0;
+    std::atomic<int> activeLatencySamples { 0 };
     std::atomic<int> activeDynamicProcessorIndex{0};
     int activeFftSize = 4096;
     int activeOverlapFactor = 32;

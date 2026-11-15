@@ -6,34 +6,29 @@
 #include <array>
 #include <utility>
 #include <vector>
-#include <cmath>
 
-inline int getOscChoiceIndex(const float value, const int choiceCount) noexcept
+inline bool parseOscBandParameterId(const juce::String& id, size_t& bandIndex, juce::String& suffix)
 {
-    if (! std::isfinite(value))
-        return -1;
-
-    const auto rounded = std::round(static_cast<double>(value));
-    if (rounded < 1.0 || rounded > static_cast<double>(choiceCount)
-        || std::abs(static_cast<double>(value) - rounded) > 1.0e-6)
-        return -1;
-
-    return static_cast<int>(rounded) - 1;
+    if (!id.startsWith("band-")) return false;
+    const auto separator = id.indexOfChar('_');
+    if (separator <= 5) return false;
+    const auto number = id.substring(5, separator);
+    const auto band = number.getIntValue();
+    if (band < 1 || band > 6 || number != juce::String(band)) return false;
+    bandIndex = size_t(band - 1);
+    suffix = id.substring(separator + 1);
+    return suffix.isNotEmpty();
 }
 
 struct OscParameterInfo
 {
-    juce::String name;
-    juce::String acceptedValues;
-    juce::String address;
     juce::String sourceId;
     float valueScale = 1.0f;
     std::optional<juce::Range<float>> parameterRange {};
 
     bool operator==(const OscParameterInfo& other) const
     {
-        return name == other.name && acceptedValues == other.acceptedValues
-            && address == other.address && sourceId == other.sourceId
+        return sourceId == other.sourceId
             && juce::exactlyEqual(valueScale, other.valueScale) && parameterRange == other.parameterRange;
     }
 };
@@ -41,11 +36,8 @@ struct OscParameterInfo
 inline juce::String getOscAddressName(const juce::String& sourceId)
 {
     auto name = sourceId;
-    if (name.endsWith(".icon")) name = name.dropLastCharacters(5);
-    if (name.endsWith(".hidden")) name = name.dropLastCharacters(7);
     if (name == "process-input") name = "ch-in";
     else if (name == "bp") name = "bypass";
-    else if (name == "b.ab") name = "b";
     else if (name.endsWith("_bp")) name = name.dropLastCharacters(3) + "_bypass";
 
     const auto bandSeparator = name.startsWith("band-") ? name.indexOfChar('_') : -1;
@@ -107,7 +99,6 @@ inline juce::String getOscAddressName(const juce::String& sourceId)
         { "mid.balance", "ms-balance-mid" },
         { "side.balance", "ms-balance-side" },
         { "degree", "ortho-degree" },
-        { "flip-right", "ortho-flip-right" },
         { "hpos", "rect-half-pos" },
         { "hneg", "rect-half-neg" },
         { "fpos", "rect-full-pos" },
@@ -121,10 +112,6 @@ inline juce::String getOscAddressName(const juce::String& sourceId)
         { "corr-impact", "impact" },
         { "adaptive", "threshold-adap" },
         { "offset", "adap-offset" },
-        { "attack", "adap-attack" },
-        { "hold", "adap-hold" },
-        { "release", "adap-release" },
-        { "processor-delay", "delay" },
         { "processor-attack", "attack" },
         { "processor-hold", "hold" },
         { "processor-release-peak", "release-peak" },
@@ -140,7 +127,6 @@ inline juce::String getOscAddressName(const juce::String& sourceId)
         { "feedback", "fwd-fb" },
         { "mute-trans", "trans-mute" },
         { "mute-sust", "sust-mute" },
-        { "add", "add-filter" },
         });
         for (const auto& [id, label] : names)
             if (suffix == id)
@@ -155,24 +141,15 @@ inline juce::String getOscAddressName(const juce::String& sourceId)
 
 inline juce::String getOscDisplayName(const juce::String& sourceId)
 {
-    auto name = getOscAddressName(sourceId).toUpperCase();
-    if (sourceId.endsWith(".hidden"))
-        return name + " (HIDDEN, ICON)";
-    if (sourceId.endsWith(".icon") || sourceId == "bp" || sourceId.endsWith("_bp")
-        || sourceId.endsWith("_mute-trans") || sourceId.endsWith("_mute-sust")
-        || sourceId.endsWith("_sc-listen")
-        || sourceId.endsWith("_processor-attack-mode") || sourceId.endsWith("_processor-hold-mode")
-        || (sourceId.endsWith("_processor-release-peak-mode") || sourceId.endsWith("_processor-release-rms-mode"))
-        || ((sourceId.contains("_filter-") || sourceId.startsWith("filter-")) && sourceId.endsWith("_phase")))
-        return name + " (ICON)";
-    return name;
+    const auto name = getOscAddressName(sourceId).toUpperCase();
+    return sourceId.endsWith(".hidden") ? name + " (VISIBILITY)" : name;
 }
 
 inline juce::String getOscSourceId(const juce::String& addressName,
                                    const std::vector<OscParameterInfo>& parameters)
 {
     for (const auto& parameter : parameters)
-        if (parameter.address.fromLastOccurrenceOf("/", false, false) == addressName)
+        if (getOscAddressName(parameter.sourceId) == addressName)
             return parameter.sourceId;
 
     return {};
@@ -200,4 +177,14 @@ inline bool isValidOscInstanceName(const juce::String& value)
 inline juce::String makeOscAddressPrefix(const juce::String& instanceName)
 {
     return "/ava/" + instanceName.toLowerCase() + "/";
+}
+
+inline juce::String makeAssignedOscAddress(const juce::String& instanceName, const juce::String& sourceId)
+{
+    return makeOscAddressPrefix(instanceName) + getOscAddressName(sourceId);
+}
+
+inline juce::String makeAssignedOscAddress(const juce::String& instanceName, const OscParameterInfo& parameter)
+{
+    return makeAssignedOscAddress(instanceName, parameter.sourceId);
 }

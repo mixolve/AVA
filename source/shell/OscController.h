@@ -28,17 +28,12 @@ private:
     void processBundle(const juce::OSCBundle& bundle);
     void sendCurrentState();
     void sendInstanceState();
-    void sendParameters(juce::AudioProcessorValueTreeState& state,
-                        const juce::String& parameterIdPrefix = {});
-    void sendCrossoverActions();
     void sendParameterValue(const juce::String& parameterId,
                             float normalizedValue,
                             const juce::RangedAudioParameter* parameter = nullptr);
-    juce::StringArray getExclusiveListenGroup(const juce::String& parameterId) const;
     juce::RangedAudioParameter* findParameter(const juce::String& parameterId) noexcept;
     bool applyParameterMessage(const juce::String& parameterId,
                                const juce::OSCArgument& value);
-    bool applyModuleMessage(const juce::OSCArgument& value);
     static bool readNumericArgument(const juce::OSCArgument& argument, float& value) noexcept;
     AvaAudioProcessor& targetProcessor() noexcept { return *currentTarget; }
     const AvaAudioProcessor& targetProcessor() const noexcept { return *currentTarget; }
@@ -52,10 +47,8 @@ private:
     juce::CriticalSection pendingSettingsLock;
     OscSettings pendingSettings;
     std::map<juce::String, float> lastSentParameterValues;
-    std::vector<OscParameterInfo> currentVisibleParameters;
-    std::map<juce::String, std::vector<OscParameterInfo>> lastVisibleParameters;
-    std::map<juce::String, juce::String> lastSentModules;
-    std::map<juce::String, int> lastSentSplitCounts;
+    std::vector<OscParameterInfo> currentAssignedParameters;
+    std::map<juce::String, std::vector<OscParameterInfo>> lastAssignedParameters;
     juce::String lastRoutingSignature;
     bool inputConnected = false;
     bool outputConnected = false;

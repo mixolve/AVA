@@ -1,26 +1,36 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "../shell/Controls.h"
 
+#include <array>
 #include <memory>
+#include <vector>
 
 class CrossoverModuleComponent;
 
-class CrossoverModulePage : public juce::Component
+// Root INSTANCE / MAIN has four fixed visual rows. The settings page supplies
+// the three groups it owns without exposing its internal component members.
+struct InstanceMainRows
+{
+    std::array<juce::Component*, 3> secondary {};  // INSTANCE SOLO, CHANNEL INPUT, CHANNEL SOLO
+    std::array<juce::Component*, 6> splits {};     // XOVERS, SPLIT 1..5
+    std::array<juce::Component*, 4> actions {};    // AUTO SOLO, SOLO MODE, COPY/PASTE ALL
+};
+
+class CrossoverModulePage : public ControlBlockComponent
 {
 public:
+    CrossoverModulePage() { getProperties().set("emptyEditorBackground",true); }
     ~CrossoverModulePage() override = default;
 
     virtual void refreshExternalState() = 0;
     virtual int getPreferredHeight() const = 0;
-    virtual juce::Component* getPinnedHeaderComponent() noexcept { return nullptr; }
-    virtual int getPinnedHeaderHeight() const noexcept { return 0; }
-    virtual juce::Component* getPinnedTailComponent() noexcept { return nullptr; }
-    virtual int getPinnedTailHeight() const noexcept { return 0; }
-    virtual void layoutPinnedTail() {}
+    virtual std::array<juce::Component*, 2> getMainSyncControls() const { return {}; }
+    virtual std::vector<juce::Component*> getInstanceControls() const { return {}; }
+    virtual InstanceMainRows getInstanceMainRows() const { return {}; }
 };
 
 std::unique_ptr<CrossoverModulePage> makeCrossoverRangePage(CrossoverModuleComponent& owner,
-                                                            size_t rangeIndex,
-                                                            juce::Colour accent);
+                                                            size_t rangeIndex);
 std::unique_ptr<CrossoverModulePage> makeCrossoverSettingsPage(CrossoverModuleComponent& owner);

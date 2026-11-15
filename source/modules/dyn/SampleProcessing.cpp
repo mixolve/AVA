@@ -1,8 +1,9 @@
 #include "SampleProcessor.h"
-#include "ProgressionTransfer.h"
+#include "BallisticsCurve.h"
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace dyn::dsp
 {
@@ -13,50 +14,9 @@ double levelToDb(const double level)
     return 20.0 * std::log10(std::max(level, epsilon));
 }
 
-double shapedBallisticsProgress(const double progress, const double curve)
-{
-    const auto curveAmount = juce::jlimit(-1.0, 1.0, curve);
-    constexpr double maximumExponent = 4.605170185988091; // log(100).
-    // Distribute midpoint deviation from LIN evenly across the control range.
-    // For a normalised exponential that deviation is 0.5 * tanh(exponent / 4).
-    const auto exponent = 4.0 * std::atanh(std::abs(curveAmount) * std::tanh(maximumExponent * 0.25));
-    const auto normalisation = std::expm1(exponent);
-    // Both signs use the same exponential, reflected around the linear release.
-    return curveAmount > 0.0
-        ? 1.0 - std::expm1(exponent * (1.0 - progress)) / normalisation
-        : curveAmount < 0.0
-            ? std::expm1(exponent * progress) / normalisation
-            : progress;
-}
-
-bool refreshHeldPeak(const double level, const double heldLevel, const int holdSamples)
-{
-    if (level > heldLevel)
-        return true;
-
-    // Sampled peaks of a steady carrier vary slightly with its phase relative
-    // to the sample grid. Refresh HOLD on equal peaks as well, so it starts
-    // after the level falls rather than expiring periodically during a tone.
-    constexpr double peakTolerance = 0.001;
-    return holdSamples > 0 && heldLevel > epsilon
-        && level >= heldLevel * (1.0 - peakTolerance);
-}
-
 double compressorGain(const double level, const double threshold,
-                      const double gainExponent, const double kneeDb,
-                      const double progression = 0.0, const double span = 12.0, const double feedback = 0.0)
+                      const double gainExponent, const double kneeDb)
 {
-    if (progression != 0.0 && level > epsilon)
-    {
-        const auto baseExponent = gainExponent / (1.0 + feedback * gainExponent);
-        // The limiter has infinite ratio, so positive progression must not enter the finite-ratio formula.
-        if (progression < 0.0 || baseExponent < 0.998999)
-        {
-            const auto ratio = 1.0 / std::max(0.01, 1.0 - baseExponent);
-            return dbToAmp(-transfer::feedbackReduction(levelToDb(level) - levelToDb(threshold),
-                ratio, progression, span, kneeDb, feedback));
-        }
-    }
     if (level <= epsilon || gainExponent <= epsilon)
         return 1.0;
 
@@ -78,14 +38,8 @@ double compressorGain(const double level, const double threshold,
 }
 
 double compressorLevelForGain(const double gain, const double threshold,
-                             const double gainExponent, const double kneeDb,
-                             const double progression = 0.0, const double span = 12.0)
+                             const double gainExponent, const double kneeDb)
 {
-    if (progression != 0.0 && (progression < 0.0 || gainExponent < 0.998999))
-    {
-        const auto ratio = 1.0 / std::max(0.01, 1.0 - gainExponent);
-        return threshold * dbToAmp(transfer::distanceForReduction(-levelToDb(gain), ratio, progression, span, kneeDb));
-    }
     const auto reductionDb = -levelToDb(gain) / gainExponent;
     const auto aboveThresholdDb = kneeDb > epsilon && reductionDb < kneeDb * 0.5
         ? std::sqrt(std::max(0.0, 2.0 * kneeDb * reductionDb)) - kneeDb * 0.5
@@ -114,7 +68,36 @@ double DspCore::releaseTowards(ReleaseState& state,
                                const double gainThreshold,
                                const bool followTarget)
 {
-    if (target >= current || (durationSamples <= 0 && holdSamples <= 0))
+    if (durationSamples <= 0 && holdSamples <= 0)
+    {
+        state.active = false;
+        return target;
+    }
+
+    // A release may already be running because of tiny variations in the
+    // detector's held peak. If the real signal then falls, reusing that nearly
+    // completed release would jump to the new target in one or two samples.
+    // Re-anchor a falling target to the CURRENT envelope, preserving the
+    // user's complete RELEASE time. This must not start another HOLD.
+    if (state.active && state.holdCompleted
+        && state.elapsedSamples >= state.durationSamples)
+    {
+        if (target >= current)
+        {
+            if (target > current)
+                state.active = false;
+            state.target = target;
+            return target;
+        }
+        state.start = current;
+        state.target = target;
+        state.elapsedSamples = 0;
+        state.durationSamples = durationSamples;
+        state.holdElapsedSamples = std::max(0, holdSamples);
+        state.holdCompleted = true;
+    }
+
+    if (target >= current)
     {
         state.active = false;
         return target;
@@ -126,21 +109,44 @@ double DspCore::releaseTowards(ReleaseState& state,
         state.target = target;
         state.elapsedSamples = 0;
         state.durationSamples = durationSamples;
-        state.holdSamplesRemaining = std::max(0, holdSamples);
+        state.holdElapsedSamples = 0;
+        state.holdCompleted = holdSamples <= 0;
         state.active = true;
     }
 
-    if (followTarget) state.target = target;
-
-    if (state.holdSamplesRemaining > 0)
+    if (followTarget)
     {
-        --state.holdSamplesRemaining;
-        return state.start;
+        if (state.holdCompleted && (target < state.target || target > state.target) && target < current)
+        {
+            // Do not change the destination of an almost finished release
+            // without resetting its time origin. Rebase from the current
+            // output so successive detector updates remain continuous.
+            state.start = current;
+            state.elapsedSamples = 0;
+            state.durationSamples = durationSamples;
+        }
+        state.target = target;
+    }
+
+    if (!state.holdCompleted)
+    {
+        // Read the user's current HOLD every sample. A stored countdown
+        // continues using the OLD Hold after the user edits the parameter;
+        // the resulting premature release sounds like a timer jumping back.
+        if (state.holdElapsedSamples < std::max(0, holdSamples))
+        {
+            ++state.holdElapsedSamples;
+            return state.start;
+        }
+        state.holdCompleted = true;
     }
 
     if (state.durationSamples <= 0)
     {
-        state.active = false;
+        // The hold/release cycle has completed, but the detector is still
+        // falling. Keep the release phase latched: otherwise the next lower
+        // sample starts a fresh HOLD and produces periodic staircase jumps.
+        // A genuine rising level resets this phase at the entry above.
         return state.target;
     }
 
@@ -148,7 +154,8 @@ double DspCore::releaseTowards(ReleaseState& state,
                                         1.0,
                                         static_cast<double>(++state.elapsedSamples)
                                             / static_cast<double>(state.durationSamples));
-    const auto shapedProgress = shapedBallisticsProgress(progress, curve);
+    // HOLD delays this phase; it must not change the selected RELEASE curve.
+    const auto shapedProgress = dyn::ballistics::shapedProgress(progress, curve);
     auto released = state.start + (state.target - state.start) * shapedProgress;
 
     if (gainExponent > epsilon && state.target > epsilon)
@@ -157,179 +164,158 @@ double DspCore::releaseTowards(ReleaseState& state,
         // audible amplitude gain first, then invert it back to detector level.
         // A linear detector decay would otherwise produce a curved recovery.
         const auto threshold = gainThreshold > epsilon ? gainThreshold : state.target * dbToAmp(kneeDb * 0.5);
-        const auto startGain = std::max(minimumGain, compressorGain(state.start, threshold, gainExponent, kneeDb, derived.progression, derived.progressionSpan));
+        const auto startGain = std::max(minimumGain, compressorGain(state.start, threshold, gainExponent, kneeDb));
         const auto targetGain = gainThreshold > epsilon
-            ? std::max(minimumGain, compressorGain(state.target, threshold, gainExponent, kneeDb, derived.progression, derived.progressionSpan)) : 1.0;
+            ? std::max(minimumGain, compressorGain(state.target, threshold, gainExponent, kneeDb)) : 1.0;
         const auto gain = startGain + (targetGain - startGain) * shapedProgress;
-        released = compressorLevelForGain(gain, threshold, gainExponent, kneeDb, derived.progression, derived.progressionSpan);
+        released = compressorLevelForGain(gain, threshold, gainExponent, kneeDb);
     }
 
-    if (progress >= 1.0)
-        state.active = false;
-
+    // Remain in the completed release phase while the input keeps falling.
+    // Rearming HOLD here would repeat it every (HOLD + RELEASE) interval.
     return std::max(state.target, released);
 }
 
-void DspCore::prepareSignalPeak(SignalPeakState& state, const bool positive)
+void DspCore::updateCompressorGain(const size_t detectorIndex, const double detectorLevel,
+                                   const double threshold, const int releaseSamples,
+                                   const double gainExponent, const double feedbackGainScale)
 {
-    const auto capacity = state.queue.size();
-    if (positive != state.positive)
-    {
-        if (state.hasCrossing)
-            state.window = juce::jlimit<size_t>(1, capacity - 1,
-                static_cast<size_t>(2 * (state.sample - state.lastCrossing)));
-        state.lastCrossing = state.sample;
-        state.hasCrossing = true;
-        state.positive = positive;
-    }
-    // Keep one carrier period, so SIGNAL follows amplitude rather than falling
-    // to zero between peaks. The finite window also releases on silence or DC steps.
-    while (state.count > 0 && state.sample - state.queue[state.head].sample >= state.window)
-    {
-        state.head = (state.head + 1) % capacity;
-        --state.count;
-    }
-}
+    // No carrier-period hold, sinusoid recognition or half-wave gain latch:
+    // when ATTACK/HOLD/RELEASE are zero, gain follows the actual detector
+    // sample on *every* sample, including the troughs of low-frequency tones.
+    auto& envelope = cleanEnvPeak[detectorIndex];
+    auto& release = cleanReleaseStates[detectorIndex];
+    auto& attack = cleanAttackStates[detectorIndex];
+    auto& gain = cleanGainState[detectorIndex];
+    const auto releaseFloor = threshold * dbToAmp(-derived.compKneeDb * 0.5);
 
-double DspCore::updateSignalPeak(SignalPeakState& state, const double level, const bool positive)
-{
-    prepareSignalPeak(state, positive);
-    const auto capacity = state.queue.size();
-    while (state.count > 0 && state.queue[(state.head + state.count - 1) % capacity].level <= level)
-        --state.count;
-    state.queue[(state.head + state.count) % capacity] = { level, state.sample++ };
-    ++state.count;
-    return state.queue[state.head].level;
-}
+    if (derived.thresholdHysteresisDb <= 0.0)
+        cleanThresholdHysteresis[detectorIndex] = {};
+    const auto holdingThreshold = derived.thresholdHysteresisDb > 0.0
+        && cleanThresholdHysteresis[detectorIndex].holds(
+            levelToDb(detectorLevel * feedbackGainScale) - levelToDb(releaseFloor),
+            derived.thresholdHysteresisDb);
 
-void DspCore::updateCompressorGain(const size_t detectorIndex, const double peakNow,
-                                   const bool inputPositive, const double releaseSignal,
-                                   const double releaseThreshold, const int releaseSamples,
-                                   const double gainExponent, const double trackingBlend, const double feedbackGainScale)
-{
-    const auto releaseTarget = releaseThreshold * dbToAmp(-derived.compKneeDb * 0.5);
-    if (derived.thresholdHysteresisDb <= 0.0) cleanThresholdHysteresis[detectorIndex] = {};
-    const auto holdingThreshold = derived.thresholdHysteresisDb > 0.0 && cleanThresholdHysteresis[detectorIndex].holds(
-        levelToDb(releaseSignal * feedbackGainScale) - levelToDb(releaseTarget), derived.thresholdHysteresisDb);
+    if (!holdingThreshold && attack.active && attackSourceQuiet
+        && detectorLevel * feedbackGainScale < releaseFloor)
+    {
+        // The source ended before attack reached its requested reduction.
+        // Release must start from the gain actually audible at that instant,
+        // not finish the old attack or recover from an unapplied deeper gain.
+        if (gainExponent > epsilon && feedbackGainScale > epsilon)
+            envelope = std::max(detectorLevel, compressorLevelForGain(gain, threshold,
+                gainExponent, derived.compKneeDb) / feedbackGainScale);
+        release = {};
+        attack.active = false;
+        attack.settled = false;
+    }
+
     if (! holdingThreshold)
     {
-        if (refreshHeldPeak(peakNow, cleanEnvPeak[detectorIndex], derived.holdSamples))
+        if (detectorLevel >= envelope || (releaseSamples <= 0 && derived.holdSamples <= 0))
         {
-            cleanEnvPeak[detectorIndex] = std::max(cleanEnvPeak[detectorIndex], peakNow);
-            cleanReleaseStates[detectorIndex].active = false;
+            envelope = detectorLevel;
+            release.active = false;
         }
         else
         {
-            cleanEnvPeak[detectorIndex] = releaseTowards(cleanReleaseStates[detectorIndex],
-                                                         cleanEnvPeak[detectorIndex],
-                                                         releaseTarget + (std::max(releaseTarget, releaseSignal) - releaseTarget) * derived.releaseType,
-                                                         releaseSamples,
-                                                         derived.releaseCurve,
-                                                         trackingBlend > 0.0 ? derived.releaseGainExponent : gainExponent,
-                                                         derived.holdSamples,
-                                                         derived.compKneeDb,
-                                                         derived.rangeCurve > 0.0 ? 0.0 : derived.minimumGain,
-                                                         derived.releaseType > 0.0 ? releaseThreshold : 0.0,
-                                                         derived.releaseType > 0.0);
+            // Use the same recovery target regardless of HOLD. The outer
+            // clamp keeps the envelope above the signal still arriving now.
+            envelope = std::max(detectorLevel, releaseTowards(
+                release, envelope, releaseFloor, releaseSamples,
+                derived.releaseCurve, gainExponent, 0,
+                derived.compKneeDb,
+                derived.rangeCurve > 0.0 ? 0.0 : derived.minimumGain,
+                0.0, false));
         }
 
-        const auto updateHalfPeak = inputPositive != cleanInputPositive[detectorIndex] || detectorIndex == detector::rms;
-        // Follow the SIGNAL destination throughout the release instead of sampling
-        // the recovering gain only at the carrier zero crossings.
-        if (updateHalfPeak || derived.releaseType > 0.0 || trackingBlend > 0.0)
-        {
-            cleanInputPositive[detectorIndex] = inputPositive;
-            const auto threshold = releaseThreshold;
-            const auto referencePeak = (derived.releaseType > 0.0 || trackingBlend > 0.0)
-                ? releaseSignal : cleanHalfPeak[detectorIndex];
-            const auto gainReference = std::max(referencePeak, cleanEnvPeak[detectorIndex]);
-            const auto target = std::max(derived.rangeCurve > 0.0 ? 0.0 : derived.minimumGain,
-                compressorGain(gainReference * feedbackGainScale, threshold, gainExponent, derived.compKneeDb,
-                    derived.progression, derived.progressionSpan, trackingBlend));
-            if (updateHalfPeak || derived.releaseType > 0.0)
-                cleanGainTarget[detectorIndex] = target;
-            else
-                cleanGainTarget[detectorIndex] += (target - cleanGainTarget[detectorIndex]) * trackingBlend;
-            cleanHalfPeak[detectorIndex] = updateHalfPeak
-                ? peakNow : std::max(cleanHalfPeak[detectorIndex], peakNow);
-        }
-        else
-        {
-            cleanHalfPeak[detectorIndex] = std::max(cleanHalfPeak[detectorIndex], peakNow);
-        }
-
+        // Feedback is already accounted for in the same-sample solver; do not
+        // add a second hidden smoothing pass to the resulting gain target.
+        cleanGainTarget[detectorIndex] = std::max(
+            derived.rangeCurve > 0.0 ? 0.0 : derived.minimumGain,
+            compressorGain(envelope * feedbackGainScale, threshold, gainExponent,
+                           derived.compKneeDb));
     }
     else
     {
-        // Keep the captured gain/envelope; pending delay/attack can still finish.
-        cleanReleaseStates[detectorIndex].active = false;
-        cleanInputPositive[detectorIndex] = inputPositive;
-        cleanHalfPeak[detectorIndex] = peakNow;
+        // Threshold hysteresis, when explicitly enabled, may hold the gain.
+        release.active = false;
     }
 
-    auto& attack = cleanAttackStates[detectorIndex];
-    auto& gain = cleanGainState[detectorIndex];
     const auto targetGain = cleanGainTarget[detectorIndex];
-    if (targetGain >= gain || (derived.attackSamples <= 0 && derived.delaySamples <= 0))
+    // A sampled carrier can make the requested reduction rise briefly even
+    // while the programmed ATTACK is still in progress. Do not abort ATTACK
+    // and snap to that instantaneous target: it creates the gain step at
+    // the Attack/Sustain boundary. A detected end of sustain may still
+    // release immediately, and zero Attack remains sample-exact.
+    const auto canReleaseDuringAttack = attackSourceQuiet && targetGain > gain;
+    constexpr double gainPrecision = 1.0e-6; // Ignore numerical drift of a reached gain.
+    if (gain >= 1.0 - gainPrecision && !attack.active) attack.settled = false;
+    if ((targetGain >= gain && (!attack.active || canReleaseDuringAttack))
+        || derived.attackSamples <= 0)
     {
+        // Recovery is already timed and curved by releaseTowards(), which
+        // advances cleanEnvPeak and calculates cleanGainTarget. Applying an
+        // additional one-pole filter here only when ATTACK > 0 changed both
+        // RELEASE time and shape depending on ATTACK. Never smooth twice.
         gain = targetGain;
         attack.active = false;
+        if (canReleaseDuringAttack) attack.settled = false;
+    }
+    else if (!attack.active && attack.settled && targetGain >= attack.targetGain - gainPrecision)
+    {
+        // The completed attack already reached this reduction. Carrier ripple
+        // returning to that same level is sustain, not a fresh timed attack.
+        gain = targetGain;
     }
     else
     {
         if (! attack.active)
         {
+            attack.settled = false;
             attack.startGain = gain;
+            attack.targetGain = targetGain;
             attack.elapsedSamples = 0;
             attack.durationSamples = derived.attackSamples;
-            attack.delaySamplesRemaining = derived.delaySamples;
             attack.active = true;
         }
-        if (attack.delaySamplesRemaining > 0)
-        {
-            --attack.delaySamplesRemaining;
-            gain = attack.startGain;
-        }
-        else if (attack.durationSamples <= 0)
+        // A low-frequency carrier makes the sample-by-sample target move
+        // throughout Attack. Preserve the strongest reduction requested so
+        // far; weaker, momentary requests are handled by the user's Release
+        // once Attack finishes rather than causing a one-sample jump.
+        attack.targetGain = std::min(attack.targetGain, targetGain);
+        if (attack.durationSamples <= 0)
         {
             gain = targetGain;
             attack.active = false;
+            attack.settled = true;
         }
         else
         {
-            // Repeated carrier peaks update the destination without restarting delay or attack.
             const auto progress = std::min(1.0, static_cast<double>(++attack.elapsedSamples)
                                                    / static_cast<double>(attack.durationSamples));
-            gain = attack.startGain + (targetGain - attack.startGain)
-                * shapedBallisticsProgress(progress, derived.attackCurve);
+            // Join the end of Attack to steady gain without a sharp corner.
+            gain = attack.startGain + (attack.targetGain - attack.startGain)
+                * dyn::ballistics::shapedAttackToSustainProgress(progress, derived.attackCurve);
             if (progress >= 1.0)
+            {
                 attack.active = false;
+                attack.settled = true;
+                // Join release from the gain actually reached by attack, not
+                // an older detector envelope that was decaying underneath it.
+                if (gainExponent > epsilon && feedbackGainScale > epsilon)
+                    envelope = std::max(envelope, compressorLevelForGain(gain, threshold,
+                        gainExponent, derived.compKneeDb) / feedbackGainScale);
+                release = {};
+            }
         }
     }
-
 }
 
-double DspCore::alignLookaheadGain(const double gain)
+double DspCore::delayedSample(const std::vector<double>& history, const int writeIndex) const noexcept
 {
-    if (derived.lookaheadSamples == 0)
-        return gain;
-
-    auto& state = lookaheadGain;
-    const auto capacity = state.queue.size();
-    const auto window = static_cast<juce::uint64>(derived.lookaheadSamples);
-    // Include the gain computed for the sample leaving the audio buffer, as well
-    // as all future gains within LOOKAHEAD. Attack can anticipate, but release
-    // cannot expose audio whose detector event is still in the delay line.
-    while (state.count > 0 && state.sample - state.queue[state.head].sample > window)
-    {
-        state.head = (state.head + 1) % capacity;
-        --state.count;
-    }
-    while (state.count > 0 && state.queue[(state.head + state.count - 1) % capacity].level >= gain)
-        --state.count;
-    state.queue[(state.head + state.count) % capacity] = { gain, state.sample++ };
-    ++state.count;
-    return state.queue[state.head].level;
+    // LOOKAHEAD is integer-sample aligned and never slewed internally.
+    return history[static_cast<size_t>(wrapIndex(writeIndex - derived.lookaheadSamples, maxBuf))];
 }
 
 DspCore::StereoSample DspCore::processSample(const double leftInput, const double rightInput,
@@ -341,23 +327,29 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
     const auto keyR = parameters.useSidechainInput ? sidechainRight : inR;
     const std::array<double, channelCount> rmsInput { keyL, keyR };
     std::array<double, channelCount> adaptiveRmsDb {};
-    const auto rmsCapacity = adaptiveRmsPower[0].size();
+    const auto rmsCapacity = adaptiveRmsCumulativePowerHistory[0].size();
+    const auto previousCount = adaptiveRmsSampleCount;
     const auto leavingPosition = (adaptiveRmsPosition + rmsCapacity - adaptiveRmsWindowSamples) % rmsCapacity;
-    adaptiveRmsSampleCount = std::min(adaptiveRmsSampleCount + 1, rmsCapacity);
+    const auto sampleCount = std::min(previousCount + 1, adaptiveRmsWindowSamples);
     for (size_t channelIndex = 0; channelIndex < channelCount; ++channelIndex)
     {
         const auto power = rmsInput[channelIndex] * rmsInput[channelIndex];
-        adaptiveRmsPowerSum[channelIndex] += power - adaptiveRmsPower[channelIndex][leavingPosition];
-        adaptiveRmsPower[channelIndex][adaptiveRmsPosition] = power;
-        const auto meanPower = std::max(0.0, adaptiveRmsPowerSum[channelIndex])
-            / static_cast<double>(std::min(adaptiveRmsSampleCount, adaptiveRmsWindowSamples));
+        const auto previousCumulative = previousCount >= adaptiveRmsWindowSamples
+            ? adaptiveRmsCumulativePowerHistory[channelIndex][leavingPosition] : 0.0;
+        adaptiveRmsCumulativePower[channelIndex] += power;
+        adaptiveRmsCumulativePowerHistory[channelIndex][adaptiveRmsPosition] = adaptiveRmsCumulativePower[channelIndex];
+        const auto meanPower = std::max(0.0, adaptiveRmsCumulativePower[channelIndex] - previousCumulative)
+            / static_cast<double>(sampleCount);
         adaptiveRmsDb[channelIndex] = levelToDb(std::sqrt(meanPower));
     }
+    adaptiveRmsSampleCount = std::min(previousCount + 1, rmsCapacity);
     adaptiveRmsPosition = (adaptiveRmsPosition + 1) % rmsCapacity;
     const auto stereoAdaptiveRmsDb = std::max(adaptiveRmsDb[0], adaptiveRmsDb[1]);
     const auto stereoKeyPeak = std::max(std::abs(keyL), std::abs(keyR));
     const auto keyPositive = std::abs(keyL) >= std::abs(keyR) ? keyL >= 0.0 : keyR >= 0.0;
-    const auto baseReleaseSignal = updateSignalPeak(baseSignalPeak, stereoKeyPeak, keyPositive);
+    // Raw key amplitude, never a fitted/sustained carrier amplitude.
+    const auto baseReleaseSignal = stereoKeyPeak;
+    const auto basePeak = baseReleaseSignal;
 
     double baseRms = 0.0;
     const auto rmsSize = baseRmsPower[0].size();
@@ -371,7 +363,7 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
         baseRms = std::max(baseRms, std::sqrt(std::max(0.0, baseRmsPowerSum[channel])
             / static_cast<double>(std::min(count, detectorRmsWindowSamples))));
     }
-    const std::array<double, detector::count> baseLevels { stereoKeyPeak * derived.peakScale, baseRms };
+    const std::array<double, detector::count> baseLevels { basePeak * derived.peakScale, baseRms };
     const std::array<double, detector::count> baseDestinations { baseReleaseSignal * derived.peakScale, baseRms };
     auto effectiveReleaseSamples = derived.releaseSamples;
     for (size_t path = 0; path < detector::count; ++path)
@@ -381,7 +373,7 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
             const auto level = baseDestinations[path];
             const auto threshold = getEffectiveThreshold(keyPositive ? branchLeftUp : branchLeftDown);
             const auto compressorActive = derived.morph > 0.0
-                && (derived.releaseGainExponent > epsilon || derived.progression > 0.0)
+                && derived.releaseGainExponent > epsilon
                 && levelToDb(level) > levelToDb(threshold) - derived.compKneeDb * 0.5;
             const auto tensionActive = std::abs(derived.tensions[0]) > epsilon
                 && level > epsilon && level < threshold;
@@ -389,7 +381,7 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
             if (derived.releaseDepth > 0.0)
             {
                 const auto compressionDb = compressorActive ? -levelToDb(compressorGain(level, threshold,
-                    derived.releaseGainExponent, derived.compKneeDb, derived.progression, derived.progressionSpan)) * derived.morph : 0.0;
+                    derived.releaseGainExponent, derived.compKneeDb)) * derived.morph : 0.0;
                 const auto tensionDb = tensionActive ? std::abs(levelToDb(tensionTarget(level, threshold,
                     derived.tensionFloor, derived.tensionHysteresis, derived.tensions[0])) - levelToDb(level)) : 0.0;
                 strength = std::min(derived.rangeDb, std::max(compressionDb, tensionDb)) / 12.0;
@@ -400,23 +392,36 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
                 * releaseMemories[path].multiplier(derived.autoRelease)));
         }
         else releaseMemories[path] = {};
-        if (refreshHeldPeak(baseLevels[path], envBase[path], derived.holdSamples))
+        if (baseLevels[path] >= envBase[path]
+            || (effectiveReleaseSamples[path] <= 0 && derived.holdSamples <= 0))
         {
-            envBase[path] = std::max(envBase[path], baseLevels[path]);
+            // With both HOLD and RELEASE at zero the base detector must fall immediately.
+            envBase[path] = baseLevels[path];
             baseReleaseStates[path].active = false;
         }
         else
-            envBase[path] = releaseTowards(baseReleaseStates[path], envBase[path],
-                baseDestinations[path] * derived.releaseType, effectiveReleaseSamples[path],
-                derived.releaseCurve, 0.0, derived.holdSamples, 0.0, 0.0, 0.0, derived.releaseType > 0.0);
+            // The TENSION detector needs the same peak-follower invariant:
+            // the held envelope can decay, but never below the live input.
+            // Otherwise HOLD expiration causes a single-sample reset and
+            // starts a fresh HOLD cycle on a continuously falling signal.
+            envBase[path] = std::max(baseLevels[path], releaseTowards(
+                baseReleaseStates[path], envBase[path],
+                0.0, effectiveReleaseSamples[path],
+                derived.releaseCurve, 0.0, derived.holdSamples, 0.0, 0.0, 0.0,
+                false));
     }
     const auto baseEnvelope = detector::mix(envBase[detector::peak], envBase[detector::rms], derived.rmsMix);
 
-    if (! tensionSmoothingInitialised)
-    {
-        smoothedTensions = derived.tensions;
-        tensionSmoothingInitialised = true;
-    }
+    // Track source activity independently of HOLD/RELEASE so a note-off
+    // can interrupt an unfinished Attack without following carrier troughs.
+    const auto sourceThreshold = getEffectiveThreshold(keyPositive
+        ? branchLeftUp : branchLeftDown);
+    const auto sourceSignal = std::abs(keyL) >= std::abs(keyR) ? keyL : keyR;
+    const auto wasSourceActive = attackSourceGate.isActive();
+    const auto sourceActive = attackSourceGate.advance(sourceSignal, sourceThreshold);
+    attackSourceQuiet = !sourceActive;
+    if (!wasSourceActive && sourceActive)
+        for (auto& attack : cleanAttackStates) attack.settled = false;
 
     dryL[static_cast<size_t>(bufPosDry)] = inL;
     dryR[static_cast<size_t>(bufPosDry)] = inR;
@@ -444,43 +449,27 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
         const auto envelopeDb = stereoAdaptiveRmsDb;
         auto& adaptiveReference = adaptiveReferenceDb[branchIndex];
 
-        if (envelopeDb >= adaptiveReference)
-        {
-            adaptiveReference = derived.adaptiveAttackCoefficient * adaptiveReference
-                + (1.0 - derived.adaptiveAttackCoefficient) * envelopeDb;
-            adaptiveHoldSamplesRemaining[branchIndex] = derived.adaptiveHoldSamples;
-        }
-        else if (adaptiveHoldSamplesRemaining[branchIndex] > 0)
-        {
-            --adaptiveHoldSamplesRemaining[branchIndex];
-        }
-        else
-        {
-            adaptiveReference = derived.adaptiveReleaseCoefficient * adaptiveReference
-                + (1.0 - derived.adaptiveReleaseCoefficient) * envelopeDb;
-        }
+        // ADAP-TIME already smooths the detector. No second attack/hold/release stage.
+        adaptiveReference = envelopeDb;
 
         effectiveThresholds[branchIndex] = getEffectiveThreshold(branchIndex);
 
-        auto& smoothedTension = smoothedTensions[branchIndex];
-        smoothedTension = derived.tensionSmoothingCoefficient * smoothedTension
-            + (1.0 - derived.tensionSmoothingCoefficient) * derived.tensions[branchIndex];
+        const auto tension = derived.tensions[branchIndex];
         const auto targetBase = tensionTarget(baseEnvelope,
                                               effectiveThresholds[branchIndex],
                                               derived.tensionFloor,
                                               derived.tensionHysteresis,
-                                              smoothedTension);
+                                              tension);
         const auto shapedGain = baseEnvelope > epsilon ? (targetBase / baseEnvelope) : 1.0;
         auto baseGainTarget = shapedGain;
-        if (derived.thresholdHysteresisDb > 0.0 && std::abs(smoothedTension) > epsilon)
+        if (derived.thresholdHysteresisDb > 0.0 && std::abs(tension) > epsilon)
             baseGainTarget = tensionThresholdHysteresis[branchIndex].process(shapedGain,
                 levelToDb(effectiveThresholds[branchIndex]) - levelToDb(baseEnvelope), derived.thresholdHysteresisDb);
         else
             tensionThresholdHysteresis[branchIndex] = {};
-        baseGainState[branchIndex] = baseGainTarget;
-
-        branchBaseDetector[branchIndex] = branchDetectorInput[branchIndex] * baseGainState[branchIndex];
-        const auto baseNow = branchAudioInput[branchIndex] * baseGainState[branchIndex];
+        // Apply the TENSION gain immediately to both detector and audio paths.
+        branchBaseDetector[branchIndex] = branchDetectorInput[branchIndex] * baseGainTarget;
+        const auto baseNow = branchAudioInput[branchIndex] * baseGainTarget;
         dmBase[branchIndex][static_cast<size_t>(bufPos)] = baseNow;
 
     }
@@ -506,16 +495,8 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
         return std::abs(processed) < minimumAmplitude
             ? std::copysign(minimumAmplitude, dry) : processed;
     };
-    if (! feedbackInitialised)
-    {
-        smoothedFeedback = derived.feedback;
-        feedbackInitialised = true;
-    }
-    smoothedFeedback = derived.feedbackSmoothingCoefficient * smoothedFeedback
-        + (1.0 - derived.feedbackSmoothingCoefficient) * derived.feedback;
-    if (std::abs(smoothedFeedback - derived.feedback) < 1.0e-8)
-        smoothedFeedback = derived.feedback;
-    const auto feedbackAmount = derived.morph > 0.0 ? smoothedFeedback : 0.0;
+    // FEEDBACK follows its user parameter without a fixed 5-ms ramp.
+    const auto feedbackAmount = derived.morph > 0.0 ? derived.feedback : 0.0;
     if (feedbackAmount <= 0.0)
     {
         std::array<double, channelCount> detectorRms {};
@@ -535,13 +516,15 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
         const auto stereoPeak = std::abs(cleanDetectorInput[strongestChannel]);
         const auto stereoRms = std::max(detectorRms[0], detectorRms[1]);
         const auto stereoPositive = cleanDetectorInput[strongestChannel] >= 0.0;
-        const auto signalPeak = updateSignalPeak(cleanSignalPeak, stereoPeak, stereoPositive);
         const auto threshold = effectiveThresholds[stereoPositive ? branchLeftUp : branchLeftDown];
-        updateCompressorGain(detector::peak, stereoPeak * derived.peakScale, stereoPositive,
-            signalPeak * derived.peakScale, threshold, effectiveReleaseSamples[detector::peak],
-            derived.releaseGainExponent, 0.0);
-        updateCompressorGain(detector::rms, stereoRms, stereoPositive, stereoRms, threshold,
-            effectiveReleaseSamples[detector::rms], derived.releaseGainExponent, 0.0);
+        const auto heldPeak = compressorHoldWindows[detector::peak].process(
+            stereoPeak * derived.peakScale, derived.holdSamples);
+        const auto heldRms = compressorHoldWindows[detector::rms].process(
+            stereoRms, derived.holdSamples);
+        updateCompressorGain(detector::peak, heldPeak, threshold,
+            effectiveReleaseSamples[detector::peak], derived.releaseGainExponent, 1.0);
+        updateCompressorGain(detector::rms, heldRms, threshold,
+            effectiveReleaseSamples[detector::rms], derived.releaseGainExponent, 1.0);
     }
     else
     {
@@ -558,17 +541,26 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
         const auto threshold = effectiveThresholds[positive ? branchLeftUp : branchLeftDown];
         const auto capacity = detectorRmsPower[0].size();
         const auto leaving = (detectorRmsPosition + capacity - detectorRmsWindowSamples) % capacity;
-        const auto sampleCount = std::min(detectorRmsSampleCount + 1, capacity);
-        const auto denominator = static_cast<double>(std::min(sampleCount, detectorRmsWindowSamples));
-        prepareSignalPeak(cleanSignalPeak, positive);
-        const auto historicalPeak = cleanSignalPeak.count > 0 ? cleanSignalPeak.queue[cleanSignalPeak.head].level : 0.0;
+        const auto feedbackRmsSampleCount = std::min(detectorRmsSampleCount + 1, capacity);
+        const auto denominator = static_cast<double>(std::min(feedbackRmsSampleCount, detectorRmsWindowSamples));
+        double keyRms = 0.0;
+        for (size_t channel = 0; channel < channelCount; ++channel)
+        {
+            const auto key = cleanDetectorInput[channel];
+            const auto power = detectorRmsPowerSum[channel] + key * key - detectorRmsPower[channel][leaving];
+            keyRms = std::max(keyRms, std::sqrt(std::max(0.0, power) / denominator));
+        }
+        // This must happen ONCE per audio sample, not inside feedback's
+        // iterative gain solver (which can evaluate many candidates).
+        const auto heldPeak = compressorHoldWindows[detector::peak].process(
+            keyPeak * derived.peakScale, derived.holdSamples);
+        const auto heldRms = compressorHoldWindows[detector::rms].process(
+            keyRms, derived.holdSamples);
         const auto savedEnv = cleanEnvPeak;
         const auto savedRelease = cleanReleaseStates;
         const auto savedAttack = cleanAttackStates;
         const auto savedGain = cleanGainState;
         const auto savedTarget = cleanGainTarget;
-        const auto savedHalfPeak = cleanHalfPeak;
-        const auto savedPositive = cleanInputPositive;
         const auto savedThresholdHysteresis = cleanThresholdHysteresis;
         const auto evaluate = [&] (const double candidate)
         {
@@ -577,22 +569,12 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
             cleanAttackStates = savedAttack;
             cleanGainState = savedGain;
             cleanGainTarget = savedTarget;
-            cleanHalfPeak = savedHalfPeak;
-            cleanInputPositive = savedPositive;
             cleanThresholdHysteresis = savedThresholdHysteresis;
             const auto scale = std::pow(std::max(candidate, epsilon), feedbackAmount);
-            double rms = 0.0;
-            for (size_t channel = 0; channel < channelCount; ++channel)
-            {
-                const auto key = cleanDetectorInput[channel];
-                const auto power = detectorRmsPowerSum[channel] + key * key - detectorRmsPower[channel][leaving];
-                rms = std::max(rms, std::sqrt(std::max(0.0, power) / denominator));
-            }
-            const auto heldPeak = std::max(historicalPeak, keyPeak);
-            updateCompressorGain(detector::peak, keyPeak * derived.peakScale, positive,
-                heldPeak * derived.peakScale, threshold, effectiveReleaseSamples[detector::peak], loopExponent, feedbackAmount, scale);
-            updateCompressorGain(detector::rms, rms, positive, rms, threshold,
-                effectiveReleaseSamples[detector::rms], loopExponent, feedbackAmount, scale);
+            updateCompressorGain(detector::peak, heldPeak, threshold,
+                effectiveReleaseSamples[detector::peak], loopExponent, scale);
+            updateCompressorGain(detector::rms, heldRms, threshold,
+                effectiveReleaseSamples[detector::rms], loopExponent, scale);
             return limitReduction(1.0, detector::mix(cleanGainState[detector::peak], cleanGainState[detector::rms], derived.rmsMix));
         };
         // Solve the same-sample negative-feedback loop. Each trial restores all
@@ -608,7 +590,7 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
             solvedGain = (lower + upper) * 0.5;
         }
         evaluate(solvedGain);
-        detectorRmsSampleCount = sampleCount;
+        detectorRmsSampleCount = feedbackRmsSampleCount;
         for (size_t channel = 0; channel < channelCount; ++channel)
         {
             const auto key = cleanDetectorInput[channel];
@@ -617,35 +599,44 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
             detectorRmsPower[channel][detectorRmsPosition] = power;
         }
         detectorRmsPosition = (detectorRmsPosition + 1) % capacity;
-        updateSignalPeak(cleanSignalPeak, keyPeak, positive);
     }
 
-    const auto readPos = wrapIndex(bufPos - derived.lookaheadSamples, derived.bufferSize);
-    std::array<double, branchCount> branchProcessed {};
-
+    const auto delayedBaseL = delayedSample(dmBase[branchLeftUp], bufPos)
+        + delayedSample(dmBase[branchLeftDown], bufPos);
+    const auto delayedBaseR = delayedSample(dmBase[branchRightUp], bufPos)
+        + delayedSample(dmBase[branchRightDown], bufPos);
+    auto clipGain = 1.0;
     if (derived.morph < 1.0)
-    for (size_t branchIndex = 0; branchIndex < branchCount; ++branchIndex)
     {
-        const auto delayedBase = dmBase[branchIndex][static_cast<size_t>(readPos)];
-        const auto threshold = effectiveThresholds[branchIndex];
-        branchProcessed[branchIndex] = threshold > epsilon
-            ? threshold * satShape(delayedBase / threshold)
-            : satShape(delayedBase);
+        // One mono gain computer controls both carriers. Independent sample
+        // clipping changes L/R balance whenever only one channel hits the knee.
+        const auto strongest = std::abs(delayedBaseL) >= std::abs(delayedBaseR)
+            ? delayedBaseL : delayedBaseR;
+        if (std::abs(strongest) > epsilon)
+        {
+            const auto threshold = effectiveThresholds[strongest >= 0.0 ? branchLeftUp : branchLeftDown];
+            const auto clipped = threshold > epsilon
+                ? threshold * satShape(strongest / threshold, derived.inputGain / threshold)
+                : satShape(strongest, derived.inputGain);
+            clipGain = clipped / strongest;
+        }
     }
-
-    const auto clippedL = branchProcessed[branchLeftUp] + branchProcessed[branchLeftDown];
-    const auto clippedR = branchProcessed[branchRightUp] + branchProcessed[branchRightDown];
-    const auto linkedGain = alignLookaheadGain(detector::mix(cleanGainState[detector::peak], cleanGainState[detector::rms], derived.rmsMix));
-    const auto cleanL = (dmBase[branchLeftUp][static_cast<size_t>(readPos)]
-        + dmBase[branchLeftDown][static_cast<size_t>(readPos)]) * linkedGain;
-    const auto cleanR = (dmBase[branchRightUp][static_cast<size_t>(readPos)]
-        + dmBase[branchRightDown][static_cast<size_t>(readPos)]) * linkedGain;
+    const auto clippedL = delayedBaseL * clipGain;
+    const auto clippedR = delayedBaseR * clipGain;
+    const auto detectorGain = detector::mix(cleanGainState[detector::peak],
+                                             cleanGainState[detector::rms], derived.rmsMix);
+    // A single lookahead envelope pre-ramps gain reduction and delays its
+    // recovery until the matching carrier samples have passed. LOOK-CURVE
+    // shapes the ramp, while zero lookahead preserves the raw gain exactly.
+    const auto alignedGain = lookaheadGain.process(detectorGain,
+        derived.lookaheadSamples, derived.lookaheadCurve);
+    const auto cleanL = delayedBaseL * alignedGain;
+    const auto cleanR = delayedBaseR * alignedGain;
     const auto processedL = derived.morph >= 1.0 ? cleanL : clippedL + (cleanL - clippedL) * derived.morph;
     const auto processedR = derived.morph >= 1.0 ? cleanR : clippedR + (cleanR - clippedR) * derived.morph;
 
-    const auto readPosDry = wrapIndex(bufPosDry - derived.latencySamples, derived.dryBufferSize);
-    const auto delayedDryL = dryL[static_cast<size_t>(readPosDry)];
-    const auto delayedDryR = dryR[static_cast<size_t>(readPosDry)];
+    const auto delayedDryL = delayedSample(dryL, bufPosDry);
+    const auto delayedDryR = delayedSample(dryR, bufPosDry);
     const auto wetL = limitReduction(delayedDryL, processedL);
     const auto wetR = limitReduction(delayedDryR, processedR);
 
@@ -654,14 +645,13 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
 
 DspCore::StereoSample DspCore::finishSample(const double wetL, const double wetR)
 {
-    const auto readPosDry = wrapIndex(bufPosDry - derived.latencySamples, derived.dryBufferSize);
-    const auto delayedDryL = dryL[static_cast<size_t>(readPosDry)];
-    const auto delayedDryR = dryR[static_cast<size_t>(readPosDry)];
+    const auto delayedDryL = delayedSample(dryL, bufPosDry);
+    const auto delayedDryR = delayedSample(dryR, bufPosDry);
     StereoSample output;
     if (parameters.sidechainListen)
     {
-        output.left = sidechainListenL[static_cast<size_t>(readPosDry)] * derived.outputGain;
-        output.right = sidechainListenR[static_cast<size_t>(readPosDry)] * derived.outputGain;
+        output.left = delayedSample(sidechainListenL, bufPosDry) * derived.outputGain;
+        output.right = delayedSample(sidechainListenR, bufPosDry) * derived.outputGain;
     }
     else if (derived.delta)
     {
@@ -674,9 +664,8 @@ DspCore::StereoSample DspCore::finishSample(const double wetL, const double wetR
         output.right = (delayedDryR + (wetR * derived.makeUpGain - delayedDryR) * derived.mix) * derived.outputGain;
     }
 
-    bufPos = wrapIndex(bufPos + 1, derived.bufferSize);
-    bufPosDry = wrapIndex(bufPosDry + 1, derived.dryBufferSize);
-
+    bufPos = wrapIndex(bufPos + 1, maxBuf);
+    bufPosDry = wrapIndex(bufPosDry + 1, maxBuf);
     return output;
 }
 
@@ -684,15 +673,7 @@ DspCore::StereoSample DspCore::processTransustSample(const double keyL, const do
                                                     const double adaptiveLevelDb, const double signalPeak)
 {
     auto& reference = adaptiveReferenceDb[0];
-    if (adaptiveLevelDb >= reference)
-    {
-        reference = derived.adaptiveAttackCoefficient * reference
-            + (1.0 - derived.adaptiveAttackCoefficient) * adaptiveLevelDb;
-        adaptiveHoldSamplesRemaining[0] = derived.adaptiveHoldSamples;
-    }
-    else if (adaptiveHoldSamplesRemaining[0] > 0) --adaptiveHoldSamplesRemaining[0];
-    else reference = derived.adaptiveReleaseCoefficient * reference
-        + (1.0 - derived.adaptiveReleaseCoefficient) * adaptiveLevelDb;
+    reference = adaptiveLevelDb;
 
     const auto capacity = detectorRmsPower[0].size();
     const auto leaving = (detectorRmsPosition + capacity - detectorRmsWindowSamples) % capacity;
@@ -715,9 +696,14 @@ DspCore::StereoSample DspCore::processTransustSample(const double keyL, const do
     const auto rmsAmount = transustCores[detector::rms].processAmount(static_cast<float>(rms),
         thresholdDb, static_cast<float>(derived.compKneeDb), static_cast<float>(rms));
     const auto amount = detector::mix(static_cast<double>(peakAmount), static_cast<double>(rmsAmount), derived.rmsMix);
-    const auto gain = amount * derived.transientGain + (1.0 - amount) * derived.sustainGain;
-    const auto read = static_cast<size_t>(wrapIndex(bufPosDry - derived.latencySamples, derived.dryBufferSize));
-    return finishSample(dryL[read] * gain, dryR[read] * gain);
+    // Shape the transient activation ahead of the delayed carrier. Invert the
+    // normal gain-reduction envelope so LOOK-CURVE operates on 0..1 activity;
+    // transient and sustain gains themselves may exceed unity.
+    const auto shapedAmount = 1.0 - lookaheadGain.process(1.0 - amount,
+        derived.lookaheadSamples, derived.lookaheadCurve);
+    const auto gain = shapedAmount * derived.transientGain + (1.0 - shapedAmount) * derived.sustainGain;
+    return finishSample(delayedSample(dryL, bufPosDry) * gain,
+                        delayedSample(dryR, bufPosDry) * gain);
 }
 
 }

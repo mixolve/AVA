@@ -8,7 +8,8 @@ namespace eql_state
 bool isCurrentState(const juce::ValueTree& state,
                     juce::AudioProcessorValueTreeState& parameters)
 {
-    if (! ava::modules::state::hasExactParameterState(state, parameters))
+    const auto completed = ava::modules::state::completeMissingParameterDefaults(state, parameters);
+    if (! ava::modules::state::hasValidParameterState(completed, parameters))
         return false;
 
     if (! state.hasProperty(EqlModuleProcessor::activeFilterCountStateKey))
@@ -43,45 +44,24 @@ bool isCurrentState(const juce::ValueTree& state,
 }
 }
 
-bool EqlModuleProcessor::restoreState(juce::ValueTree restoredState) noexcept
+bool EqlModuleProcessor::restoreState(juce::ValueTree restoredState, const bool resolvePreset) noexcept
 {
+    restoredState = ava::modules::state::completeMissingParameterDefaults(restoredState, parameters);
     if (! eql_state::isCurrentState(restoredState, parameters))
         return false;
 
     const auto restoredFilterCount = static_cast<int>(restoredState.getProperty(activeFilterCountStateKey));
-    const auto wasPrepared = prepared.exchange(false, std::memory_order_acq_rel);
-    const juce::ScopedLock lock(filterProcessLock);
-
+    const ModelEdit edit(*this);
     parameters.replaceState(restoredState);
     setActiveFilterCount(restoredFilterCount);
-    resetFilters();
+    restoreGainsRequested.store(true, std::memory_order_release);
+    resetRequested.store(true, std::memory_order_release);
+    markEqlFiltersDirty();
 
-    if (wasPrepared && currentSampleRate > 0.0)
+    if (resolvePreset)
     {
-        updateFilters();
-        eqlFiltersDirty.store(false, std::memory_order_release);
-        prepared.store(true, std::memory_order_release);
+        const auto catalog = loadFilterPresetsXml();
+        resolveFilterPresetSelection(catalog.get());
     }
-    else
-    {
-        markEqlFiltersDirty();
-    }
-
     return true;
-}
-
-void EqlModuleProcessor::getStateInformation(juce::MemoryBlock& destData)
-{
-    if (auto stateXml = createSerializableStateXml(*this))
-        juce::AudioProcessor::copyXmlToBinary(*stateXml, destData);
-}
-
-bool EqlModuleProcessor::setStateInformation(const void* data, const int sizeInBytes)
-{
-    auto stateXml = juce::AudioProcessor::getXmlFromBinary(data, sizeInBytes);
-
-    if (stateXml == nullptr)
-        return false;
-
-    return restoreState(juce::ValueTree::fromXml(*stateXml));
 }

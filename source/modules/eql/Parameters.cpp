@@ -1,9 +1,13 @@
 #include "FilterSupport.h"
 #include "ParameterIds.h"
+#include "../shared/ParameterLayout.h"
 
 #include <array>
 #include <memory>
 #include <vector>
+
+using ava::modules::parameters::makeFloatParameter;
+using ava::modules::parameters::ValueText;
 
 namespace
 {
@@ -68,46 +72,28 @@ void EqlModuleProcessor::appendEqlParameters(std::vector<std::unique_ptr<juce::R
                 auto filterFrequencyRange = juce::NormalisableRange<float> { minimumVisibleFilterFrequency, maximumVisibleFilterFrequency, 0.01f };
                 filterFrequencyRange.setSkewForCentre(defaultFilterFrequencyHz);
 
-                parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                    juce::ParameterID { getFilterFrequencyParamId(filterIndex), 1 },
-                    name,
-                    filterFrequencyRange,
-                    defaultFilterFrequencyHz,
-                    juce::AudioParameterFloatAttributes().withStringFromValueFunction(
-                        [] (float value, int)
-                        {
-                            return formatFrequencyValue(value);
-                        })));
+                parameterLayout.push_back(makeFloatParameter(getFilterFrequencyParamId(filterIndex), name,
+                    filterFrequencyRange, defaultFilterFrequencyHz,
+                    [] (float value) -> ValueText { return formatFrequencyValue(value); }, {}, true,
+                    juce::AudioParameterFloatAttributes()));
                 continue;
             }
 
             if (key == "bw")
             {
-                parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                    juce::ParameterID { getFilterBandwidthParamId(filterIndex), 1 },
-                    name,
-                    juce::NormalisableRange<float> { minimumBellBandwidth, maximumBellBandwidth, 0.001f },
-                    1.0f,
-                    juce::AudioParameterFloatAttributes().withStringFromValueFunction(
-                        [] (float value, int)
-                        {
-                            return formatBandwidthValue(value);
-                        })));
+                parameterLayout.push_back(makeFloatParameter(getFilterBandwidthParamId(filterIndex), name,
+                    juce::NormalisableRange<float> { minimumBellBandwidth, maximumBellBandwidth, 0.001f }, 1.0f,
+                    [] (float value) -> ValueText { return formatBandwidthValue(value); }, {}, false,
+                    juce::AudioParameterFloatAttributes()));
                 continue;
             }
 
             if (key == "gain")
             {
-                parameterLayout.push_back(std::make_unique<juce::AudioParameterFloat>(
-                    juce::ParameterID { getFilterGainParamId(filterIndex), 1 },
-                    name,
-                    juce::NormalisableRange<float> { -48.0f, 48.0f, 0.01f },
-                    0.0f,
-                    juce::AudioParameterFloatAttributes().withStringFromValueFunction(
-                        [] (float value, int)
-                        {
-                            return formatDecibelValue(value);
-                        })));
+                parameterLayout.push_back(makeFloatParameter(getFilterGainParamId(filterIndex), name,
+                    juce::NormalisableRange<float> { -48.0f, 48.0f, 0.01f }, 0.0f,
+                    [] (float value) -> ValueText { return formatDecibelValue(value); }, {}, false,
+                    juce::AudioParameterFloatAttributes()));
                 continue;
             }
 
@@ -132,6 +118,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EqlModuleProcessor::createPa
 
 void EqlModuleProcessor::parameterChanged(const juce::String&, float)
 {
+    modelVersion.fetch_add(2, std::memory_order_release);
     markEqlFiltersDirty();
 }
 

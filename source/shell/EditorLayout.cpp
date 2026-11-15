@@ -1,351 +1,203 @@
 #include "Editor.h"
 #include "FilterSection.h"
 #include "../crossover/Editor.h"
-#include "../crossover/DynControlGroups.h"
 #include "Metrics.h"
 #include "EditorSetup.h"
 #include "PresetSection.h"
 #include "../routing/Panel.h"
 #include "OscPanel.h"
+#include "EditorStateSchema.h"
 
 void AvaAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(uiBackground);
+    paintPluginBackground(g);
 }
 
-juce::Rectangle<int> AvaAudioProcessorEditor::getInfoPromptAnchorBounds() const noexcept
+void AvaAudioProcessorEditor::paintOverChildren(juce::Graphics& g)
 {
-    if (footerTab != nullptr && ! footerTab->getBounds().isEmpty())
-        return footerTab->getBounds();
-
-    if (clipButton != nullptr
-        && clipButton->isVisible()
-        && ! clipButton->getBounds().isEmpty())
-        return clipButton->getBounds();
-
-    return {};
-}
-
-juce::Rectangle<int> AvaAudioProcessorEditor::getInfoPromptVisibleBounds() const noexcept
-{
-    auto visibleBounds = getLocalBounds();
-
-    if (clipButton != nullptr
-        && clipButton->isVisible()
-        && ! clipButton->getBounds().isEmpty())
+    const auto paintOuterFrame = [this, &g]
     {
-        visibleBounds.setTop(clipButton->getY());
-    }
-
-    return visibleBounds;
-}
-
-int AvaAudioProcessorEditor::getFilterContentHeight() const
-{
-    const auto height = getFlatFilterContentHeight();
-    return height;
-}
-
-int AvaAudioProcessorEditor::getFlatFilterContentHeight() const
-{
-    if (addFilterButton == nullptr)
-        return 0;
-
-    for (const auto& section : filterSections)
+        const auto bounds = getLocalBounds();
+        constexpr int thickness = 2;
+        if (bounds.getWidth() < thickness * 2 || bounds.getHeight() < thickness * 2) return;
+        g.setColour(juce::Colour(0xff222222));
+        g.fillRect(bounds.withHeight(thickness));
+        g.fillRect(bounds.withTop(bounds.getBottom() - thickness));
+        g.fillRect(bounds.withWidth(thickness));
+        g.fillRect(bounds.withLeft(bounds.getRight() - thickness));
+    };
+    if (activeInstanceEditor != nullptr) { paintOuterFrame(); return; }
+    const auto modulePageVisible = !aboutExpanded;
     {
-        if (section == nullptr)
-            return 0;
-    }
-
-    const auto activeFilterCount = getActiveFilterCount();
-    auto totalHeight = 0;
-
-    for (int displayIndex = 0; displayIndex < activeFilterCount; ++displayIndex)
+    const juce::Graphics::ScopedSaveState saved(g);
+    // Arrangement rows are intentionally not opaque. Do not paint the module's
+    // range indicators over their surface during the editor's overlay pass.
+    // The scrolling module viewport remains outside this clipped region.
+    if (textPromptOverlay != nullptr
+        && bool(textPromptOverlay->getProperties().getWithDefault("hidesModuleContent", false))
+        && !bool(textPromptOverlay->getProperties().getWithDefault("paintControlIndicators", false)))
+        g.excludeClipRegion(getModuleViewportBounds().expanded(0, 2 * getUiGap(*this)));
+    ValueBoxComponent::paintRangeIndicators(g, *this, [this, modulePageVisible] (const juce::Component& component)
     {
-        const auto filterIndex = getFilterIndexForOrderPosition(displayIndex);
-        if (filterIndex < 0)
-            continue;
-
-        totalHeight += rowHeight;
-
-        const auto* section = filterSections[static_cast<size_t>(filterIndex)].get();
-
-        if (section != nullptr)
-            totalHeight += section->visibleBodyHeight();
-
-        totalHeight += verticalGap;
+        return modulePageVisible || (&component != crossoverEditor.get() && &component != blockChainModuleEditor.get()
+            && &component != dynModuleEditor.get() && &component != &filterViewport);
+    });
+    // A brief pulse at a selected search result, matching the contrast of hover.
+    // Block titles use the shared inverse-header paint path instead.
+    if (searchFlashOn && searchFlashBlockTitle.isEmpty())
+        if (auto* target = searchFlashTarget.getComponent(); target != nullptr && target->isShowing())
+        {
+            auto region = getLocalArea(target, target->getLocalBounds());
+            const auto clip = filterViewport.getBounds();
+            if (!clip.isEmpty() && clip.intersects(region))
+            {
+                const juce::Graphics::ScopedSaveState searchFlashClip(g);
+                g.reduceClipRegion(clip);
+                g.setColour(uiWhite.withAlpha(0.2f));
+                g.fillRect(region);
+                g.setColour(uiWhite);
+                g.drawRect(region, 2);
+            }
+        }
     }
-
-    return totalHeight;
+    // This is the final editor overlay so child panels cannot cover the
+    // two-pixel #222222 plugin frame. It does not change window dimensions.
+    paintOuterFrame();
 }
 
 int AvaAudioProcessorEditor::getActiveFilterContentHeight() const
 {
-    if (tlsModuleLoaded || dynModuleLoaded)
-        return 0;
-
-    if (eqlModuleLoaded)
-        return getFilterContentHeight();
-
-    return 0;
+    return moduleContent.getHeight();
 }
 
-void AvaAudioProcessorEditor::layoutGlobalControlsSection(juce::Rectangle<int>& bounds)
+void AvaAudioProcessorEditor::layoutGlobalSections(juce::Rectangle<int>& bounds)
 {
-    hostParametersViewport.setVisible(false);
-    hostParametersViewport.setBounds({});
-    hostParametersContent.setSize(0, 0);
-
-    constexpr int globalButtonGap = uiGap;
-    auto row = bounds.removeFromTop(rowHeight);
-
-    routingButton->setBounds(row.removeFromLeft(iconControlSize));
-    row.removeFromLeft(globalButtonGap);
-    oscButton->setBounds(row.removeFromLeft(iconControlSize));
-    row.removeFromLeft(globalButtonGap);
-    hostButton->setBounds(row.removeFromLeft(iconControlSize));
-    row.removeFromLeft(globalButtonGap);
-
-    clipButton->setBounds(row.removeFromRight(iconControlSize));
-    row.removeFromRight(globalButtonGap);
-    globalBypassButton->setBounds(row.removeFromRight(iconControlSize));
-    row.removeFromRight(globalButtonGap);
-    globalSpacer->setBounds(row.removeFromRight(30));
-    row.removeFromRight(globalButtonGap);
-    topLines->setBounds(row);
-
-    if (! bounds.isEmpty())
-        bounds.removeFromTop(globalToFilterGap);
-
-    if (! hostParametersExpanded)
-    {
-        return;
-    }
-
-    // The host list is the last section of the window: it fills everything that
-    // is left above the bottom controls row, which already keeps its own gap.
-    auto hostPanelBounds = bounds;
-    bounds = {};
-
-    if (! hostPanelBounds.isEmpty())
-    {
-        const auto slotCount = static_cast<int>(hostSlotButtons.size());
-        const auto hostContentHeight = slotCount > 0
-            ? (slotCount * rowHeight) + ((slotCount - 1) * verticalGap)
-            : 0;
-
-        auto hostViewportBounds = hostPanelBounds;
-        hostViewportBounds.setHeight(juce::jmin(hostViewportBounds.getHeight(), hostContentHeight));
-        hostParametersViewport.setVisible(true);
-        hostParametersViewport.setBounds(hostViewportBounds);
-
-        hostParametersContent.setSize(hostViewportBounds.getWidth(),
-                                       juce::jmax(hostViewportBounds.getHeight(), hostContentHeight));
-
-        auto hostContentBounds = hostParametersContent.getLocalBounds();
-
-        for (int slotIndex = 0; slotIndex < slotCount; ++slotIndex)
-        {
-            auto* slotNameField = hostSlotNameFields[static_cast<size_t>(slotIndex)].get();
-            auto* slotButton = hostSlotButtons[static_cast<size_t>(slotIndex)].get();
-
-            if (slotNameField == nullptr || slotButton == nullptr)
-                continue;
-
-            auto slotBounds = hostContentBounds.removeFromTop(rowHeight);
-            const auto slotNameWidth = (rowHeight * 2) + uiGap + 4;
-            auto slotNameBounds = slotBounds.removeFromLeft(slotNameWidth);
-            slotBounds.removeFromLeft(parameterGap);
-            slotNameField->setBounds(slotNameBounds);
-            slotButton->setBounds(slotBounds);
-
-            if (! hostContentBounds.isEmpty())
-                hostContentBounds.removeFromTop(verticalGap);
-        }
-    }
+    // A full-size overlay only hit-tests the 16px top margin.
+    // No sidebar column or extra left padding is reserved.
+    juce::ignoreUnused(bounds);
+    if (windowDragHandle != nullptr)
+        windowDragHandle->setBounds(getLocalBounds());
 }
 
-void AvaAudioProcessorEditor::layoutBottomControlsSection(juce::Rectangle<int>& bounds)
+void AvaAudioProcessorEditor::applyPromptVisibility()
 {
-    auto row = bounds.removeFromBottom(rowHeight);
-    if (! bounds.isEmpty())
-        bounds.removeFromBottom(juce::jmin(verticalGap, bounds.getHeight()));
-
-    abSlotAButton->setBounds(row.removeFromLeft(iconControlSize));
-    row.removeFromLeft(uiGap);
-    abSwitchButton->setBounds(row.removeFromLeft(iconControlSize));
-    row.removeFromLeft(uiGap);
-    abSlotBButton->setBounds(row.removeFromLeft(iconControlSize));
-    row.removeFromLeft(uiGap);
-
-    footerTab->setBounds(row.removeFromRight(iconControlSize));
-    row.removeFromRight(uiGap);
-    redoButton->setBounds(row.removeFromRight(iconControlSize));
-    row.removeFromRight(uiGap);
-    undoButton->setBounds(row.removeFromRight(iconControlSize));
-    row.removeFromRight(uiGap);
-    bottomLines->setBounds(row);
+    if (textPromptOverlay != nullptr
+        && bool(textPromptOverlay->getProperties().getWithDefault("hidesModuleContent", false)))
+    {
+        for (auto* component : { blockChainModuleEditor.get(), dynModuleEditor.get() })
+            if (component != nullptr) component->setVisible(false);
+        filterViewport.setVisible(false);
+    }
 }
 
 void AvaAudioProcessorEditor::finalizeLayout() noexcept
 {
-    if (moduleTitle != nullptr)
-        moduleTitle->toFront(false);
-
-    clipButton->toFront(false);
-    if (undoButton != nullptr) undoButton->toFront(false);
-    if (redoButton != nullptr) redoButton->toFront(false);
-    if (abSlotAButton != nullptr) abSlotAButton->toFront(false);
-    if (abSwitchButton != nullptr) abSwitchButton->toFront(false);
-    if (abSlotBButton != nullptr) abSlotBButton->toFront(false);
-    if (globalSpacer != nullptr) globalSpacer->toFront(false);
-    if (globalBypassButton != nullptr) globalBypassButton->toFront(false);
-    if (topLines != nullptr) topLines->toFront(false);
-    if (bottomLines != nullptr) bottomLines->toFront(false);
-    if (routingButton != nullptr) routingButton->toFront(false);
-    if (oscButton != nullptr) oscButton->toFront(false);
-    if (moduleAddButton != nullptr) moduleAddButton->toFront(false);
-    if (hostButton != nullptr) hostButton->toFront(false);
-    footerTab->toFront(false);
-
-    if (routingPanel != nullptr && routingExpanded)
-        routingPanel->toFront(false);
-    if (oscPanel != nullptr && oscExpanded)
-        oscPanel->toFront(false);
-
+    applyPromptVisibility();
+    applyDockVisibility();
+    syncMainScrollBar();
+    // Keep the fixed quick-access row in front of the scrolling page but
+    // behind prompts and the active nested editor.
+    quickAccessStrip.toFront(false);
+    dockSortToggle.toFront(false);
+    dockCollapseToggle.toFront(false);
+    dockVerticalToggle.toFront(false);
+    dockClipIndicator.toFront(false);
+    dockSortOverlay.toFront(false);
+    // Keep the fixed search overlay in sync with ALL/page/prompt visibility.
+    updatePinnedSearchPosition();
+    // Clear the previous positions when controls move or pages change.
+    repaint();
+    if (crossoverEditor != nullptr && !aboutExpanded)
+        crossoverEditor->toFront(false);
+    if (pinnedRoutingViewport.isVisible()) pinnedRoutingViewport.toFront(false);
+    // The handle intercepts only the top margin, not the search field.
+    if (windowDragHandle != nullptr) windowDragHandle->toFront(false);
+    for (auto& prompt : suspendedPromptOverlays)
+    {
+        prompt->setBounds(getLocalBounds());
+        prompt->toFront(false);
+    }
     if (textPromptOverlay != nullptr)
     {
         textPromptOverlay->setBounds(getLocalBounds());
         textPromptOverlay->toFront(false);
     }
 
-    if (verticalResizeHandle != nullptr)
-        verticalResizeHandle->toFront(false);
-    if (horizontalResizeHandle != nullptr)
-        horizontalResizeHandle->toFront(false);
-    if (topResizeHandle != nullptr)
-        topResizeHandle->toFront(false);
-    if (leftResizeHandle != nullptr)
-        leftResizeHandle->toFront(false);
-
-    if (cornerResizeHandle != nullptr)
-        cornerResizeHandle->toFront(false);
 
     if (activeInstanceEditor != nullptr)
     {
         activeInstanceEditor->setBounds(getLocalBounds());
         activeInstanceEditor->toFront(false);
     }
+    // The root UNIT strip must remain above the active nested INSTANCE editor.
+    if (routingInstanceId == 0 && pinnedRoutingViewport.isVisible())
+        pinnedRoutingViewport.toFront(false);
 
     storeEditorStateToValueTree();
 }
 
 void AvaAudioProcessorEditor::resized()
 {
-    if (moduleAddButton == nullptr
-        || clipButton == nullptr
-        || presetsSection == nullptr
-        || globalSpacer == nullptr
+    if (presetsSection == nullptr
         || globalBypassButton == nullptr
-        || topLines == nullptr
-        || bottomLines == nullptr
-        || routingButton == nullptr
-        || oscButton == nullptr
         || oscPanel == nullptr
         || undoButton == nullptr
         || redoButton == nullptr
-        || abSlotAButton == nullptr
-        || abSwitchButton == nullptr
-        || abSlotBButton == nullptr
+        || abControl == nullptr
+        || abCopyButton == nullptr
         || sortFiltersButton == nullptr
-        || footerTab == nullptr)
+        || aboutControl == nullptr)
         return;
 
-    if (eqlModuleLoaded && addFilterButton == nullptr)
+    if (addFilterButton == nullptr)
         return;
 
     for (const auto& section : filterSections)
     {
-        if (eqlModuleLoaded && section == nullptr)
+        if (section == nullptr)
             return;
     }
 
     if (updateEditorResizeLimits()) return;
-    auto bounds = svgExportLayoutActive ? svgExportLayoutBounds : getLocalBounds();
+    // setBounds/setSize can clamp the viewport before moduleContent is laid
+    // out. Do not treat that temporary position as a user scroll change.
+    const juce::ScopedValueSetter<bool> layoutGuard(layingOutEditor, true);
+    auto bounds = getLocalBounds();
 
-    if (verticalResizeHandle != nullptr)
-        verticalResizeHandle->setBounds(bounds.withTop(juce::jmax(0, bounds.getBottom() - resizeHandleThickness)));
-    if (horizontalResizeHandle != nullptr)
-        horizontalResizeHandle->setBounds(bounds.withLeft(juce::jmax(0, bounds.getRight() - resizeHandleThickness)));
 
-    if (topResizeHandle != nullptr)
-        topResizeHandle->setBounds(bounds.withHeight(resizeHandleThickness));
-    if (leftResizeHandle != nullptr)
-        leftResizeHandle->setBounds(bounds.withWidth(resizeHandleThickness));
 
-    if (cornerResizeHandle != nullptr)
-        cornerResizeHandle->setBounds(bounds.getRight() - resizeHandleThickness,
-            bounds.getBottom() - resizeHandleThickness, resizeHandleThickness, resizeHandleThickness);
+    const auto editorInsetTop = 2 * getUiGap(*this);
+    const auto editorInsetBottom = getEditorContentInset(*this);
 
-    const auto editorInsetX = uiGap;
-    const auto editorInsetTop = uiGap;
-    const auto editorInsetBottom = uiGap;
-
-    bounds.removeFromLeft(editorInsetX);
-    bounds.removeFromRight(editorInsetX);
+    bounds.removeFromLeft(getUiGap(*this));
+    bounds.removeFromRight(getUiGap(*this) + editorScrollBarArea);
 
     bounds.removeFromBottom(editorInsetBottom);
     bounds.removeFromTop(editorInsetTop);
 
-    layoutBottomControlsSection(bounds);
-    layoutGlobalControlsSection(bounds);
-    if (routingExpanded)
+    layoutGlobalSections(bounds);
+    layoutQuickAccessStrip();
+    const auto canvas = getLocalBounds();
+    bounds = bounds.withY(canvas.getY() + editorInsetTop)
+        .withHeight(canvas.getHeight() - editorInsetTop - editorInsetBottom);
+    if (aboutExpanded)
     {
-        if (routingPanel != nullptr)
-            routingPanel->setBounds(bounds);
+        if (aboutPanel != nullptr) aboutPanel->setBounds(bounds.withBottom(getHeight()));
         finalizeLayout();
         return;
     }
-
-    if (routingPanel != nullptr)
-        routingPanel->setBounds({});
-    if (oscExpanded)
-    {
-        oscPanel->setBounds(bounds);
-        finalizeLayout();
-        return;
-    }
-    oscPanel->setBounds({});
-    if (hostParametersExpanded)
-    {
-        finalizeLayout();
-        return;
-    }
+    if (aboutPanel != nullptr) aboutPanel->setBounds({});
+    // Use one standard gap at both horizontal edges; no former ALL-column space.
+    bounds.setRight(canvas.getRight() - editorScrollBarArea);
     layoutCrossoverSection(bounds);
 
-    if (const auto* crossover = dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get()))
-    {
-        if (crossover->isCrossoverSettingsSelected())
-        {
-            finalizeLayout();
-            return;
-        }
-    }
+    layoutUnifiedBlocks(bounds);
 
-    if (! eqlModuleLoaded && ! tlsModuleLoaded && ! dynModuleLoaded)
-    {
-        finalizeLayout();
-        return;
-    }
-
-    if (tlsModuleLoaded || dynModuleLoaded)
-    {
-        layoutModuleEditorContent(bounds);
-        finalizeLayout();
-        return;
-    }
-
-    layoutEqlModuleSections(bounds);
+    // Reposition the UNIT-owned PIN ROUTING tiles in this same layout pass.
+    // Otherwise the first expanded frame paints their compact-dock positions
+    // and the periodic timer visibly moves them to the right afterwards.
+    if (routingInstanceId == 0 && !isDockOnly())
+        refreshPinnedRoutingStrip();
 
     finalizeLayout();
 }
@@ -357,31 +209,21 @@ void AvaAudioProcessorEditor::layoutCrossoverSection(juce::Rectangle<int>& bound
     if (editor == nullptr)
         return;
 
-    const auto sectionHeight = juce::jmin(bounds.getHeight(), editor->getPreferredHeight());
-    editor->setBounds(bounds.removeFromTop(sectionHeight));
-    editor->setVisible(sectionHeight > 0);
-}
-
-void AvaAudioProcessorEditor::layoutModuleEditorContent(juce::Rectangle<int>& bounds)
-{
-    auto contentBounds = bounds;
-
-    if (tlsModuleEditor != nullptr)
-    {
-        tlsModuleEditor->setBounds(contentBounds);
-        tlsModuleEditor->setVisible(tlsModuleLoaded);
-    }
-
-    if (dynModuleEditor != nullptr)
-    {
-        dynModuleEditor->setBounds(contentBounds.expanded(crossover_ui::dynControlGroupOutset, 0));
-        dynModuleEditor->setVisible(dynModuleLoaded);
-    }
+    editor->getMainControls();
+    editor->setInterceptsMouseClicks(false, true);
+    editor->setBounds(bounds.withY(0).withHeight(getHeight()));
+    editor->setVisible(true);
 
 }
 
 bool AvaAudioProcessorEditor::updateEditorResizeLimits()
 {
+    // Applying resize limits may synchronously call resized() again.
+    if (updatingEditorResizeLimits)
+        return false;
+
+    const juce::ScopedValueSetter<bool> guard(updatingEditorResizeLimits, true);
+
     if (auto* outer = dynamic_cast<AvaAudioProcessorEditor*>(getParentComponent());
         outer != nullptr && outer->activeInstanceEditor.get() == this)
     {
@@ -392,145 +234,82 @@ bool AvaAudioProcessorEditor::updateEditorResizeLimits()
             return true;
         }
     }
-    const auto width = juce::jlimit(minimumEditorWidth, maximumEditorWidth, getWidth());
-    const auto height = juce::jlimit(minimumEditorHeight, maximumEditorHeight, getHeight());
-    setResizeLimits(minimumEditorWidth, minimumEditorHeight, maximumEditorWidth, maximumEditorHeight);
+
+    auto* constrainer = getConstrainer();
+    if (constrainer == nullptr)
+        return false;
+
+    const auto width = getEditorWidth(*this);
+    constrainer->setFixedAspectRatio(0.0);
+    if (constrainer->getMinimumWidth() != width
+        || constrainer->getMinimumHeight() != getMinimumEditorHeight()
+        || constrainer->getMaximumWidth() != width
+        || constrainer->getMaximumHeight() != getMaximumEditorHeight())
+        setResizeLimits(width, getMinimumEditorHeight(), width, getMaximumEditorHeight());
+
+    const auto height = juce::jlimit(getMinimumEditorHeight(), getMaximumEditorHeight(),
+                                     getHeight() > 0 ? getHeight() : getEditorHeight(*this));
     if (width == getWidth() && height == getHeight()) return false;
     setSize(width, height);
     return true;
 }
 
-namespace
+juce::Rectangle<int> AvaAudioProcessorEditor::getModuleViewportBounds() const
 {
-void collectSvgExportViewports(juce::Component& component, std::vector<juce::Viewport*>& found)
-{
-    if (auto* viewport = dynamic_cast<juce::Viewport*>(&component))
-        found.push_back(viewport);
-
-    for (int index = 0; index < component.getNumChildComponents(); ++index)
-        if (auto* child = component.getChildComponent(index))
-            collectSvgExportViewports(*child, found);
-}
+    return filterViewport.getBounds();
 }
 
-void AvaAudioProcessorEditor::expandContentForSvgExport()
+void AvaAudioProcessorEditor::syncMainScrollBar()
 {
-    svgExportFilterExpandedStates.clear();
-
-    for (auto& section : filterSections)
+    const auto position = filterViewport.getViewPositionY();
+    if (position != mainScrollPosition)
     {
-        if (section == nullptr)
-            continue;
-
-        svgExportFilterExpandedStates.push_back(section->expanded);
-        section->expanded = true;
-        section->disclosure.snap(true);
-        section->disclosureInitialised = true;
+        mainScrollPosition = position;
+        mainScrollBar.getProperties().set("scrollActiveUntil", juce::Time::getMillisecondCounterHiRes() + 50.0);
+        mainScrollBar.repaint();
     }
-
-    if (eqlModuleLoaded && ! svgExportFilterExpandedStates.empty())
-        updateEqlSectionStates(getActiveFilterCount());
+    const auto gap = getUiGap(*this);
+    mainScrollBar.setBounds(getWidth() - gap - editorScrollBarWidth, 2 * gap,
+                            editorScrollBarWidth, juce::jmax(0, filterViewport.getBottom() - 2 * gap));
+    mainScrollBar.setVisible(!isDockOnly() && filterViewport.isVisible() && !aboutExpanded
+                            && activeInstanceEditor == nullptr);
+    const auto visible = filterViewport.getHeight();
+    mainScrollBar.setRangeLimits(0.0, double(juce::jmax(visible, moduleContent.getHeight())), juce::dontSendNotification);
+    mainScrollBar.setCurrentRange(double(filterViewport.getViewPositionY()), double(visible), juce::dontSendNotification);
 }
 
-void AvaAudioProcessorEditor::restoreContentAfterSvgExport()
+void AvaAudioProcessorEditor::scrollBarMoved(juce::ScrollBar* bar, double position)
 {
-    auto state = svgExportFilterExpandedStates.begin();
-
-    for (auto& section : filterSections)
-    {
-        if (section == nullptr || state == svgExportFilterExpandedStates.end())
-            continue;
-
-        section->expanded = *state;
-        section->disclosure.snap(*state);
-        section->disclosureInitialised = true;
-        ++state;
-    }
-
-    const auto sectionsWereExpanded = ! svgExportFilterExpandedStates.empty();
-    svgExportFilterExpandedStates.clear();
-
-    if (eqlModuleLoaded && sectionsWereExpanded)
-        updateEqlSectionStates(getActiveFilterCount());
+    if (bar == &mainScrollBar)
+        filterViewport.setViewPosition(filterViewport.getViewPositionX(), juce::roundToInt(position));
 }
 
-int AvaAudioProcessorEditor::getSvgExportCanvasHeight() const
+bool AvaAudioProcessorEditor::isDockOnly() const
 {
-    // Mirrors the branches of resized() so that exactly the content that is on
-    // screen decides how much extra height the artwork needs.
-    if (routingExpanded || oscExpanded)
-        return 0;
-
-    const auto addModuleOverflow = [](int& extraHeight, const juce::Component* component)
-    {
-        const auto* module = dynamic_cast<const CrossoverModuleComponent*>(component);
-
-        if (module == nullptr || ! module->isVisible())
-            return;
-
-        extraHeight += juce::jmax(0, module->getPreferredHeight() - module->getHeight());
-    };
-
-    auto extraHeight = 0;
-
-    if (hostParametersExpanded)
-    {
-        extraHeight += juce::jmax(0, hostParametersContent.getHeight() - hostParametersViewport.getHeight());
-        return getHeight() + extraHeight;
-    }
-
-    addModuleOverflow(extraHeight, crossoverEditor.get());
-
-    if (const auto* crossover = dynamic_cast<const CrossoverModuleComponent*>(crossoverEditor.get());
-        crossover != nullptr && crossover->isCrossoverSettingsSelected())
-        return getHeight() + extraHeight;
-
-    if (! eqlModuleLoaded && ! tlsModuleLoaded && ! dynModuleLoaded)
-        return getHeight() + extraHeight;
-
-    if (tlsModuleLoaded || dynModuleLoaded)
-    {
-        addModuleOverflow(extraHeight, tlsModuleEditor.get());
-        addModuleOverflow(extraHeight, dynModuleEditor.get());
-        return getHeight() + extraHeight;
-    }
-
-    if (eqlModuleLoaded && filterViewport.isVisible())
-        extraHeight += juce::jmax(0, getFlatFilterContentHeight() - filterViewport.getHeight());
-
-    return getHeight() + extraHeight;
+    return bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_only"), false));
 }
 
-void AvaAudioProcessorEditor::prepareSvgExportLayout(const int canvasHeight)
+int AvaAudioProcessorEditor::getMinimumEditorHeight() const
 {
-    svgExportLayoutBounds = getLocalBounds().withHeight(juce::jmax(getHeight(), canvasHeight));
-    svgExportLayoutActive = true;
-
-    svgExportViewports.clear();
-    svgExportViewportPositions.clear();
-    collectSvgExportViewports(*this, svgExportViewports);
-
-    for (const auto* viewport : svgExportViewports)
-        svgExportViewportPositions.push_back(viewport->getViewPosition());
-
-    // The taller layout is temporary: it must not overwrite the stored editor state.
-    const juce::ScopedValueSetter<bool> stateGuard(restoringEditorUiState, true);
-    resized();
+    return isDockOnly() ? (bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_vertical"), false)) ? getDockLength(true, shell_editor_ui::dockControlCount(getRootWindowState())) : getSquareControlSize(*this) + 3 * getUiGap(*this)) : getEditorWidth(*this);
 }
 
-void AvaAudioProcessorEditor::finishSvgExportLayout()
+int AvaAudioProcessorEditor::getMaximumEditorHeight() const
 {
-    svgExportLayoutActive = false;
-    svgExportLayoutBounds = {};
+    return isDockOnly() ? getMinimumEditorHeight() : maximumEditorHeight;
+}
 
-    {
-        const juce::ScopedValueSetter<bool> stateGuard(restoringEditorUiState, true);
-        resized();
-    }
-
-    for (size_t index = 0; index < svgExportViewports.size() && index < svgExportViewportPositions.size(); ++index)
-        svgExportViewports[index]->setViewPosition(svgExportViewportPositions[index]);
-
-    svgExportViewports.clear();
-    svgExportViewportPositions.clear();
+void AvaAudioProcessorEditor::applyDockVisibility()
+{
+    dockCollapseToggle.setToggleState(isDockOnly(), juce::dontSendNotification);
+    dockVerticalToggle.setToggleState(bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_vertical"), false)), juce::dontSendNotification);
+    if (!isDockOnly()) return;
+    filterViewport.setVisible(false);
+    if (controlSearchPanel != nullptr) controlSearchPanel->setVisible(false);
+    pinnedRoutingViewport.setVisible(false);
+    if (aboutPanel != nullptr) aboutPanel->setVisible(false);
+    if (crossoverEditor != nullptr) crossoverEditor->setVisible(false);
+    if (blockChainModuleEditor != nullptr) blockChainModuleEditor->setVisible(false);
+    if (dynModuleEditor != nullptr) dynModuleEditor->setVisible(false);
+    mainScrollBar.setVisible(false);
 }

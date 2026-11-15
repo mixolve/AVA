@@ -7,6 +7,15 @@ void DynModuleProcessor::setParameterListenersEnabled(const bool enabled)
 {
     ava::crossover::parameters::setRangeParameterListenersEnabled(valueTreeState, *this,
                                                                   dyn::parameters::parameterSpecs, numRanges, enabled);
+    for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
+        for (const auto& spec : dyn::parameters::parameterSpecs)
+            if (dyn::parameters::hasBypass(spec))
+            {
+                const auto id = ava::crossover::parameters::makeRangeParameterId(rangeIndex,
+                    dyn::parameters::bypassSuffix(spec).toRawUTF8());
+                if (enabled) valueTreeState.addParameterListener(id, this);
+                else valueTreeState.removeParameterListener(id, this);
+            }
 }
 
 void DynModuleProcessor::parameterChanged(const juce::String& parameterID, const float newValue)

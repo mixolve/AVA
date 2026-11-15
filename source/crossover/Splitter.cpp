@@ -108,6 +108,9 @@ void Splitter::prepare(const double sampleRate)
     for (size_t splitIndex = 0; splitIndex < numSplits; ++splitIndex)
         updateSplit(splitIndex, frequencies[splitIndex]);
 
+    targetLowpass = lowpassCoefficients;
+    targetHighpass = highpassCoefficients;
+    coefficientRampRemaining = 0;
     reset();
 }
 
@@ -126,11 +129,11 @@ void Splitter::reset()
 void Splitter::setSplitFrequencies(const SplitFrequencies& newFrequencies)
 {
     frequencies = constrainSplitFrequencies(newFrequencies, currentSampleRate);
-
-    for (size_t splitIndex = 0; splitIndex < numSplits; ++splitIndex)
-        updateSplit(splitIndex, frequencies[splitIndex]);
-
-    reset();
+    const auto previousLowpass = lowpassCoefficients, previousHighpass = highpassCoefficients;
+    for (size_t split = 0; split < numSplits; ++split) updateSplit(split, frequencies[split]);
+    targetLowpass = lowpassCoefficients; targetHighpass = highpassCoefficients;
+    lowpassCoefficients = previousLowpass; highpassCoefficients = previousHighpass;
+    coefficientRampRemaining = std::max(1, int(currentSampleRate * 0.005));
 }
 
 void Splitter::setActiveSplitCount(const size_t newActiveSplitCount)
@@ -158,6 +161,21 @@ void Splitter::updateSplit(const size_t splitIndex, const double frequency)
 
 Splitter::RangeArray Splitter::processSample(const double leftInput, const double rightInput)
 {
+    if (coefficientRampRemaining > 0) {
+        const auto advance = [&](auto& current, const auto& target) {
+            for (size_t split = 0; split < numSplits; ++split)
+                for (size_t stage = 0; stage < current[split].size(); ++stage) {
+                    auto& c = current[split][stage]; const auto& t = target[split][stage];
+                    c.b0 += (t.b0 - c.b0) / coefficientRampRemaining;
+                    c.b1 += (t.b1 - c.b1) / coefficientRampRemaining;
+                    c.b2 += (t.b2 - c.b2) / coefficientRampRemaining;
+                    c.a1 += (t.a1 - c.a1) / coefficientRampRemaining;
+                    c.a2 += (t.a2 - c.a2) / coefficientRampRemaining;
+                }
+        };
+        advance(lowpassCoefficients, targetLowpass); advance(highpassCoefficients, targetHighpass);
+        --coefficientRampRemaining;
+    }
     RangeArray ranges {};
 
     auto remainderLeft = leftInput;

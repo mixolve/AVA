@@ -2,6 +2,8 @@
 #include "State.h"
 #include "../shell/Controls.h"
 #include "../shell/Editor.h"
+#include "../shell/ChoiceControl.h"
+#include "../shell/EditorStateSchema.h"
 #include "../shell/Style.h"
 #include "../shell/DisclosureAnimation.h"
 
@@ -16,31 +18,45 @@
 namespace
 {
 constexpr int petalThickness = 8;
+constexpr int petalGap = 2;
+constexpr int petalExtent = petalThickness + petalGap;
+constexpr int signalClearance = 2;
+constexpr int minimumSignalLeg = 8;
+constexpr int serialGap = minimumSignalLeg + 2 * signalClearance;
+constexpr int busInset = minimumSignalLeg + signalClearance + 1;
+constexpr int groupPadding = busInset + minimumSignalLeg + signalClearance;
+void configureContainerButton(BoxTextButton& button)
+{
+    button.setTextJustification(juce::Justification::centred);
+    button.setClickingTogglesState(false);
+    button.getProperties().set("textSideInset", 2);
+    button.getProperties().set("textTopInset", 2);
+    button.getProperties().set("textBottomInset", 2);
+}
+
 class RoutingPetal final : public juce::Button
 {
 public:
     enum class Side { top, right, bottom, left };
     RoutingPetal() : juce::Button({}) { setWantsKeyboardFocus(false); setMouseClickGrabsKeyboardFocus(false); }
+    juce::Path getOutline() const { return outline().createPathWithRoundedCorners(float(defaultUiCornerRadius)); }
     void setSide(Side value) { side = value; repaint(); }
-    void setMoveTarget(bool value) { moveTarget = value; repaint(); }
+    Side getSide() const noexcept { return side; }
+    void setDragSource(bool value) { if (dragSource != value) { dragSource = value; repaint(); } }
     bool hitTest(int x, int y) override { return outline().contains(static_cast<float>(x), static_cast<float>(y)); }
     void paintButton(juce::Graphics& g, bool hover, bool down) override
     {
-        auto path = outline();
-        const auto amount=hoverAnimation.amount(isEnabled() && (hover || down));
-        ControlAppearance style(moveTarget,amount);
-        style.paintBackground(g,path);
-        const auto w = getWidth();
-        const auto h = getHeight();
-        if (side == Side::top || side == Side::bottom)
-            g.fillRect(0, side == Side::top ? h - 1 : 0, w, 1);
-        else
-            g.fillRect(side == Side::left ? w - 1 : 0, 0, 1, h);
-        style.normalBorder=uiGreyLight.withMultipliedAlpha(isEnabled()?1.0f:0.4f);
-        style.paintFrame(g,outline(false));
+        const auto path = getOutline();
+        ControlAppearance style;
+        style.fillColour = juce::Colour(isEnabled() && down ? 0xffffffff
+            : dragSource || (isEnabled() && isHoverInversionReady(*this, hover, "routing.petal"))
+                ? 0xff666666 : 0xff444444);
+        style.paintBackground(g, path);
+        style.frameColour = isEnabled() ? uiGreyLight : uiIndicatorDisabled;
+        style.paintFrame(g, path);
     }
 private:
-    juce::Path outline(const bool closeShape = true) const
+    juce::Path outline() const
     {
         const auto w = static_cast<float>(getWidth());
         const auto h = static_cast<float>(getHeight());
@@ -48,31 +64,30 @@ private:
         juce::Path path;
         if (side == Side::top || side == Side::bottom)
         {
-            path.startNewSubPath(0.5f, h - 0.5f);
-            path.lineTo(bevel, 0.5f); path.lineTo(w - bevel, 0.5f);
-            path.lineTo(w - 0.5f, h - 0.5f);
-            if (closeShape) path.closeSubPath();
+            path.startNewSubPath(0.0f, h);
+            path.lineTo(bevel, 0.0f); path.lineTo(w - bevel, 0.0f);
+            path.lineTo(w, h);
+            path.closeSubPath();
             if (side == Side::bottom)
                 path.applyTransform(juce::AffineTransform::scale(-1.0f, -1.0f).translated(w, h));
         }
         else
         {
-            path.startNewSubPath(w - 0.5f, 0.5f);
-            path.lineTo(0.5f, bevel); path.lineTo(0.5f, h - bevel);
-            path.lineTo(w - 0.5f, h - 0.5f);
-            if (closeShape) path.closeSubPath();
+            path.startNewSubPath(w, 0.0f);
+            path.lineTo(0.0f, bevel); path.lineTo(0.0f, h - bevel);
+            path.lineTo(w, h);
+            path.closeSubPath();
             if (side == Side::right)
                 path.applyTransform(juce::AffineTransform::scale(-1.0f, -1.0f).translated(w, h));
         }
         return path;
     }
-    HoverAnimation hoverAnimation { *this };
     Side side = Side::top;
-    bool moveTarget = false;
+    bool dragSource = false;
 };
 }
 
-class RoutingPanel::Content final : public juce::Component, private juce::Timer
+class RoutingPanel::Content final : public juce::Component
 {
     enum class SlideDirection { up, down, left, right };
 
@@ -84,6 +99,15 @@ class RoutingPanel::Content final : public juce::Component, private juce::Timer
         bool hasStartBounds = false;
         SlideDirection direction = SlideDirection::down;
         std::array<std::unique_ptr<RoutingPetal>, 4> petals;
+        std::unique_ptr<BoxTextButton> compensation;
+    };
+
+    struct SlideOrigin
+    {
+        int owner = 0;
+        bool group = false;
+        RoutingPetal::Side side = RoutingPetal::Side::bottom;
+        juce::Rectangle<int> bounds;
     };
 
     struct InstanceControls
@@ -93,11 +117,25 @@ class RoutingPanel::Content final : public juce::Component, private juce::Timer
         juce::Rectangle<int> fullBounds, startBounds;
         bool hasStartBounds = false;
         SlideDirection direction = SlideDirection::down;
+        std::optional<SlideOrigin> origin;
         std::unique_ptr<BoxTextButton> name;
         std::unique_ptr<RoutingPetal> addSerial;
         std::unique_ptr<RoutingPetal> addParallel;
         std::unique_ptr<RoutingPetal> addSerialBefore;
         std::unique_ptr<RoutingPetal> addParallelBefore;
+    };
+
+    struct SignalVisual
+    {
+        int id = 0;
+        bool group = false;
+    };
+
+    struct SignalPath
+    {
+        std::array<juce::Point<int>, 4> points;
+        size_t count = 0;
+        SignalVisual from, to;
     };
 
 public:
@@ -112,105 +150,100 @@ public:
           topologyChanged(std::move(topologyChangedIn)),
           layoutChanged(std::move(layoutChangedIn))
     {
-        setOpaque(true);
         setWantsKeyboardFocus(true);
+        getProperties().set("emptyEditorBackground", true);
         reflow.snap(true);
         reflow.onUpdate = [this] { resized(); if (layoutChanged != nullptr) layoutChanged(); };
         refresh();
     }
 
+
     void paint(juce::Graphics& graphics) override
     {
-        graphics.fillAll(uiBackground);
-        graphics.setColour(uiGreyLight);
         for (const auto& [id, frame] : frames)
         {
+            if (! containersVisible()) continue;
             juce::Graphics::ScopedSaveState saved(graphics);
             auto animatedFrame = frame;
+            auto frameColour = uiGreyLight;
             if (const auto group = groupControls.find(id); group != groupControls.end())
             {
                 graphics.reduceClipRegion(group->second.revealClip->getBounds());
-                graphics.setColour(uiGreyLight.withMultipliedAlpha(
-                    static_cast<float>(group->second.appearance->value())));
+                frameColour = uiGreyLight.withMultipliedAlpha(
+                    static_cast<float>(group->second.appearance->value()));
             }
-            graphics.drawRect(animatedFrame, 1);
+            paintUiFrame(graphics, animatedFrame.toFloat(), frameColour,
+                         ControlAppearance::pixelThickness(graphics, 1.0f), float(defaultUiCornerRadius));
         }
 
         for (const auto& [id, group] : retiringGroups)
         {
+            if (! containersVisible()) continue;
             juce::ignoreUnused(id);
             juce::Graphics::ScopedSaveState saved(graphics);
             graphics.reduceClipRegion(group.revealClip->getBounds());
-            graphics.setColour(uiGreyLight.withMultipliedAlpha(static_cast<float>(group.appearance->value())));
-            graphics.drawRect(group.fullBounds.reduced(petalThickness), 1);
+            paintUiFrame(graphics, group.fullBounds.reduced(petalExtent).toFloat(),
+                         uiGreyLight.withMultipliedAlpha(static_cast<float>(group.appearance->value())),
+                         ControlAppearance::pixelThickness(graphics, 1.0f), float(defaultUiCornerRadius));
         }
 
-        graphics.setColour(uiGreyLight);
-        for (const auto& node : displayedState.nodes)
+        const juce::Graphics::ScopedSaveState signalClip(graphics);
+        const auto excludePetal = [this, &graphics](const RoutingPetal& petal)
         {
-            const auto found = locations.find(node.id);
-            if (found == locations.end())
-                continue;
-            const auto& bounds = found->second;
-            if (node.serialNext != 0 && ! node.container)
+            auto visible = getLocalArea(&petal, petal.getLocalBounds());
+            for (auto* parent = petal.getParentComponent(); parent != nullptr && parent != this; parent = parent->getParentComponent())
+                visible = visible.getIntersection(getLocalArea(parent, parent->getLocalBounds()));
+            if (!visible.isEmpty()) graphics.excludeClipRegion(visible.expanded(signalClearance));
+        };
+        const auto excludeInstances = [&excludePetal](const auto& items)
+        {
+            for (const auto& [id, instance] : items)
             {
-                const auto child = locations.find(node.serialNext);
-                if (child != locations.end())
-                {
-                    const auto childFrame = frames.find(node.serialNext);
-                    const auto target = childFrame == frames.end() ? child->second : childFrame->second;
-                    if (horizontal)
-                        graphics.drawLine(static_cast<float>(bounds.getRight()),
-                                          static_cast<float>(bounds.getCentreY()),
-                                          static_cast<float>(target.getX()),
-                                          static_cast<float>(target.getCentreY()), 1.0f);
-                    else
-                        graphics.drawLine(static_cast<float>(bounds.getCentreX()),
-                                          static_cast<float>(bounds.getBottom()),
-                                          static_cast<float>(target.getCentreX()),
-                                          static_cast<float>(target.getY()), 1.0f);
-                }
+                juce::ignoreUnused(id);
+                for (const auto* petal : { instance.addSerial.get(), instance.addSerialBefore.get(),
+                                           instance.addParallel.get(), instance.addParallelBefore.get() })
+                    excludePetal(*petal);
             }
-            if (node.parallelNext != 0)
+        };
+        const auto excludeGroups = [&excludePetal](const auto& items)
+        {
+            for (const auto& [id, group] : items)
             {
-                const auto sibling = locations.find(node.parallelNext);
-                if (sibling != locations.end())
-                {
-                    if (horizontal)
-                        graphics.drawLine(static_cast<float>(bounds.getCentreX()),
-                                          static_cast<float>(bounds.getBottom()),
-                                          static_cast<float>(sibling->second.getCentreX()),
-                                          static_cast<float>(sibling->second.getY()), 1.0f);
-                    else
-                        graphics.drawLine(static_cast<float>(bounds.getRight()),
-                                          static_cast<float>(bounds.getCentreY()),
-                                          static_cast<float>(sibling->second.getX()),
-                                          static_cast<float>(sibling->second.getCentreY()), 1.0f);
-                }
+                juce::ignoreUnused(id);
+                for (const auto& petal : group.petals) excludePetal(*petal);
+            }
+        };
+        excludeInstances(controls);
+        excludeInstances(retiringControls);
+        if (containersVisible())
+        {
+            excludeGroups(groupControls);
+            excludeGroups(retiringGroups);
+            const auto excludeFrame = [&graphics](juce::Rectangle<int> bounds)
+            {
+                constexpr int band = 1 + 2 * signalClearance;
+                const auto outer = bounds.expanded(signalClearance);
+                graphics.excludeClipRegion(outer.withHeight(band));
+                graphics.excludeClipRegion(outer.withTop(outer.getBottom() - band));
+                graphics.excludeClipRegion(outer.withWidth(band));
+                graphics.excludeClipRegion(outer.withLeft(outer.getRight() - band));
+            };
+            for (const auto& [id, frame] : frames)
+            {
+                juce::ignoreUnused(id);
+                excludeFrame(frame);
+            }
+            for (const auto& [id, group] : retiringGroups)
+            {
+                juce::ignoreUnused(id);
+                excludeFrame(group.fullBounds.reduced(petalExtent));
             }
         }
+        signalPaths.clear();
 
-        for (const auto& node : displayedState.nodes)
-        {
-            if (node.groupNext == 0)
-                continue;
-            const auto body = groupBodies.find(node.id);
-            const auto next = locations.find(node.groupNext);
-            if (body == groupBodies.end() || next == locations.end())
-                continue;
-            const auto nextFrame = frames.find(node.groupNext);
-            const auto target = nextFrame == frames.end() ? next->second : nextFrame->second;
-            if (horizontal)
-                graphics.drawLine(static_cast<float>(body->second.getRight()),
-                                  static_cast<float>(body->second.getCentreY()),
-                                  static_cast<float>(target.getX()),
-                                  static_cast<float>(target.getCentreY()), 1.0f);
-            else
-                graphics.drawLine(static_cast<float>(body->second.getCentreX()),
-                                  static_cast<float>(body->second.getBottom()),
-                                  static_cast<float>(target.getCentreX()),
-                                  static_cast<float>(target.getY()), 1.0f);
-        }
+        // Only draw connections within the routing graph. No IN/OUT stubs.
+        paintSignalGroup(graphics, layoutState.entryInstanceId);
+        paintSignalPaths(graphics);
     }
 
     void resized() override
@@ -218,20 +251,15 @@ public:
         locations.clear();
         frames.clear();
         groupBodies.clear();
-        const auto width = laneWidth();
-        const auto group = measureGroup(displayedState.entryInstanceId, width);
-        const auto canvasWidth = availableWidth > 0 ? juce::jmax(availableWidth, group.width + 2 * uiGap) : getWidth();
-        const auto canvasHeight = availableHeight > 0 ? juce::jmax(availableHeight, group.height + 2 * uiGap) : getHeight();
-        if (horizontal)
-            layoutGroup(displayedState.entryInstanceId,
-                        uiGap,
-                        juce::jmax(uiGap, (canvasHeight - group.height) / 2),
-                        width);
-        else
-            layoutGroup(displayedState.entryInstanceId,
-                        juce::jmax(uiGap, (canvasWidth - group.width) / 2),
-                        uiGap,
-                        width);
+        const auto width = instanceSize();
+        const auto group = measureGroup(layoutState.entryInstanceId, width);
+        const auto canvasHeight = availableHeight > 0 ? juce::jmax(availableHeight, group.height) : getHeight();
+        // The first petal starts one standard UI gap inside the ROUTING canvas.
+        // Longer chains may scroll horizontally; all chains are centred vertically.
+        layoutGroup(layoutState.entryInstanceId,
+                    canvasPaddingX(),
+                    juce::jmax(0, (canvasHeight - group.height) / 2),
+                    width);
         repaint();
     }
 
@@ -244,7 +272,7 @@ public:
 
     bool keyPressed(const juce::KeyPress& key) override
     {
-        if (moveSourceId != 0 && (key == juce::KeyPress::escapeKey || key == juce::KeyPress::returnKey))
+        if (moveSourceId != 0 && key == juce::KeyPress::returnKey)
         {
             clearMove();
             return true;
@@ -258,65 +286,57 @@ public:
             clearMove();
     }
 
-    void mouseUp(const juce::MouseEvent& event) override
+    void setContainersVisible(const bool active)
     {
-        if (! event.mods.isPopupMenu() || event.mouseWasDraggedSinceMouseDown())
-            return;
-
-        auto* editor = findParentComponentOfClass<AvaAudioProcessorEditor>();
-        if (editor == nullptr)
-            return;
-
-        auto anchorBounds = juce::Rectangle<int>(120, rowHeight);
-        anchorBounds.setCentre(event.getPosition());
-        editor->showChoicePrompt(editor->getLocalArea(this, anchorBounds),
-                                 { "VERTICAL", "HORIZONTAL" },
-                                 horizontal ? 1 : 0,
-                                 { true, true },
-                                 juce::Justification::centred,
-                                 [safeThis = juce::Component::SafePointer<Content>(this)] (const int choice)
-                                 {
-                                     if (safeThis != nullptr && (choice == 0 || choice == 1))
-                                         safeThis->setHorizontalOrientation(choice == 1);
-                                 });
+        if (showContainers == active) return;
+        showContainers = active;
+        rebuildLayoutState();
+        applyContainerClipVisibility();
+        resized();
+        if (layoutChanged != nullptr) layoutChanged();
     }
 
-    void setHorizontalOrientation(const bool shouldBeHorizontal)
-    {
-        if (horizontal == shouldBeHorizontal)
-            return;
+    bool containersVisible() const noexcept { return showContainers; }
 
-        horizontal = shouldBeHorizontal;
-        resized();
-        if (layoutChanged != nullptr)
-            layoutChanged();
+    void applyContainerClipVisibility()
+    {
+        const auto visible = containersVisible();
+        for (auto& [id, group] : groupControls)
+        {
+            juce::ignoreUnused(id);
+            group.revealClip->setVisible(visible);
+        }
+        for (auto& [id, group] : retiringGroups)
+        {
+            juce::ignoreUnused(id);
+            group.revealClip->setVisible(visible);
+        }
     }
 
     int getPreferredWidth() const
     {
-        auto width = measureGroup(displayedState.entryInstanceId, laneWidth()).width + 2 * uiGap;
-        for (const auto& [id, item] : retiringControls) { juce::ignoreUnused(id); width = juce::jmax(width, item.fullBounds.getRight() + uiGap); }
-        for (const auto& [id, item] : retiringGroups) { juce::ignoreUnused(id); width = juce::jmax(width, item.fullBounds.getRight() + uiGap); }
+        auto width = measureGroup(layoutState.entryInstanceId, instanceSize()).width + canvasPaddingX() + terminalTailWidth();
+        for (const auto& [id, item] : retiringControls) { juce::ignoreUnused(id); width = juce::jmax(width, item.fullBounds.getRight() + terminalTailWidth()); }
+        for (const auto& [id, item] : retiringGroups) { juce::ignoreUnused(id); width = juce::jmax(width, item.fullBounds.getRight() + terminalTailWidth()); }
         return width;
     }
 
     int getPreferredHeight() const
     {
-        auto height = measureGroup(displayedState.entryInstanceId, laneWidth()).height + 2 * uiGap;
-        for (const auto& [id, item] : retiringControls) { juce::ignoreUnused(id); height = juce::jmax(height, item.fullBounds.getBottom() + uiGap); }
-        for (const auto& [id, item] : retiringGroups) { juce::ignoreUnused(id); height = juce::jmax(height, item.fullBounds.getBottom() + uiGap); }
+        auto height = measureGroup(layoutState.entryInstanceId, instanceSize()).height;
+        for (const auto& [id, item] : retiringControls) { juce::ignoreUnused(id); height = juce::jmax(height, item.fullBounds.getBottom()); }
+        for (const auto& [id, item] : retiringGroups) { juce::ignoreUnused(id); height = juce::jmax(height, item.fullBounds.getBottom()); }
         return height;
     }
 
-    int getTargetPreferredWidth() const { return measureGroup(displayedState.entryInstanceId, laneWidth()).width + 2 * uiGap; }
-    int getTargetPreferredHeight() const { return measureGroup(displayedState.entryInstanceId, laneWidth()).height + 2 * uiGap; }
+    int getTargetPreferredWidth() const { return measureGroup(layoutState.entryInstanceId, instanceSize()).width + canvasPaddingX() + terminalTailWidth(); }
+    int getTargetPreferredHeight() const { return measureGroup(layoutState.entryInstanceId, instanceSize()).height; }
     int getReflowGeneration() const noexcept { return reflowGeneration; }
     double getReflowProgress() const noexcept { return reflow.value(); }
     bool isReflowRunning() const noexcept { return reflow.isRunning(); }
 
-    void setAvailableSize(const int width, const int height)
+    void setAvailableHeight(const int height)
     {
-        availableWidth = width;
         availableHeight = height;
     }
 
@@ -325,11 +345,34 @@ public:
         return ava::routing::getDisplayName(displayedState, instanceId);
     }
 
+    void updateInstanceLabels()
+    {
+        // The BLK composition preview has been removed. Each routing node
+        // always shows its own regular instance name.
+        for (auto& [id, instance] : controls)
+        {
+            instance.name->setButtonText(getDisplayNameFor(id));
+            instance.name->setTooltip({});
+        }
+    }
+
     void refresh()
     {
         const auto newState = ava::routing::readState(state.state);
-        if (newState == displayedState && ! controls.empty())
+        const auto sameStructure = newState.entryInstanceId == displayedState.entryInstanceId
+            && newState.rootInstanceId == displayedState.rootInstanceId && newState.nodes.size() == displayedState.nodes.size()
+            && std::equal(newState.nodes.begin(), newState.nodes.end(), displayedState.nodes.begin(), [](const auto& a, const auto& b) {
+                return a.id == b.id && a.serialNext == b.serialNext && a.parallelNext == b.parallelNext
+                    && a.groupNext == b.groupNext && a.container == b.container;
+            });
+        if (sameStructure && !controls.empty())
         {
+            // Parameter/name changes must not destroy the rename anchor or
+            // the independent buttons while an in-place editor is open.
+            displayedState = newState;
+            updateInstanceLabels();
+            for (auto& [id, group] : groupControls)
+                if (const auto* head = findNode(id)) group.compensation->setSelectionHighlighted(head->compensated);
             updateBypassPrompts();
             return;
         }
@@ -337,9 +380,12 @@ public:
         const auto previousState = displayedState;
         const auto topologyWasChanged = newState.nodes != displayedState.nodes
             || newState.entryInstanceId != displayedState.entryInstanceId;
+        if (topologyWasChanged)
+            retiringSignalPaths.insert(retiringSignalPaths.end(), signalPaths.begin(), signalPaths.end());
         const auto transitionStart = juce::Time::getMillisecondCounterHiRes();
         const auto hadControls = ! controls.empty();
         displayedState = newState;
+        rebuildLayoutState();
         if (moveSourceId != 0 && findNode(moveSourceId) == nullptr)
             moveSourceId = 0;
         auto previousControls = std::move(controls);
@@ -367,6 +413,7 @@ public:
             const auto label = getDisplayNameFor(id);
             InstanceControls instance;
             instance.revealClip = std::make_unique<juce::Component>();
+            instance.revealClip->getProperties().set("controlViewportClip", true);
             instance.revealBody = std::make_unique<juce::Component>();
             instance.revealClip->setInterceptsMouseClicks(false, true);
             instance.revealBody->setInterceptsMouseClicks(false, true);
@@ -378,6 +425,7 @@ public:
                 instance.appearance = std::move(previous->second.appearance);
                 instance.appearance->setExpanded(true, transitionStart);
                 instance.direction = previous->second.direction;
+                instance.origin = previous->second.origin;
                 instance.hasStartBounds = true;
                 instance.startBounds = topologyWasChanged ? previous->second.fullBounds : previous->second.startBounds;
                 instance.fullBounds = previous->second.fullBounds;
@@ -388,14 +436,29 @@ public:
                 if (previousControls.empty()) instance.appearance->snap(true);
                 else instance.appearance->setExpanded(true, transitionStart);
                 instance.direction = pendingDirection.value_or(inferDirection(id, previousControls));
+                instance.origin = pendingOrigin;
             }
-            instance.appearance->onUpdate = [this, id] { updateInstanceAppearance(id); scheduleRetiredCleanup(); };
+            instance.appearance->onUpdate = [this, id] { updateInstanceAppearance(id); repaint(); scheduleRetiredCleanup(); };
             instance.name = makeButton(label);
-            instance.name->onDoubleClick = [this, id, label, button = instance.name.get()]
-            {
-                if (renameAction != nullptr)
-                    renameAction(id, label, *button);
-            };
+            instance.name->setComponentID("routing.instance." + juce::String(id));
+            // Ctrl+click must reach the routing deletion action, not manual selection.
+            instance.name->getProperties().set("preserveCtrlClick", true);
+            instance.name->setDragRequiresControl(false);
+            instance.name->setBottomIndicator(1, {
+                [this, id] {
+                    auto* target = processor.findHostSlotTarget(ava::routing::parameterTargetId(id, AvaAudioProcessor::paramInstanceMuteId));
+                    return target != nullptr ? (target->getValue() >= 0.5f ? 1 : 0) : -1;
+                },
+                [this, id](bool muted) {
+                    if (auto* target = processor.findHostSlotTarget(ava::routing::parameterTargetId(id, AvaAudioProcessor::paramInstanceMuteId))) {
+                        target->beginChangeGesture(); target->setValueNotifyingHost(muted ? 1.0f : 0.0f); target->endChangeGesture();
+                    }
+                }
+            }, "MT");
+            instance.name->setBottomIndicator(2, {
+                [this, id] { const auto value = getBypassValue(id); return value < 0.0f ? -1 : value >= 0.5f ? 1 : 0; },
+                [this, id](bool bypassed) { if ((getBypassValue(id) >= 0.5f) != bypassed) toggleBypass(id); }
+            }, "BP");
             const auto removeAction = [this, id]
             {
                 if (ava::routing::removeInstance(state.state, id))
@@ -405,38 +468,31 @@ public:
                     notifyTopologyChanged();
                 }
             };
-            instance.name->setLongPressPromptActions(removeAction, [this, id] { toggleBypass(id); });
+            instance.name->onShiftClick = [this, id, button = instance.name.get()]
+            {
+                if (renameAction) renameAction(id, getDisplayNameFor(id), *button);
+            };
             instance.name->onModifiedClick = [this, id, removeAction] (const juce::ModifierKeys modifiers)
             {
-                if (modifiers.isAltDown())
+                if (modifiers.isCtrlDown() && !modifiers.isShiftDown() && !modifiers.isAltDown())
                     removeAction();
-                else if (modifiers.isCtrlDown())
+                else if (modifiers.isCtrlDown() && modifiers.isAltDown() && !modifiers.isShiftDown())
                     toggleBypass(id);
             };
-            instance.name->setLongPressPrimaryPromptIcon("trash");
-            instance.name->setLongPressPrimaryPromptEnabled(ava::routing::getInstanceCount(displayedState) > 1);
-            instance.name->setLongPressSecondaryPromptIcon("plug-off");
-            instance.name->setLongPressMovePromptEnabled(ava::routing::getInstanceCount(displayedState) > 1);
-            instance.name->onMoveArmed = [this, id]
+            if (ava::routing::getInstanceCount(displayedState) > 1)
             {
-                if (ava::routing::getInstanceCount(displayedState) <= 1) return;
-                moveSourceId = id;
-                grabKeyboardFocus();
-                updateMoveTargets();
-            };
-            instance.name->onControlDragStarted = [this, id]
-            {
-                if (ava::routing::getInstanceCount(displayedState) <= 1) return;
-                controlDragCancelled = false;
-                moveSourceId = id;
-                grabKeyboardFocus();
-                updateMoveTargets();
-                startTimerHz(60);
-            };
-            instance.name->onControlDrag = [this] (const juce::MouseEvent& event, const bool released)
-            {
-                finishControlDrag(event, released);
-            };
+                instance.name->onControlDragStarted = [this, id]
+                {
+                    controlDragActive = true;
+                    moveSourceId = id;
+                    grabKeyboardFocus();
+                    updateMoveTargets();
+                };
+                instance.name->onControlDrag = [this] (const juce::MouseEvent& event, const bool released)
+                {
+                    finishControlDrag(event, released);
+                };
+            }
             instance.addSerial = makePetal();
             instance.addParallel = makePetal();
             instance.addSerialBefore = makePetal();
@@ -470,11 +526,13 @@ public:
                 continue;
             GroupControls group;
             group.revealClip = std::make_unique<juce::Component>();
+            group.revealClip->getProperties().set("controlViewportClip", true);
             group.revealBody = std::make_unique<juce::Component>();
             group.revealClip->setInterceptsMouseClicks(false, true);
             group.revealBody->setInterceptsMouseClicks(false, true);
             group.revealClip->addAndMakeVisible(*group.revealBody);
             addAndMakeVisible(*group.revealClip);
+            group.revealClip->setVisible(containersVisible());
             auto previous = previousGroups.find(node.id);
             if (previous == previousGroups.end())
             {
@@ -523,6 +581,8 @@ public:
                     else
                     {
                         pendingDirection = directionFor(index < 2, index == 0 || index == 2);
+                        auto& petal = *groupControls.at(id).petals[static_cast<size_t>(index)];
+                        pendingOrigin = SlideOrigin {id, true, petal.getSide(), getLocalArea(&petal, petal.getLocalBounds())};
                         switch (index)
                         {
                             case 0: changed = ava::routing::insertInstanceBeforeGroup(state.state, id); break;
@@ -532,9 +592,25 @@ public:
                         }
                     }
                     if (changed) notifyTopologyChanged();
-                    else pendingDirection.reset();
+                    else { pendingDirection.reset(); pendingOrigin.reset(); }
                 };
             }
+            group.compensation = makeButton("C");
+            group.compensation->setComponentID("routing.compensation." + juce::String(node.id));
+            configureContainerButton(*group.compensation);
+            group.compensation->setSelectionHighlighted(node.compensated);
+            group.compensation->onClick = [this, id = node.id] {
+                if (auto* target = processor.findHostSlotTarget(ava::routing::compensationTargetId(id))) {
+                    target->beginChangeGesture(); target->setValueNotifyingHost(1.0f - target->getValue()); target->endChangeGesture();
+                }
+                notifyTopologyChanged();
+            };
+            group.compensation->onModifiedClick = [this, id = node.id](juce::ModifierKeys modifiers) {
+                if (modifiers.isCtrlDown())
+                    if (auto* editor = findParentComponentOfClass<AvaAudioProcessorEditor>())
+                        editor->handleHostSlotAssignRequest(ava::routing::compensationTargetId(id));
+            };
+            group.revealBody->addAndMakeVisible(*group.compensation);
             for (auto& petal : group.petals) group.revealBody->addAndMakeVisible(*petal);
             groupControls.emplace(node.id, std::move(group));
         }
@@ -543,6 +619,7 @@ public:
             {
                 item.revealClip->setInterceptsMouseClicks(false, false);
                 item.direction = removalDirection(previousState, id, item.fullBounds);
+                item.origin.reset();
                 item.appearance->setExpanded(false, transitionStart);
                 retiringControls.insert_or_assign(id, std::move(item));
             }
@@ -561,11 +638,17 @@ public:
             reflow.setExpanded(true, transitionStart);
         }
         pendingDirection.reset();
+        pendingOrigin.reset();
+        updateInstanceLabels();
         updateMoveTargets();
         updateBypassPrompts();
+        // New routing groups must obey the hidden default immediately, not
+        // wait for the user to press Shift or for a later topology change.
+        applyContainerClipVisibility();
         resized();
         for (auto& [id, item] : retiringControls) { juce::ignoreUnused(item); updateInstanceAppearance(id); }
         for (auto& [id, item] : retiringGroups) { juce::ignoreUnused(item); updateGroupAppearance(id); }
+        std::erase_if(retiringSignalPaths, [this](const auto& path) { return !hasRetiringSignalVisual(path); });
         scheduleRetiredCleanup();
     }
 
@@ -592,8 +675,7 @@ private:
 
     SlideDirection directionFor(const bool serial, const bool before) const
     {
-        const auto alongX = horizontal ? serial : ! serial;
-        return alongX ? (before ? SlideDirection::left : SlideDirection::right)
+        return serial ? (before ? SlideDirection::left : SlideDirection::right)
                       : (before ? SlideDirection::up : SlideDirection::down);
     }
 
@@ -702,6 +784,7 @@ private:
         const auto count = retiringControls.size() + retiringGroups.size();
         std::erase_if(retiringControls, finished);
         std::erase_if(retiringGroups, finished);
+        std::erase_if(retiringSignalPaths, [this](const auto& path) { return !hasRetiringSignalVisual(path); });
         if (count != retiringControls.size() + retiringGroups.size())
         {
             if (layoutChanged != nullptr) layoutChanged();
@@ -730,37 +813,19 @@ private:
     float getBypassValue(const int id) const
     {
         if (isSoloBypassed(id)) return 1.0f;
-        if (id == displayedState.rootInstanceId && ava::routing::getInstanceCount(displayedState) > 1)
-            return static_cast<bool>(state.state.getProperty(ava::routing::rootBypassStateKey, false)) ? 1.0f : 0.0f;
-        const auto instance = id == displayedState.rootInstanceId
-            ? std::shared_ptr<AvaAudioProcessor> {}
-            : processor.getRoutingInstanceHandle(id);
-        auto* target = id == displayedState.rootInstanceId ? &processor : instance.get();
-        if (target == nullptr)
-            return -1.0f;
-        if (auto* parameter = target->getValueTreeState().getParameter(AvaAudioProcessor::paramGlobalBypassId))
-            return parameter->getValue();
-        return -1.0f;
+        return processor.getRoutingInstanceBypassValue(id);
     }
 
     void toggleBypass(const int id)
     {
         if (isSoloBypassed(id)) return;
-        if (id == displayedState.rootInstanceId && ava::routing::getInstanceCount(displayedState) > 1)
+        if (auto* parameter = processor.findHostSlotTarget(ava::routing::bypassTargetId(id)))
         {
-            state.state.setProperty(ava::routing::rootBypassStateKey, getBypassValue(id) < 0.5f, nullptr);
-            notifyTopologyChanged();
-            updateBypassPrompts();
-            return;
+            const auto value = getBypassValue(id) < 0.5f ? 1.0f : 0.0f;
+            parameter->beginChangeGesture();
+            parameter->setValueNotifyingHost(value);
+            parameter->endChangeGesture();
         }
-        const auto instance = id == displayedState.rootInstanceId
-            ? std::shared_ptr<AvaAudioProcessor> {}
-            : processor.getRoutingInstanceHandle(id);
-        auto* target = id == displayedState.rootInstanceId ? &processor : instance.get();
-        if (target == nullptr)
-            return;
-        if (auto* parameter = target->getValueTreeState().getParameter(AvaAudioProcessor::paramGlobalBypassId))
-            parameter->setValueNotifyingHost(parameter->getValue() >= 0.5f ? 0.0f : 1.0f);
         updateBypassPrompts();
     }
 
@@ -769,15 +834,14 @@ private:
         for (auto& [id, instance] : controls)
         {
             const auto value = getBypassValue(id);
-            instance.name->setLongPressSecondaryPromptActive(value >= 0.5f);
-            instance.name->setFillVisible(true);
             instance.name->setFillColour(juce::Colour(value >= 0.5f ? 0xff222222 : 0xff444444));
+            instance.name->repaint();
         }
     }
 
     void configureAddActions(InstanceControls& instance, const int id)
     {
-        const auto action = [this, id](const bool serial, const bool before)
+        const auto action = [this, id](const bool serial, const bool before, RoutingPetal& petal)
         {
             auto changed = false;
             if (moveSourceId != 0)
@@ -793,6 +857,7 @@ private:
             else
             {
                 pendingDirection = directionFor(serial, before);
+                pendingOrigin = SlideOrigin {id, false, petal.getSide(), getLocalArea(&petal, petal.getLocalBounds())};
                 changed = serial
                     ? (before ? ava::routing::insertSerialInstanceBefore(state.state, id)
                               : ava::routing::insertSerialInstance(state.state, id))
@@ -800,17 +865,29 @@ private:
                               : ava::routing::insertParallelInstance(state.state, id));
             }
             if (changed) notifyTopologyChanged();
-            else pendingDirection.reset();
+            else { pendingDirection.reset(); pendingOrigin.reset(); }
         };
-        instance.addSerial->onClick = [action] { action(true, false); };
-        instance.addSerialBefore->onClick = [action] { action(true, true); };
-        instance.addParallel->onClick = [action] { action(false, false); };
-        instance.addParallelBefore->onClick = [action] { action(false, true); };
+        instance.addSerial->onClick = [action, petal = instance.addSerial.get()] { action(true, false, *petal); };
+        instance.addSerialBefore->onClick = [action, petal = instance.addSerialBefore.get()] { action(true, true, *petal); };
+        instance.addParallel->onClick = [action, petal = instance.addParallel.get()] { action(false, false, *petal); };
+        instance.addParallelBefore->onClick = [action, petal = instance.addParallelBefore.get()] { action(false, true, *petal); };
+
     }
 
     const ava::routing::State::Node* findNode(const int id) const
     {
         return ava::routing::findStateNode(displayedState.nodes, id);
+    }
+
+    const ava::routing::State::Node* findLayoutNode(int id) const
+    {
+        return ava::routing::findStateNode(layoutState.nodes, id);
+    }
+
+    void rebuildLayoutState()
+    {
+        // Container visibility only changes the frame drawing; the signal path keeps its nesting.
+        layoutState = displayedState;
     }
 
     struct Size
@@ -819,95 +896,257 @@ private:
         int height = 0;
     };
 
-    int horizontalGroupGap(const int firstId) const
+    int signalGroupPadding() const
     {
-        const auto* first = findNode(firstId);
-        if (first == nullptr)
-            return 0;
+        return containersVisible() ? groupPadding : minimumSignalLeg + signalClearance + 1;
+    }
 
-        // A parallel group's frame supplies one of the two gaps before its first button.
-        return first->parallelNext != 0 ? uiGap : uiGapDouble;
+    // The containing UNIT block already provides the standard 8 px inset
+    // between its inner frame and this viewport. Do not add a second gap.
+    int canvasPaddingX() const { return 0; }
+    int terminalTailWidth() const { return getUiGap(*this) + signalClearance; }
+
+    std::optional<std::pair<juce::Point<int>, SignalVisual>> findInputSignal(int id) const
+    {
+        const auto* first = findLayoutNode(id);
+        if (first == nullptr) return {};
+        if (first->parallelNext != 0) {
+            const auto group = groupBodies.find(id);
+            if (group == groupBodies.end()) return {};
+            const auto& bounds = group->second;
+            return std::pair {juce::Point<int>(bounds.getX() - (containersVisible() ? petalExtent : 0), bounds.getCentreY()), SignalVisual {id, true}};
+        }
+        if (first->container) return findInputSignal(first->serialNext);
+        const auto instance = locations.find(id);
+        if (instance == locations.end()) return {};
+        return std::pair {juce::Point<int>(instance->second.getX() - petalExtent, instance->second.getCentreY()), SignalVisual {id, false}};
+    }
+
+    struct SignalPorts
+    {
+        SignalPorts(juce::Point<int> inputIn, juce::Point<int> outputIn) : input(inputIn), output(outputIn) {}
+        juce::Point<int> input, output;
+        bool inputHasPetal = true, outputHasPetal = true;
+        SignalVisual inputVisual, outputVisual;
+    };
+
+    double signalProgress(const SignalVisual visual) const
+    {
+        if (visual.id == 0) return 1.0;
+        const auto progress = [id = visual.id](const auto& active, const auto& retiring)
+        {
+            if (const auto found = active.find(id); found != active.end()) return found->second.appearance->value();
+            if (const auto found = retiring.find(id); found != retiring.end()) return found->second.appearance->value();
+            return 1.0;
+        };
+        return visual.group ? progress(groupControls, retiringGroups) : progress(controls, retiringControls);
+    }
+
+    bool hasRetiringSignalVisual(const SignalPath& path) const
+    {
+        const auto retiring = [this](const SignalVisual visual)
+        { return visual.group ? retiringGroups.contains(visual.id) : retiringControls.contains(visual.id); };
+        return retiring(path.from) || retiring(path.to);
+    }
+
+    void drawSignalPath(juce::Graphics& g, const SignalPath& path) const
+    {
+        const auto from = signalProgress(path.from), to = signalProgress(path.to);
+        const auto fromFades = path.from.group && containersVisible();
+        const auto toFades = path.to.group && containersVisible();
+        const auto alpha = juce::jmin(fromFades ? from : 1.0, toFades ? to : 1.0);
+        const auto fromReveal = fromFades ? 1.0 : from;
+        const auto toReveal = toFades ? 1.0 : to;
+        const auto reveal = juce::jmin(fromReveal, toReveal);
+        if (alpha <= 0.0 || reveal <= 0.0) return;
+        auto points = path.points;
+        if (fromReveal < toReveal) std::reverse(points.begin(), points.begin() + static_cast<std::ptrdiff_t>(path.count));
+        auto remaining = 0.0;
+        for (size_t i = 1; i < path.count; ++i)
+            remaining += std::abs(points[i].x - points[i-1].x) + std::abs(points[i].y - points[i-1].y);
+        remaining *= reveal;
+        juce::Path shape;
+        for (size_t i = 1; i < path.count && remaining > 0.0; ++i)
+        {
+            const auto start = points[i-1], end = points[i];
+            const auto length = std::abs(end.x-start.x) + std::abs(end.y-start.y);
+            if (length == 0) continue;
+            const auto amount = juce::jmin(1.0, remaining / length);
+            const juce::Point<int> tip { start.x + juce::roundToInt((end.x-start.x) * amount),
+                                         start.y + juce::roundToInt((end.y-start.y) * amount) };
+            if (start.y == tip.y)
+                shape.addRectangle(float(juce::jmin(start.x, tip.x)-1), float(start.y-1), float(std::abs(tip.x-start.x)+2), 2.0f);
+            else
+                shape.addRectangle(float(start.x-1), float(juce::jmin(start.y, tip.y)-1), 2.0f, float(std::abs(tip.y-start.y)+2));
+            remaining -= length;
+        }
+        g.setColour(uiWhite.withMultipliedAlpha(float(alpha)));
+        g.fillPath(shape);
+    }
+
+    void paintSignalPaths(juce::Graphics& graphics) const
+    {
+        for (const auto& path : retiringSignalPaths)
+            if (hasRetiringSignalVisual(path)) drawSignalPath(graphics, path);
+        for (const auto& path : signalPaths) drawSignalPath(graphics, path);
+    }
+
+    void paintSignalLine(juce::Graphics&, juce::Point<int> from, juce::Point<int> to,
+                         SignalVisual visual) const
+    {
+        if (from == to) return;
+        const SignalPath path { {from, to, {}, {}}, 2, visual, visual };
+        signalPaths.push_back(path);
+    }
+
+    void paintSignalConnection(juce::Graphics&, juce::Point<int> from, juce::Point<int> to,
+                               SignalVisual fromVisual, SignalVisual toVisual) const
+    {
+        signalPaths.push_back(makeSignalConnection(from, to, fromVisual, toVisual, (from.x + to.x) / 2));
+    }
+
+    static SignalPath makeSignalConnection(juce::Point<int> from, juce::Point<int> to,
+                                           SignalVisual fromVisual, SignalVisual toVisual, int elbow)
+    {
+        return { {from, {elbow, from.y}, {elbow, to.y}, to}, 4, fromVisual, toVisual };
+    }
+
+    std::optional<SignalPorts> paintSignalBranch(juce::Graphics& g, const int id) const
+    {
+        const auto* node = findLayoutNode(id);
+        if (node == nullptr) return std::nullopt;
+        if (node->container) return paintSignalGroup(g, node->serialNext);
+        const auto found = locations.find(id);
+        if (found == locations.end()) return std::nullopt;
+        const auto bounds = found->second;
+        SignalPorts ports { { bounds.getX(), bounds.getCentreY() }, { bounds.getRight(), bounds.getCentreY() } };
+        ports.inputVisual = ports.outputVisual = {id, false};
+        if (const auto next = paintSignalGroup(g, node->serialNext))
+        {
+            paintSignalConnection(g, ports.output, next->input, ports.outputVisual, next->inputVisual);
+            ports.output = next->output;
+            ports.outputHasPetal = next->outputHasPetal;
+            ports.outputVisual = next->outputVisual;
+        }
+        return ports;
+    }
+
+    std::optional<SignalPorts> paintSignalGroup(juce::Graphics& g, const int id) const
+    {
+        const auto* first = findLayoutNode(id);
+        if (first == nullptr) return std::nullopt;
+        std::vector<SignalPorts> branches;
+        for (auto* node = first; node != nullptr; node = findLayoutNode(node->parallelNext))
+            if (const auto ports = paintSignalBranch(g, node->id)) branches.push_back(*ports);
+        if (branches.empty()) return std::nullopt;
+        auto ports = branches.front();
+        if (branches.size() > 1)
+        {
+            const auto found = groupBodies.find(id);
+            if (found == groupBodies.end()) return std::nullopt;
+            const auto bounds = found->second;
+            ports = SignalPorts { { bounds.getX(), bounds.getCentreY() }, { bounds.getRight(), bounds.getCentreY() } };
+            ports.inputVisual = ports.outputVisual = {id, true};
+            ports.inputHasPetal = ports.outputHasPetal = containersVisible();
+            const auto inset = containersVisible() ? busInset : 0;
+            const auto inputBus = ports.input.translated(inset, 0);
+            const auto outputBus = ports.output.translated(-inset, 0);
+            paintSignalLine(g, ports.input, inputBus, ports.inputVisual);
+            paintSignalLine(g, outputBus, ports.output, ports.outputVisual);
+            auto inputMin = inputBus.y;
+            auto inputMax = inputMin;
+            auto outputMin = outputBus.y;
+            auto outputMax = outputMin;
+            for (const auto& branch : branches)
+            {
+                const auto in = juce::Point<int>(inputBus.x, branch.input.y);
+                const auto out = juce::Point<int>(outputBus.x, branch.output.y);
+                inputMin = juce::jmin(inputMin, in.y);
+                inputMax = juce::jmax(inputMax, in.y);
+                outputMin = juce::jmin(outputMin, out.y);
+                outputMax = juce::jmax(outputMax, out.y);
+                paintSignalConnection(g, in, branch.input, ports.inputVisual, branch.inputVisual);
+                paintSignalConnection(g, branch.output, out, branch.outputVisual, ports.outputVisual);
+            }
+            paintSignalLine(g, juce::Point<int>(inputBus.x, inputMin),
+                               juce::Point<int>(inputBus.x, inputMax), ports.inputVisual);
+            paintSignalLine(g, juce::Point<int>(outputBus.x, outputMin),
+                               juce::Point<int>(outputBus.x, outputMax), ports.outputVisual);
+        }
+        if (const auto next = paintSignalGroup(g, first->groupNext))
+        {
+            paintSignalConnection(g, ports.output, next->input, ports.outputVisual, next->inputVisual);
+            ports.output = next->output;
+            ports.outputHasPetal = next->outputHasPetal;
+            ports.outputVisual = next->outputVisual;
+        }
+        return ports;
     }
 
     Size measureBranch(const int id, const int width) const
     {
-        const auto* node = findNode(id);
+        const auto* node = findLayoutNode(id);
         if (node == nullptr)
             return {};
 
         const auto child = measureGroup(node->serialNext, width);
         if (node->container) return child;
-        if (horizontal)
-            return { width + 2 * petalThickness + (child.width == 0 ? 0 : horizontalGroupGap(node->serialNext) + child.width),
-                     juce::jmax(rowHeight + 2 * petalThickness, child.height) };
-
-        return { juce::jmax(width + 2 * petalThickness, child.width),
-                 rowHeight + 2 * petalThickness + (child.height == 0 ? 0 : uiGap + child.height) };
+        return { width + 2 * petalExtent + (child.width == 0 ? 0 : serialGap + child.width),
+                 juce::jmax(width + 2 * petalExtent, child.height) };
     }
 
     Size measureGroupBody(const int firstId, const int width) const
     {
-        const auto* first = findNode(firstId);
+        const auto* first = findLayoutNode(firstId);
         if (first == nullptr)
             return {};
 
         const auto framed = first->parallelNext != 0;
         Size result;
         auto count = 0;
-        for (auto* node = first; node != nullptr; node = findNode(node->parallelNext))
+        for (auto* node = first; node != nullptr; node = findLayoutNode(node->parallelNext))
         {
             const auto branch = measureBranch(node->id, width);
-            if (horizontal)
-            {
-                result.width = juce::jmax(result.width, branch.width);
-                result.height += branch.height;
-            }
-            else
-            {
-                result.width += branch.width;
-                result.height = juce::jmax(result.height, branch.height);
-            }
+            result.width = juce::jmax(result.width, branch.width);
+            result.height += branch.height;
             ++count;
         }
-        if (horizontal)
-            result.height += uiGap * (count - 1);
-        else
-            result.width += uiGap * (count - 1);
+        result.height += getUiGap(*this) * (count - 1);
         if (framed)
         {
-            result.width += 2 * uiGap;
-            result.height += 2 * uiGap;
+            result.width += 2 * signalGroupPadding();
+            result.height += groupHeaderHeight() + 2 * getUiGap(*this);
         }
         return result;
     }
 
     Size measureGroup(const int firstId, const int width) const
     {
-        const auto* first = findNode(firstId);
+        const auto* first = findLayoutNode(firstId);
         if (first == nullptr)
             return {};
 
         const auto body = measureGroupBody(firstId, width);
-        const auto inset = first->parallelNext != 0 ? petalThickness : 0;
+        const auto inset = first->parallelNext != 0 && containersVisible() ? petalExtent : 0;
         const Size outer { body.width + 2 * inset, body.height + 2 * inset };
         if (first->groupNext != 0)
         {
             const auto child = measureGroup(first->groupNext, width);
-            if (horizontal)
-                return { outer.width + uiGapDouble + child.width, juce::jmax(outer.height, child.height) };
-            return { juce::jmax(outer.width, child.width), outer.height + uiGapDouble + child.height };
+            return { outer.width + serialGap + child.width, juce::jmax(outer.height, child.height) };
         }
         return outer;
     }
 
-    int laneWidth() const
+    int groupHeaderHeight() const { return juce::jmax(2 * getUiGap(*this), getCompactControlSize(*this) / 2 + 2 * controlEdgeInset); }
+
+    int instanceSize() const
     {
-        return 90;
+        return getSquareControlSize(*this);
     }
 
     void layoutBranch(const int id, const int x, const int y, const int width)
     {
-        const auto* node = findNode(id);
+        const auto* node = findLayoutNode(id);
         if (node != nullptr && node->container)
         {
             layoutGroup(node->serialNext, x, y, width);
@@ -919,118 +1158,98 @@ private:
             return;
 
         const auto branch = measureBranch(id, width);
-        const auto nameX = petalThickness + (horizontal ? x : x + (branch.width - width - 2 * petalThickness) / 2);
-        const auto nameY = petalThickness + (horizontal ? y + (branch.height - rowHeight - 2 * petalThickness) / 2 : y);
-        const juce::Rectangle<int> target { nameX - petalThickness, nameY - petalThickness,
-                                            width + 2 * petalThickness, rowHeight + 2 * petalThickness };
+        const auto nameX = petalExtent + x;
+        const auto nameY = petalExtent + y + (branch.height - width - 2 * petalExtent) / 2;
+        const juce::Rectangle<int> target { nameX - petalExtent, nameY - petalExtent,
+                                            width + 2 * petalExtent, width + 2 * petalExtent };
         found->second.fullBounds = interpolateBounds(found->second.startBounds, target, found->second.hasStartBounds);
-        found->second.name->setBounds(petalThickness, petalThickness, width, rowHeight);
-        locations[id] = found->second.fullBounds.reduced(petalThickness);
+        found->second.name->setBounds(petalExtent, petalExtent, width, width);
+        locations[id] = found->second.fullBounds.reduced(petalExtent);
         auto placePetal = [&target](RoutingPetal& petal, const juce::Rectangle<int> bounds, RoutingPetal::Side side)
         {
             petal.setSide(side);
             petal.setBounds(bounds.translated(-target.getX(), -target.getY()));
         };
-        const juce::Rectangle<int> rightAdd(nameX + width, nameY, petalThickness, rowHeight);
-        const juce::Rectangle<int> bottomAdd(nameX, nameY + rowHeight, width, petalThickness);
-        const juce::Rectangle<int> leftAdd(nameX - petalThickness, nameY, petalThickness, rowHeight);
-        const juce::Rectangle<int> topAdd(nameX, nameY - petalThickness, width, petalThickness);
-        placePetal(*found->second.addSerial, horizontal ? rightAdd : bottomAdd,
-                   horizontal ? RoutingPetal::Side::right : RoutingPetal::Side::bottom);
-        placePetal(*found->second.addSerialBefore, horizontal ? leftAdd : topAdd,
-                   horizontal ? RoutingPetal::Side::left : RoutingPetal::Side::top);
-        placePetal(*found->second.addParallel, horizontal ? bottomAdd : rightAdd,
-                   horizontal ? RoutingPetal::Side::bottom : RoutingPetal::Side::right);
-        placePetal(*found->second.addParallelBefore, horizontal ? topAdd : leftAdd,
-                   horizontal ? RoutingPetal::Side::top : RoutingPetal::Side::left);
+        const juce::Rectangle<int> rightAdd(nameX + width + petalGap, nameY, petalThickness, width);
+        const juce::Rectangle<int> bottomAdd(nameX, nameY + width + petalGap, width, petalThickness);
+        const juce::Rectangle<int> leftAdd(nameX - petalExtent, nameY, petalThickness, width);
+        const juce::Rectangle<int> topAdd(nameX, nameY - petalExtent, width, petalThickness);
+        placePetal(*found->second.addSerial, rightAdd, RoutingPetal::Side::right);
+        placePetal(*found->second.addSerialBefore, leftAdd, RoutingPetal::Side::left);
+        placePetal(*found->second.addParallel, bottomAdd, RoutingPetal::Side::bottom);
+        placePetal(*found->second.addParallelBefore, topAdd, RoutingPetal::Side::top);
 
         updateInstanceAppearance(id);
 
         if (node->serialNext != 0)
         {
             const auto child = measureGroup(node->serialNext, width);
-            if (horizontal)
-                layoutGroup(node->serialNext, x + width + 2 * petalThickness + horizontalGroupGap(node->serialNext),
-                            y + (branch.height - child.height) / 2, width);
-            else
-                layoutGroup(node->serialNext, x + (branch.width - child.width) / 2,
-                            y + rowHeight + 2 * petalThickness + uiGap, width);
+            layoutGroup(node->serialNext, x + width + 2 * petalExtent + serialGap,
+                        y + (branch.height - child.height) / 2, width);
         }
     }
 
     void layoutGroup(const int firstId, const int x, const int y, const int width)
     {
-        const auto* first = findNode(firstId);
+        const auto* first = findLayoutNode(firstId);
         if (first == nullptr)
             return;
 
-        const auto framed = first->parallelNext != 0;
+        const auto parallel = first->parallelNext != 0;
+        const auto framed = parallel;
+        const auto serialPadding = parallel ? signalGroupPadding() : 0;
         const auto group = measureGroup(firstId, width);
         const auto body = measureGroupBody(firstId, width);
-        const auto inset = framed ? petalThickness : 0;
-        const auto bodyX = inset + (horizontal ? x : x + (group.width - body.width - 2 * inset) / 2);
-        const auto bodyY = inset + (horizontal ? y + (group.height - body.height - 2 * inset) / 2 : y);
+        const auto inset = framed && containersVisible() ? petalExtent : 0;
+        const auto bodyX = inset + x;
+        const auto bodyY = inset + y + (group.height - body.height - 2 * inset) / 2;
         groupBodies[firstId] = { bodyX, bodyY, body.width, body.height };
-        if (framed)
+        if (framed && containersVisible())
         {
             frames[firstId] = groupBodies[firstId];
             if (const auto buttons = groupControls.find(firstId); buttons != groupControls.end())
             {
                 buttons->second.fullBounds = interpolateBounds(buttons->second.startBounds,
-                    groupBodies[firstId].expanded(petalThickness), buttons->second.hasStartBounds);
-                const auto currentBody = buttons->second.fullBounds.reduced(petalThickness);
+                    groupBodies[firstId].expanded(petalExtent), buttons->second.hasStartBounds);
+                const auto currentBody = buttons->second.fullBounds.reduced(petalExtent);
                 frames[firstId] = groupBodies[firstId] = currentBody;
                 const auto currentX = currentBody.getX(), currentY = currentBody.getY();
                 const auto currentWidth = currentBody.getWidth(), currentHeight = currentBody.getHeight();
                 const std::array<juce::Rectangle<int>, 4> bounds {
-                    juce::Rectangle<int>(currentX, currentY - petalThickness, currentWidth, petalThickness),
-                    juce::Rectangle<int>(currentX, currentY + currentHeight, currentWidth, petalThickness),
-                    juce::Rectangle<int>(currentX - petalThickness, currentY, petalThickness, currentHeight),
-                    juce::Rectangle<int>(currentX + currentWidth, currentY, petalThickness, currentHeight) };
+                    juce::Rectangle<int>(currentX, currentY - petalExtent, currentWidth, petalThickness),
+                    juce::Rectangle<int>(currentX, currentY + currentHeight + petalGap, currentWidth, petalThickness),
+                    juce::Rectangle<int>(currentX - petalExtent, currentY, petalThickness, currentHeight),
+                    juce::Rectangle<int>(currentX + currentWidth + petalGap, currentY, petalThickness, currentHeight) };
                 const std::array<RoutingPetal::Side, 4> sides { RoutingPetal::Side::top,
                     RoutingPetal::Side::bottom, RoutingPetal::Side::left, RoutingPetal::Side::right };
                 for (int index = 0; index < 4; ++index)
                 {
-                    const auto physicalSide = horizontal ? (index < 2 ? index + 2 : index - 2) : index;
+                    const auto physicalSide = index < 2 ? index + 2 : index - 2;
                     auto& petal = buttons->second.petals[static_cast<size_t>(index)];
                     petal->setSide(sides[static_cast<size_t>(physicalSide)]);
                     petal->setBounds(bounds[static_cast<size_t>(physicalSide)].translated(
                         -buttons->second.fullBounds.getX(), -buttons->second.fullBounds.getY()));
                 }
+                const auto cSize = getCompactControlSize(*this) / 2;
+                buttons->second.compensation->setBounds(currentX + currentWidth - cSize - controlEdgeInset - buttons->second.fullBounds.getX(),
+                    currentY + controlEdgeInset - buttons->second.fullBounds.getY(), cSize, cSize);
                 updateGroupAppearance(firstId);
             }
         }
 
-        if (horizontal)
+        auto branchY = bodyY + (framed ? groupHeaderHeight() : 0);
+        for (auto* node = first; node != nullptr; node = findLayoutNode(node->parallelNext))
         {
-            auto branchY = bodyY + (framed ? uiGap : 0);
-            for (auto* node = first; node != nullptr; node = findNode(node->parallelNext))
-            {
-                const auto branch = measureBranch(node->id, width);
-                layoutBranch(node->id, bodyX + (framed ? uiGap : 0), branchY, width);
-                branchY += branch.height + uiGap;
-            }
-        }
-        else
-        {
-            auto branchX = bodyX + (framed ? uiGap : 0);
-            const auto branchY = bodyY + (framed ? uiGap : 0);
-            for (auto* node = first; node != nullptr; node = findNode(node->parallelNext))
-            {
-                layoutBranch(node->id, branchX, branchY, width);
-                branchX += measureBranch(node->id, width).width + uiGap;
-            }
+            const auto branch = measureBranch(node->id, width);
+            layoutBranch(node->id, bodyX + serialPadding, branchY, width);
+            branchY += branch.height + getUiGap(*this);
         }
 
         if (first->groupNext != 0)
         {
             const auto child = measureGroup(first->groupNext, width);
-            if (horizontal)
-                layoutGroup(first->groupNext, bodyX + body.width + inset + uiGapDouble,
-                            y + (group.height - child.height) / 2, width);
-            else
-                layoutGroup(first->groupNext, x + (group.width - child.width) / 2,
-                            bodyY + body.height + inset + uiGapDouble, width);
+            layoutGroup(first->groupNext, bodyX + body.width + inset + serialGap,
+                        y + (group.height - child.height) / 2, width);
             return;
         }
     }
@@ -1041,6 +1260,7 @@ private:
         if (item == nullptr) return;
         auto& group = *item;
         const auto progress = group.appearance->value();
+        group.revealClip->setVisible(containersVisible());
         group.revealClip->setBounds(group.fullBounds);
         group.revealBody->setBounds(group.fullBounds.withPosition(0, 0));
         group.revealClip->setAlpha(static_cast<float>(progress));
@@ -1052,9 +1272,52 @@ private:
         if (item == nullptr) return;
         auto& instance = *item;
         const auto progress = instance.appearance->value();
-        const auto offset = slideOffset(instance.direction, instance.fullBounds, progress);
-        instance.revealClip->setBounds(instance.fullBounds);
-        instance.revealBody->setBounds(instance.fullBounds.withPosition(offset));
+        if (instance.origin && progress < 1.0)
+        {
+            auto origin = instance.origin->bounds;
+            const auto usePetal = [this, &origin, &instance](const RoutingPetal& petal)
+            {
+                if (petal.getSide() == instance.origin->side)
+                    origin = getLocalArea(&petal, petal.getLocalBounds());
+            };
+            if (instance.origin->group)
+            {
+                if (const auto source = groupControls.find(instance.origin->owner); source != groupControls.end())
+                    for (const auto& petal : source->second.petals) usePetal(*petal);
+            }
+            else if (const auto source = controls.find(instance.origin->owner); source != controls.end())
+                for (const auto* petal : {source->second.addSerial.get(), source->second.addSerialBefore.get(),
+                                          source->second.addParallel.get(), source->second.addParallelBefore.get()}) usePetal(*petal);
+            auto start = instance.fullBounds.withCentre(origin.getCentre());
+            auto clip = instance.fullBounds.getUnion(start);
+            switch (instance.direction)
+            {
+                case SlideDirection::down:
+                    start.setY(origin.getBottom() - start.getHeight());
+                    clip = clip.withTop(origin.getBottom()); break;
+                case SlideDirection::up:
+                    start.setY(origin.getY());
+                    clip = clip.withBottom(origin.getY()); break;
+                case SlideDirection::right:
+                    start.setX(origin.getRight() - start.getWidth());
+                    clip = clip.withLeft(origin.getRight()); break;
+                case SlideDirection::left:
+                    start.setX(origin.getX());
+                    clip = clip.withRight(origin.getX()); break;
+            }
+            const auto target = instance.fullBounds;
+            const auto x = juce::roundToInt(start.getX() + (target.getX()-start.getX()) * progress);
+            const auto y = juce::roundToInt(start.getY() + (target.getY()-start.getY()) * progress);
+            instance.revealClip->setBounds(clip);
+            instance.revealBody->setBounds(target.withPosition(x-clip.getX(), y-clip.getY()));
+        }
+        else
+        {
+            if (progress >= 1.0) instance.origin.reset();
+            const auto offset = slideOffset(instance.direction, instance.fullBounds, progress);
+            instance.revealClip->setBounds(instance.fullBounds);
+            instance.revealBody->setBounds(instance.fullBounds.withPosition(offset));
+        }
         instance.revealClip->setAlpha(1.0f);
     }
 
@@ -1067,7 +1330,7 @@ private:
 
     std::unique_ptr<BoxTextButton> makeButton(const juce::String& text)
     {
-        auto button = std::make_unique<BoxTextButton>(uiGreyLight);
+        auto button = std::make_unique<BoxTextButton>();
         button->setButtonText(text);
         button->setTextJustification(juce::Justification::centred);
         button->setClickingTogglesState(false);
@@ -1081,15 +1344,16 @@ private:
         {
             const auto isSource = moveSourceId == id;
             const auto isTarget = moveSourceId != 0 && ! isSource;
-            instance.name->setDragTargetHighlighted(isTarget);
+            instance.name->getProperties().set("routing.instance.dragging", controlDragActive && isSource);
+            instance.name->setDragTargetHighlighted(isTarget || (controlDragActive && isSource));
             instance.name->setMoveTargetAvailable(isTarget);
             const auto canInsert = moveSourceId == 0
                 ? ava::routing::getInstanceCount(displayedState) < ava::routing::maximumInstanceCount : true;
             for (auto* petal : { instance.addSerial.get(), instance.addParallel.get(),
                                  instance.addSerialBefore.get(), instance.addParallelBefore.get() })
             {
-                petal->setEnabled(canInsert);
-                petal->setMoveTarget(moveSourceId != 0);
+                petal->setDragSource(controlDragActive && isSource);
+                petal->setEnabled(canInsert && ! (moveSourceId != 0 && isSource));
             }
         }
         for (auto& [id, group] : groupControls)
@@ -1098,37 +1362,21 @@ private:
             for (auto& petal : group.petals)
             {
                 petal->setEnabled(moveSourceId != 0 || ava::routing::getInstanceCount(displayedState) < ava::routing::maximumInstanceCount);
-                petal->setMoveTarget(moveSourceId != 0);
             }
-        }
-    }
-
-    void timerCallback() override
-    {
-        if (! juce::ModifierKeys::getCurrentModifiersRealtime().isCtrlDown())
-        {
-            controlDragCancelled = true;
-            clearMove();
         }
     }
 
     void finishControlDrag(const juce::MouseEvent& event, const bool released)
     {
-        if (controlDragCancelled || moveSourceId == 0)
+        if (moveSourceId == 0)
             return;
-        if (! event.mods.isCtrlDown())
-        {
-            controlDragCancelled = true;
-            clearMove();
-            return;
-        }
         const auto position = getLocalPoint(event.eventComponent, event.position);
         std::function<void()> action;
         juce::Button* hoveredTarget = nullptr;
         const auto petalAction = [this, position] (RoutingPetal& petal) -> std::function<void()>
         {
             const auto local = petal.getLocalPoint(this, position).roundToInt();
-            return petal.isEnabled() && petal.hitTest(local.x, local.y) ? petal.onClick : nullptr;
+            return petal.isShowing() && petal.isEnabled() && petal.hitTest(local.x, local.y) ? petal.onClick : nullptr;
         };
         for (auto& [id, instance] : controls)
         {
@@ -1158,7 +1406,7 @@ private:
         updateControlDragHover(hoveredTarget);
         if (! released)
             return;
-        stopTimer();
+        controlDragActive = false;
         if (action != nullptr)
             action();
         clearMove();
@@ -1173,7 +1421,8 @@ private:
         for (auto& [id, instance] : controls)
         {
             juce::ignoreUnused(id);
-            update(*instance.name);
+            instance.name->setState(instance.name.get() == target || (controlDragActive && id == moveSourceId)
+                ? juce::Button::buttonOver : juce::Button::buttonNormal);
             for (auto* petal : { instance.addSerial.get(), instance.addSerialBefore.get(),
                                  instance.addParallel.get(), instance.addParallelBefore.get() })
                 update(*petal);
@@ -1188,7 +1437,7 @@ private:
 
     void clearMove()
     {
-        stopTimer();
+        controlDragActive = false;
         updateControlDragHover(nullptr);
         moveSourceId = 0;
         updateMoveTargets();
@@ -1206,34 +1455,36 @@ private:
     std::function<void(int, const juce::String&, juce::Component&)> renameAction;
     std::function<void()> topologyChanged;
     std::function<void()> layoutChanged;
-    ava::routing::State displayedState;
+    ava::routing::State displayedState, layoutState;
     std::map<int, InstanceControls> controls;
     std::map<int, GroupControls> groupControls, retiringGroups;
     std::map<int, InstanceControls> retiringControls;
     DisclosureAnimation reflow;
     std::optional<SlideDirection> pendingDirection;
-    int availableWidth = 0, availableHeight = 0;
+    std::optional<SlideOrigin> pendingOrigin;
+    int availableHeight = 0;
     int reflowGeneration = 0;
     bool retiredCleanupPending = false;
     std::map<int, juce::Rectangle<int>> locations;
     std::map<int, juce::Rectangle<int>> frames;
     std::map<int, juce::Rectangle<int>> groupBodies;
-    bool controlDragCancelled = false;
+    mutable std::vector<SignalPath> signalPaths;
+    std::vector<SignalPath> retiringSignalPaths;
+    bool controlDragActive = false;
     int moveSourceId = 0;
-    bool horizontal = false;
+    bool showContainers = false;
 };
 
 RoutingPanel::RoutingPanel(AvaAudioProcessor& processor)
     : parameters(processor.getValueTreeState()),
       content(std::make_unique<Content>(processor,
-          [this] (const int id, const juce::String& label)
+          [this] (const int id, const juce::String&)
           {
-              openInstance(id, label);
+              openInstance(id);
           },
-          [this] (const int id, const juce::String& label, juce::Component& anchor)
+          [this] (int id, const juce::String& label, juce::Component& anchor)
           {
-              if (onRenameRequest != nullptr)
-                  onRenameRequest(id, label, anchor);
+              if (onRenameRequest) onRenameRequest(id, label, anchor);
           },
           [this]
           {
@@ -1245,48 +1496,46 @@ RoutingPanel::RoutingPanel(AvaAudioProcessor& processor)
               resized();
           }))
 {
-    setOpaque(true);
+    viewport.onViewChanged = [this]
+    {
+        repaint();
+        if (updatingViewport || ! isShowing()) return;
+        const auto position = viewport.getViewPosition();
+        parameters.state.setProperty(shell_editor_ui::key("scroll.routing.x"), position.x, nullptr);
+        parameters.state.setProperty(shell_editor_ui::key("scroll.routing.y"), position.y, nullptr);
+    };
     viewport.setViewedComponent(content.get(), false);
-    scrollBarLookAndFeel = std::make_unique<FlatScrollBarLookAndFeel>();
-    viewport.getHorizontalScrollBar().setLookAndFeel(scrollBarLookAndFeel.get());
-    viewport.getVerticalScrollBar().setLookAndFeel(scrollBarLookAndFeel.get());
-    viewport.setScrollBarsShown(true, true);
-    viewport.setScrollBarThickness(uiGap);
+    viewport.setScrollBarsShown(false, false, true, true);
     viewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     viewport.setWantsKeyboardFocus(false);
     addAndMakeVisible(viewport);
-
-    backButton = std::make_unique<BoxTextButton>(uiGreyLight);
-    backButton->setButtonText({});
-    backButton->setTablerIcon("arrow-back-up");
-    backButton->onClick = [this]
+    containersButton = std::make_unique<BoxTextButton>();
+    containersButton->setButtonText("CN");
+    containersButton->setComponentID("routing.containers");
+    configureContainerButton(*containersButton);
+    containersButton->getProperties().set("disableDockSelection", true);
+    containersButton->onClick = [this]
     {
-        openInstanceId = 0;
-        resized();
+        const auto visible = !bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), false));
+        parameters.state.setProperty(shell_editor_ui::key("routing.containers"), visible, nullptr);
+        content->setContainersVisible(visible);
+        containersButton->setSelectionHighlighted(visible);
     };
-    addAndMakeVisible(*backButton);
-
-    titleButton = std::make_unique<BoxTextButton>(uiGreyLight);
-    titleButton->setTextJustification(juce::Justification::centred);
-    titleButton->setInterceptsMouseClicks(false, false);
-    addAndMakeVisible(*titleButton);
-
-    emptyLabel = std::make_unique<BoxTextButton>(uiGreyLight);
-    emptyLabel->setButtonText("EMPTY");
-    emptyLabel->setTextJustification(juce::Justification::centred);
-    emptyLabel->setInterceptsMouseClicks(false, false);
-    addAndMakeVisible(*emptyLabel);
+    addAndMakeVisible(*containersButton);
+    const auto visible = bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), false));
+    content->setContainersVisible(visible);
+    containersButton->setSelectionHighlighted(visible);
 
     resized();
+    updatingViewport = false;
     startTimerHz(10);
 }
 
 RoutingPanel::~RoutingPanel()
 {
     stopTimer();
+    viewport.onViewChanged = {};
     viewport.setViewedComponent(nullptr, false);
-    viewport.getHorizontalScrollBar().setLookAndFeel(nullptr);
-    viewport.getVerticalScrollBar().setLookAndFeel(nullptr);
 }
 
 void RoutingPanel::setOnOpenRoot(std::function<void()> action)
@@ -1304,13 +1553,12 @@ void RoutingPanel::setOnTopologyChanged(std::function<void()> action)
     onTopologyChanged = std::move(action);
 }
 
-void RoutingPanel::setOnRenameRequest(
-    std::function<void(int, const juce::String&, juce::Component&)> action)
+void RoutingPanel::setOnRenameRequest(std::function<void(int, const juce::String&, juce::Component&)> action)
 {
     onRenameRequest = std::move(action);
 }
 
-void RoutingPanel::openInstance(const int instanceId, const juce::String& label)
+void RoutingPanel::openInstance(const int instanceId)
 {
     if (instanceId == ava::routing::readState(parameters.state).rootInstanceId)
     {
@@ -1319,15 +1567,7 @@ void RoutingPanel::openInstance(const int instanceId, const juce::String& label)
         return;
     }
 
-    if (onOpenInstance != nullptr)
-    {
-        onOpenInstance(instanceId);
-        return;
-    }
-
-    openInstanceId = instanceId;
-    titleButton->setButtonText(label);
-    resized();
+    if (onOpenInstance != nullptr) onOpenInstance(instanceId);
 }
 
 bool RoutingPanel::cancelMoveMode()
@@ -1335,57 +1575,57 @@ bool RoutingPanel::cancelMoveMode()
     return content->cancelMoveMode();
 }
 
-void RoutingPanel::paint(juce::Graphics& graphics)
+void RoutingPanel::restoreUiState()
 {
-    graphics.fillAll(uiBackground);
+    const juce::ScopedValueSetter<bool> restoreGuard(updatingViewport, true);
+    content->refresh();
+    const auto visible = bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), false));
+    content->setContainersVisible(visible);
+    containersButton->setSelectionHighlighted(visible);
+    restoreScrollPending = true;
+    resized();
+}
+
+void RoutingPanel::scrollToOrigin()
+{
+    restoreScrollPending = false;
+    scrollReflowActive = false;
+    scrollReflowGeneration = content->getReflowGeneration();
+    viewport.setViewPosition(0, 0);
+    parameters.state.setProperty(shell_editor_ui::key("scroll.routing.x"), 0, nullptr);
+    parameters.state.setProperty(shell_editor_ui::key("scroll.routing.y"), 0, nullptr);
+    repaint();
+}
+
+void RoutingPanel::placeContainersButton(juce::Component& parent, const juce::Rectangle<int> routingFrame)
+{
+    if (containersButton->getParentComponent() != &parent)
+        parent.addChildComponent(*containersButton);
+    const auto size = getCompactControlSize(*this) / 2;
+    containersButton->setBounds(routingFrame.getRight() - controlEdgeInset - size,
+                               routingFrame.getY() + controlEdgeInset, size, size);
+    containersButton->setVisible(isVisible());
+    containersButton->toFront(false);
+}
+
+void RoutingPanel::visibilityChanged()
+{
+    if (containersButton != nullptr) containersButton->setVisible(isVisible());
 }
 
 void RoutingPanel::resized()
 {
-    const auto detailOpen = openInstanceId != 0;
-    viewport.setVisible(! detailOpen);
-    backButton->setVisible(detailOpen);
-    titleButton->setVisible(detailOpen);
-    emptyLabel->setVisible(detailOpen);
-
-    if (detailOpen)
-    {
-        viewport.setBounds({});
-        auto bounds = getLocalBounds();
-        auto titleRow = bounds.removeFromTop(rowHeight);
-        backButton->setBounds(titleRow.removeFromLeft(rowHeight));
-        titleRow.removeFromLeft(parameterGap);
-        titleButton->setBounds(titleRow);
-        bounds.removeFromTop(uiGap);
-        emptyLabel->setBounds(bounds.removeFromTop(rowHeight));
-        return;
-    }
-
+    const juce::ScopedValueSetter<bool> layoutGuard(updatingViewport, true);
     viewport.setBounds(getLocalBounds());
-    const auto thickness = viewport.getScrollBarThickness();
-    auto verticalNeeded = false;
-    auto horizontalNeeded = false;
-    for (auto attempt = 0; attempt < 3; ++attempt)
+    if (containersButton != nullptr && containersButton->getParentComponent() == this)
     {
-        const auto availableWidth = juce::jmax(1, viewport.getWidth()
-            - (verticalNeeded ? thickness : 0));
-        const auto nextHorizontalNeeded = content->getPreferredWidth() > availableWidth;
-        const auto availableHeight = juce::jmax(1, viewport.getHeight()
-            - (nextHorizontalNeeded ? thickness : 0));
-        const auto nextVerticalNeeded = content->getPreferredHeight() > availableHeight;
-        if (nextHorizontalNeeded == horizontalNeeded && nextVerticalNeeded == verticalNeeded)
-            break;
-        horizontalNeeded = nextHorizontalNeeded;
-        verticalNeeded = nextVerticalNeeded;
+        const auto size = getCompactControlSize(*this) / 2;
+        containersButton->setBounds(juce::jmax(0, getWidth() - controlEdgeInset - size), controlEdgeInset, size, size);
+        containersButton->toFront(false);
     }
-
-    const auto visibleWidth = juce::jmax(1, viewport.getWidth()
-        - (verticalNeeded ? thickness : 0));
-    const auto visibleHeight = juce::jmax(1, viewport.getHeight()
-        - (horizontalNeeded ? thickness : 0));
-    content->setAvailableSize(viewport.getWidth(), viewport.getHeight());
-    content->setSize(juce::jmax(visibleWidth, content->getPreferredWidth()),
-                     juce::jmax(visibleHeight, content->getPreferredHeight()));
+    content->setAvailableHeight(viewport.getHeight());
+    content->setSize(juce::jmax(viewport.getWidth(), content->getPreferredWidth()),
+                     juce::jmax(viewport.getHeight(), content->getPreferredHeight()));
     if (scrollReflowGeneration != content->getReflowGeneration())
     {
         scrollReflowGeneration = content->getReflowGeneration();
@@ -1394,14 +1634,8 @@ void RoutingPanel::resized()
     }
     if (scrollReflowActive)
     {
-        auto targetVertical = false, targetHorizontal = false;
-        for (auto attempt = 0; attempt < 3; ++attempt)
-        {
-            targetHorizontal = content->getTargetPreferredWidth() > viewport.getWidth() - (targetVertical ? thickness : 0);
-            targetVertical = content->getTargetPreferredHeight() > viewport.getHeight() - (targetHorizontal ? thickness : 0);
-        }
-        const auto finalWidth = viewport.getWidth() - (targetVertical ? thickness : 0);
-        const auto finalHeight = viewport.getHeight() - (targetHorizontal ? thickness : 0);
+        const auto finalWidth = viewport.getWidth();
+        const auto finalHeight = viewport.getHeight();
         const auto targetX = juce::jlimit(0, juce::jmax(0, content->getTargetPreferredWidth() - finalWidth), scrollReflowStart.x);
         const auto targetY = juce::jlimit(0, juce::jmax(0, content->getTargetPreferredHeight() - finalHeight), scrollReflowStart.y);
         const auto progress = content->getReflowProgress();
@@ -1409,29 +1643,26 @@ void RoutingPanel::resized()
                                  juce::roundToInt(scrollReflowStart.y + (targetY - scrollReflowStart.y) * progress));
         if (! content->isReflowRunning()) scrollReflowActive = false;
     }
+    if (restoreScrollPending && viewport.getWidth() > 0 && viewport.getHeight() > 0)
+    {
+        viewport.setViewPosition(static_cast<int>(parameters.state.getProperty(shell_editor_ui::key("scroll.routing.x"), 0)),
+                                 static_cast<int>(parameters.state.getProperty(shell_editor_ui::key("scroll.routing.y"), 0)));
+        restoreScrollPending = false;
+    }
+    repaint();
 }
 
 void RoutingPanel::timerCallback()
 {
+    const auto visible = bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), false));
+    content->setContainersVisible(visible);
+    containersButton->setSelectionHighlighted(visible);
     const auto previousHeight = content->getPreferredHeight();
     const auto previousWidth = content->getPreferredWidth();
     content->refresh();
 
-    if (openInstanceId != 0)
-    {
-        const auto label = content->getDisplayNameFor(openInstanceId);
-        if (label.isEmpty())
-        {
-            openInstanceId = 0;
-            resized();
-        }
-        else if (titleButton->getButtonText() != label)
-        {
-            titleButton->setButtonText(label);
-        }
-    }
-    else if (content->getPreferredHeight() != previousHeight
-             || content->getPreferredWidth() != previousWidth)
+    if (content->getPreferredHeight() != previousHeight
+        || content->getPreferredWidth() != previousWidth)
     {
         resized();
     }

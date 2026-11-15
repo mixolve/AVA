@@ -1,325 +1,215 @@
 #include "Editor.h"
 #include "Page.h"
 #include "UiSupport.h"
-
 #include "../shell/ChoiceControl.h"
-#include "../shell/LocalParameterControl.h"
 #include "../shell/ParameterControl.h"
-
-#include <utility>
 
 using namespace crossover_ui;
 
 class CrossoverSettingsPage final : public CrossoverModulePage
 {
 public:
-    explicit CrossoverSettingsPage(CrossoverModuleComponent& ownerIn)
-        : owner(ownerIn)
+    explicit CrossoverSettingsPage(CrossoverModuleComponent& ownerIn) : owner(ownerIn)
     {
-        if (! owner.config.showCrossoverControls)
-            return;
-
+        // The CROSSOVER and INPUT controls are now one uninterrupted grid.
+        // No nested dark #444444 section headers or collapsed controls.
+        if (!owner.config.showCrossoverControls) return;
         if (owner.config.processingInputParameterId.isNotEmpty())
         {
             processingInputControl = std::make_unique<ChoiceControl>(owner.valueTreeState,
-                owner.config.processingInputParameterId, "CH-IN");
-            processingInputControl->onValueChanged = [this]
-            {
-                if (owner.config.markParametersDirty) owner.config.markParametersDirty();
-                owner.clearFocus();
-            };
+                owner.config.processingInputParameterId, "CHANNEL INPUT");
+            processingInputControl->setBottomIndicatorsVisible(false, false);
             addAndMakeVisible(*processingInputControl);
         }
-
-        const auto makeSoloButton = [this] (const juce::String& id, const char* label,
-            std::unique_ptr<BoxTextButton>& button,
-            std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>& attachment)
+        const auto makeParameter = [this](const juce::String& id, const char* label)
         {
-            if (id.isEmpty()) return;
-            button = makeTextButton(label);
-            button->setClickingTogglesState(true);
-            button->getProperties().set(juce::Identifier("oscParameterId"), id);
-            auto* target = button.get();
-            button->setLongPressPromptActions({}, [this, id, label, target]
-            {
-                owner.assignButtonToHostSlot(id, label, target);
-            });
-            button->onClick = [this]
-            {
-                if (owner.config.markParametersDirty) owner.config.markParametersDirty();
-                owner.clearFocus();
-            };
-            addAndMakeVisible(*button);
-            attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-                owner.valueTreeState, id, *button);
+            auto control = std::make_unique<ParameterControl>(owner.valueTreeState, id, label, 0);
+            control->setBottomIndicatorsVisible(false, false);
+            addAndMakeVisible(*control);
+            return control;
         };
-        makeSoloButton(owner.config.soloInstanceParameterId, "SOLO-INS", soloInstanceButton, soloInstanceAttachment);
-        makeSoloButton(owner.config.soloChannelParameterId, "SOLO-CH", soloChannelButton, soloChannelAttachment);
-
-        autoSoloButton = makeTextButton("AUTO-SOLO");
-        if (owner.config.makeCrossoverParameterId != nullptr)
-            autoSoloButton->getProperties().set(juce::Identifier("oscParameterId"),
-                                                owner.config.makeCrossoverParameterId("auto-solo"));
-        autoSoloButton->setClickingTogglesState(true);
-        autoSoloButton->setToggleState(owner.autoSoloEnabled, juce::dontSendNotification);
-        autoSoloButton->setLongPressPromptActions({}, [this]
+        splitCountControl = makeParameter(owner.config.makeCrossoverSplitCountParameterId(), "XOVERS");
+        splitCountControl->setDiscreteChoiceIndicator(static_cast<int>(splitControls.size()) + 1);
+        splitCountControl->onValueChanged = [this] { owner.activeSplitCountChanged(); };
+        if (owner.config.soloInstanceParameterId.isNotEmpty())
+            soloInstanceControl = makeParameter(owner.config.soloInstanceParameterId, "INSTANCE SOLO");
+        if (owner.config.soloChannelParameterId.isNotEmpty())
+            soloChannelControl = makeParameter(owner.config.soloChannelParameterId, "CHANNEL SOLO");
+        autoSoloControl = makeParameter(owner.config.makeCrossoverParameterId("auto-solo"), "AUTO-SOLO");
+        autoSoloControl->onValueChanged = [this]
         {
-            if (owner.config.makeCrossoverParameterId != nullptr)
-                owner.assignButtonToHostSlot(owner.config.makeCrossoverParameterId("auto-solo"),
-                                             "AUTO-SOLO",
-                                             autoSoloButton.get());
-        });
-        autoSoloButton->onClick = [this]
-        {
-            if (! isAutoSoloAvailable())
-            {
-                refreshAutoSoloButtonState();
-                return;
-            }
-
-            owner.setAutoSoloEnabled(autoSoloButton->getToggleState());
-            owner.clearFocus();
+            owner.setAutoSoloEnabled(autoSoloControl->getValue() >= 0.5);
         };
-        addAndMakeVisible(*autoSoloButton);
-
         soloModeControl = std::make_unique<LocalChoiceControl>("SOLO-MODE",
-                                                                juce::StringArray { "EXCLUSIVE", "INCLUSIVE" },
-                                                                0);
+            juce::StringArray { "EXCL", "INCL" }, 0);
+        soloModeControl->setBottomIndicatorsVisible(false, false);
         soloModeControl->onValueChanged = [this]
         {
             owner.setManualSoloInclusive(soloModeControl->getSelectedChoiceIndex() == 1);
-            owner.clearFocus();
         };
         addAndMakeVisible(*soloModeControl);
-
-        addCrossoverButton = makeTextButton("XOV-ADD");
-        addCrossoverButton->getProperties().set(juce::Identifier("oscParameterId"),
-                                                "xov-add");
-        addCrossoverButton->onClick = [this]
-        {
-            owner.changeActiveSplitCount(1);
-            owner.clearFocus();
-        };
-        addAndMakeVisible(*addCrossoverButton);
-
-        removeCrossoverButton = makeTextButton("XOV-DEL");
-        removeCrossoverButton->getProperties().set(juce::Identifier("oscParameterId"),
-                                                   "xov-del");
-        removeCrossoverButton->onClick = [this]
-        {
-            owner.changeActiveSplitCount(-1);
-            owner.clearFocus();
-        };
-        addAndMakeVisible(*removeCrossoverButton);
-
         for (size_t index = 0; index < splitControls.size(); ++index)
         {
-            auto control = std::make_unique<ParameterControl>(
-                owner.valueTreeState,
+            auto control = std::make_unique<ParameterControl>(owner.valueTreeState,
                 owner.config.makeCrossoverParameterId(splitParameterSuffixes[index]),
-                splitLabels[index],
-                owner.config.crossoverDecimals);
-            control->onValueChanged = [this, index]
-            {
-                owner.constrainSplitFrequency(index);
-            };
+                splitLabels[index], owner.config.crossoverDecimals);
+            control->setBottomIndicatorsVisible(false, false);
             addAndMakeVisible(*control);
             splitControls[index] = std::move(control);
         }
-
+        if (owner.config.copyInstanceAll && owner.config.pasteInstanceAll)
+        {
+            copyAllControl = std::make_unique<PushControl>("COPY-ALL");
+            pasteAllControl = std::make_unique<PushControl>("PASTE-ALL");
+            for (auto* button : { copyAllControl.get(), pasteAllControl.get() })
+            {
+                button->setBottomIndicatorsVisible(false, false);
+                addAndMakeVisible(*button);
+            }
+            copyAllControl->onTrigger = [this]
+            {
+                if (owner.config.copyInstanceAll) owner.config.copyInstanceAll();
+                owner.clearFocus();
+            };
+            pasteAllControl->onTrigger = [this]
+            {
+                if (owner.config.pasteInstanceAll) owner.config.pasteInstanceAll();
+                owner.clearFocus();
+            };
+        }
+        syncTypeControl = std::make_unique<ChoiceControl>(owner.valueTreeState,
+            owner.config.makeCrossoverParameterId("sync-type"), "NOTE SYNC");
+        syncTypeControl->setBottomIndicatorsVisible(false, false);
+        addAndMakeVisible(*syncTypeControl);
+        bpmControl = std::make_unique<ParameterControl>(owner.valueTreeState,
+            owner.config.makeCrossoverParameterId("bpm"), "MANUAL BPM", 2);
+        bpmControl->setBottomIndicatorsVisible(false, false);
+        addAndMakeVisible(*bpmControl);
+        syncTypeControl->onValueChanged = [this] { refreshExternalState(); };
         refreshExternalState();
+    }
 
+    std::array<juce::Component*, 2> getMainSyncControls() const override
+    {
+        return {syncTypeControl.get(), bpmControl.get()};
+    }
+
+    std::vector<juce::Component*> getInstanceControls() const override
+    {
+        std::vector<juce::Component*> controls;
+        // The INSTANCE page uses a single grid, not the old separate
+        // CROSSOVER and INPUT rows. Keep their original reading order.
+        for (const auto& group : controlGroups())
+            for (const auto& row : group)
+                for (const auto& cell : row)
+                    if (cell.component != nullptr) controls.push_back(cell.component);
+        return controls;
+    }
+
+    InstanceMainRows getInstanceMainRows() const override
+    {
+        InstanceMainRows rows;
+        rows.secondary = {soloInstanceControl.get(), processingInputControl.get(), soloChannelControl.get()};
+        rows.splits[0] = splitCountControl.get();
+        for (size_t i = 0; i < splitControls.size(); ++i)
+            rows.splits[i + 1] = splitControls[i].get();
+        rows.actions = {autoSoloControl.get(), soloModeControl.get(),
+                        copyAllControl.get(), pasteAllControl.get()};
+        return rows;
     }
 
     int getPreferredHeight() const override
     {
-        const auto height = getFlatPreferredHeight();
-        return height;
-    }
-
-    int getFlatPreferredHeight() const
-    {
-        if (! owner.config.showCrossoverControls)
-            return 0;
-
-        auto height = 0;
-
-        if (processingInputControl != nullptr)
-            height += processingInputControl->getPreferredHeight() + verticalGap * 2;
-
-        if (soloInstanceButton != nullptr || soloChannelButton != nullptr)
-            height += rowHeight + verticalGap;
-
-        height += rowHeight;
-
-        for (const auto& control : splitControls)
-        {
-            if (control != nullptr)
-                height += verticalGap + control->getPreferredHeight();
-        }
-
-        height += verticalGap + rowHeight;
-
-        if (owner.config.showAutoSolo)
-            height += verticalGap + rowHeight;
-
-        height += verticalGap + rowHeight;
-
-        return height + moduleContentBottomGap;
+        const auto width = juce::jmax(1, getWidth() - 2 * (controlBlockPadding + controlBlockFrameThickness));
+        int height = controlBlockFrameOutset;
+        bool first = true;
+        for (const auto& group : controlGroups())
+            for (const auto& row : group)
+            {
+                if (row.empty()) continue;
+                if (!first) height += getUiRowGap(*this);
+                height += measureControlGrid(*this, {0, 0, width, 0}, row).getHeight();
+                first = false;
+            }
+        return height + controlBlockFrameOutset;
     }
 
     void refreshExternalState() override
     {
-        if (! owner.config.showCrossoverControls)
-            return;
-
+        if (!owner.config.showCrossoverControls) return;
         if (processingInputControl != nullptr && owner.config.isProcessingInputAvailable)
             if (auto* parameter = dynamic_cast<juce::AudioParameterChoice*>(
                     owner.valueTreeState.getParameter(owner.config.processingInputParameterId)))
                 for (int choice = 0; choice < parameter->choices.size(); ++choice)
                     processingInputControl->setChoiceEnabled(choice, owner.config.isProcessingInputAvailable(choice));
-
-        const auto activeSplitCount = owner.getActiveSplitCount();
-        const auto canAdd = activeSplitCount < splitControls.size();
-        const auto canRemove = activeSplitCount > 0;
-
-        if (addCrossoverButton != nullptr)
+        if (autoSoloControl != nullptr)
         {
-            addCrossoverButton->setEnabled(canAdd);
-            addCrossoverButton->setAlpha(1.0f);
+            const auto enabled = autoSoloControl->getValue() >= 0.5;
+            if (owner.autoSoloEnabled != enabled) owner.setAutoSoloEnabled(enabled);
+            autoSoloControl->setInteractionEnabled(owner.getActiveSplitCount() > 0);
         }
-
-        if (removeCrossoverButton != nullptr)
-        {
-            removeCrossoverButton->setEnabled(canRemove);
-            removeCrossoverButton->setAlpha(1.0f);
-        }
-
-        refreshAutoSoloButtonState();
-        refreshSoloModeButtonState();
-
+        bpmControl->setInteractionEnabled(syncTypeControl->getSelectedChoiceIndex() == 1);
+        soloModeControl->setSelectedChoiceIndex(owner.manualSoloInclusive ? 1 : 0, false);
+        soloModeControl->setInteractionEnabled(!owner.autoSoloEnabled && owner.getActiveSplitCount() > 0);
         for (size_t index = 0; index < splitControls.size(); ++index)
-        {
-            if (auto* control = splitControls[index].get())
-            {
-                const auto enabled = index < activeSplitCount;
-                control->setEnabled(true);
-                control->setAlpha(1.0f);
-                control->setInteractionEnabled(enabled);
-
-                if (enabled)
-                    control->clearOverrideText();
-                else
-                    control->setOverrideText("OFF");
-            }
-        }
+            splitControls[index]->setInteractionEnabled(index < owner.getActiveSplitCount());
     }
 
     void resized() override
     {
-        if (! owner.config.showCrossoverControls)
-            return;
-
-        auto bounds = getLocalBounds().withHeight(juce::jmax(getHeight(), getFlatPreferredHeight()));
-
-        auto placeButton = [&bounds] (BoxTextButton* button)
-        {
-            if (button == nullptr)
-                return;
-
-            button->setBounds(bounds.removeFromTop(rowHeight));
-
-            if (! bounds.isEmpty())
-                bounds.removeFromTop(verticalGap);
-        };
-
-        auto placeControl = [&bounds] (auto* control)
-        {
-            if (control == nullptr)
-                return;
-
-            control->setBounds(bounds.removeFromTop(control->getPreferredHeight()));
-
-            if (! bounds.isEmpty())
-                bounds.removeFromTop(verticalGap);
-        };
-
-        if (processingInputControl != nullptr)
-        {
-            placeControl(processingInputControl.get());
-        }
-        if (soloInstanceButton != nullptr && soloChannelButton != nullptr)
-        {
-            auto row = bounds.removeFromTop(rowHeight);
-            const auto width = (row.getWidth() - verticalGap) / 2;
-            soloInstanceButton->setBounds(row.removeFromLeft(width));
-            row.removeFromLeft(verticalGap);
-            soloChannelButton->setBounds(row);
-            bounds.removeFromTop(verticalGap);
-        }
-        if (processingInputControl != nullptr) bounds.removeFromTop(verticalGap);
-        placeButton(addCrossoverButton.get());
-
-        for (auto& control : splitControls)
-            placeControl(control.get());
-
-        placeButton(removeCrossoverButton.get());
-
-        if (owner.config.showAutoSolo)
-            placeButton(autoSoloButton.get());
-        else if (autoSoloButton != nullptr)
-            autoSoloButton->setBounds({});
-
-        placeControl(soloModeControl.get());
-
-        refreshExternalState();
+        const auto padding = controlBlockPadding + controlBlockFrameThickness;
+        controlBlockFrames.clear();
+        int rowY = controlBlockFrameOutset;
+        bool first = true;
+        for (const auto& group : controlGroups())
+            for (const auto& row : group)
+            {
+                if (row.empty()) continue;
+                if (!first) rowY += getUiRowGap(*this);
+                for (const auto& cell : row)
+                    if (cell.component != nullptr) cell.component->setVisible(true);
+                const auto occupied = layoutControlGrid(*this,
+                    {padding, rowY, getWidth() - 2 * padding, 0}, row);
+                rowY = occupied.getBottom();
+                first = false;
+            }
     }
 
-    void mouseDown(const juce::MouseEvent&) override
-    {
-        owner.clearFocus();
-    }
+    void mouseDown(const juce::MouseEvent&) override { owner.clearFocus(); }
 
 private:
-    bool isAutoSoloAvailable() const
+    using ControlRow = std::vector<ControlGridCell>;
+    using ControlGroup = std::vector<ControlRow>;
+
+    std::array<ControlGroup, 2> controlGroups() const
     {
-        return owner.getActiveSplitCount() > 0;
-    }
-
-    void refreshAutoSoloButtonState()
-    {
-        if (autoSoloButton == nullptr)
-            return;
-
-        autoSoloButton->setVisible(owner.config.showAutoSolo);
-        autoSoloButton->setToggleState(owner.autoSoloEnabled, juce::dontSendNotification);
-
-        const auto available = owner.config.showAutoSolo && isAutoSoloAvailable();
-        autoSoloButton->setEnabled(available);
-        autoSoloButton->setAlpha(1.0f);
-    }
-
-    void refreshSoloModeButtonState()
-    {
-        if (soloModeControl == nullptr)
-            return;
-
-        soloModeControl->setSelectedChoiceIndex(owner.manualSoloInclusive ? 1 : 0, false);
-        const auto available = ! owner.autoSoloEnabled && owner.getActiveSplitCount() > 0;
-        soloModeControl->setInteractionEnabled(available);
-        soloModeControl->setAlpha(1.0f);
+        std::array<ControlGroup, 2> groups;
+        const auto add = [&groups](size_t group, size_t row, juce::Component* field)
+        {
+            if (field == nullptr) return;
+            if (groups[group].size() <= row) groups[group].resize(row + 1);
+            groups[group][row].push_back({field});
+        };
+        add(0, 0, splitCountControl.get());
+        add(0, 0, autoSoloControl.get());
+        add(0, 0, soloModeControl.get());
+        // All five split frequencies stay on CROSSOVER's second row.
+        for (const auto& control : splitControls) add(0, 1, control.get());
+        add(1, 0, processingInputControl.get());
+        add(1, 0, soloInstanceControl.get());
+        add(1, 0, soloChannelControl.get());
+        add(1, 0, copyAllControl.get());
+        add(1, 0, pasteAllControl.get());
+        return groups;
     }
 
     CrossoverModuleComponent& owner;
-    std::unique_ptr<ChoiceControl> processingInputControl;
-    std::unique_ptr<BoxTextButton> soloInstanceButton, soloChannelButton;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> soloInstanceAttachment, soloChannelAttachment;
-    std::unique_ptr<BoxTextButton> autoSoloButton;
+    std::unique_ptr<ChoiceControl> processingInputControl, syncTypeControl;
+    std::unique_ptr<ParameterControl> bpmControl;
+    std::unique_ptr<ParameterControl> splitCountControl, soloInstanceControl, soloChannelControl, autoSoloControl;
+    std::unique_ptr<PushControl> copyAllControl, pasteAllControl;
     std::unique_ptr<LocalChoiceControl> soloModeControl;
-    std::unique_ptr<BoxTextButton> addCrossoverButton;
-    std::unique_ptr<BoxTextButton> removeCrossoverButton;
     std::array<std::unique_ptr<ParameterControl>, splitControlCount> splitControls;
-
 };
 
 std::unique_ptr<CrossoverModulePage> makeCrossoverSettingsPage(CrossoverModuleComponent& owner)

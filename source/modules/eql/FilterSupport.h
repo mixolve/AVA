@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Processor.h"
+#include "../shared/ParameterFormatting.h"
 
 inline constexpr double filterPhaseDegreesPerDb = 7.5;
 
@@ -39,6 +40,34 @@ inline FilterControlAvailability getFilterControlAvailability(const EqlModulePro
     return { ! volume && ! cut, ! volume && type != Type::tilt, ! volume,
              type == Type::bell && orderChoice != 0, ! cut };
 }
+
+inline ava::modules::parameters::NumericPresentation gainPresentation(bool degrees)
+{
+    return degrees ? ava::modules::parameters::NumericPresentation { filterPhaseDegreesPerDb, {-180.0, 180.0} }
+                   : ava::modules::parameters::NumericPresentation {};
+}
+
+inline ava::modules::parameters::NumericPresentation frequencyPresentation(EqlModuleProcessor::FilterType type)
+{
+    return {1.0, {minimumVisibleFilterFrequency,
+        type == EqlModuleProcessor::FilterType::lowCut ? maximumLowCutFrequency : maximumVisibleFilterFrequency}};
+}
+struct FilterParameterDomain {
+    enum Kind { none, frequency, gain } kind = none;
+    const EqlModuleProcessor* model = nullptr;
+    bool isEditing() const noexcept { return model != nullptr && model->isModelEditInProgress(); }
+    const std::atomic<float>* type = nullptr;
+    const std::atomic<float>* order = nullptr;
+    const std::atomic<float>* phase = nullptr;
+    ava::modules::parameters::NumericPresentation presentation() const noexcept {
+        if (kind == none || type == nullptr) return {};
+        const auto filterType = EqlModuleProcessor::filterTypeFromChoiceIndex(juce::roundToInt(type->load()));
+        if (kind == frequency) return frequencyPresentation(filterType);
+        const auto degrees = phase != nullptr && phase->load() >= 0.5f
+            && getFilterControlAvailability(filterType, order != nullptr ? juce::roundToInt(order->load()) : 2).phase;
+        return degrees ? gainPresentation(true) : ava::modules::parameters::NumericPresentation {1.0, {-48.0, 48.0}};
+    }
+};
 
 struct ShelfSlopeBlend
 {

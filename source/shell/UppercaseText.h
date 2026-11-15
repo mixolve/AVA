@@ -28,3 +28,59 @@ public:
     juce::String filterNewText(juce::TextEditor&, const juce::String& text) override
     { return uppercaseText(text); }
 };
+
+// Physical-key equivalence for Russian and English keyboard layouts.
+// This is not transliteration: ЕРКУЫРЩДВ uses the keys of THRESHOLD.
+// Bidirectional matching lets the user search without switching input language.
+inline juce::String swapKeyboardLayout(const juce::String& text)
+{
+    const juce::String russian = juce::String::fromUTF8("ЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ");
+    const juce::String english = "`QWERTYUIOP[]ASDFGHJKL;'ZXCVBNM,.";
+    const auto upper = uppercaseText(text);
+    juce::String swapped;
+    for (auto chars = upper.getCharPointer(); !chars.isEmpty();)
+    {
+        const auto ch = chars.getAndAdvance();
+        const auto ru = russian.indexOfChar(ch);
+        const auto en = english.indexOfChar(ch);
+        if (ru >= 0) swapped += juce::String::charToString(english[ru]);
+        else if (en >= 0) swapped += juce::String::charToString(russian[en]);
+        else swapped += juce::String::charToString(ch);
+    }
+    return swapped;
+}
+
+// Convert Cyrillic keystrokes to their English physical-key equivalents in
+// ordinary value/name editors. This keeps decimal punctuation usable without
+// changing the OS keyboard layout (for example: Ю/ю -> '.', Б/б -> ',').
+// Search intentionally keeps Cyrillic text, and uses swapKeyboardLayout for
+// matching instead of rewriting the query.
+inline juce::String normalisePhysicalKeyboardInput(const juce::String& text)
+{
+    const juce::String russian = juce::String::fromUTF8("ЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ");
+    const juce::String english = "`QWERTYUIOP[]ASDFGHJKL;'ZXCVBNM,.";
+    const auto upper = uppercaseText(text);
+    juce::String converted;
+    for (auto chars = upper.getCharPointer(); !chars.isEmpty();)
+    {
+        const auto character = chars.getAndAdvance();
+        const auto index = russian.indexOfChar(character);
+        converted += index >= 0 ? juce::String::charToString(english[index])
+                                : juce::String::charToString(character);
+    }
+    return converted;
+}
+
+class KeyboardLayoutEditorInputFilter final : public juce::TextEditor::InputFilter
+{
+public:
+    juce::String filterNewText(juce::TextEditor&, const juce::String& text) override
+    { return normalisePhysicalKeyboardInput(text); }
+};
+
+inline juce::String normaliseControlSearchKey(const juce::String& text)
+{
+    // Search only the exact visible naming style. Do not treat hyphens,
+    // underscores and spaces as interchangeable aliases.
+    return uppercaseText(text.trim());
+}

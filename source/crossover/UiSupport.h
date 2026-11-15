@@ -22,21 +22,14 @@ inline constexpr std::array<const char*, splitControlCount> splitLabels {
     "SPLIT-1", "SPLIT-2", "SPLIT-3", "SPLIT-4", "SPLIT-5"
 };
 
-inline constexpr float minSplitFrequencyGapHz = 1.0f;
 
-inline std::unique_ptr<BoxTextButton> makeTextButton(const juce::String& text,
-                                                     const juce::Colour accent = uiAccent)
+inline std::unique_ptr<BoxTextButton> makeTextButton(const juce::String& text)
 {
-    auto button = std::make_unique<BoxTextButton>(accent);
+    auto button = std::make_unique<BoxTextButton>();
     button->setButtonText(text);
     button->setTextJustification(juce::Justification::centred);
     button->setCancelClickOnLeave(true);
     return button;
-}
-
-inline std::unique_ptr<BoxTextButton> makeTimeModeButton()
-{
-    return makeTextButton("M", uiAccent);
 }
 
 inline bool getBool(const juce::ValueTree& state,

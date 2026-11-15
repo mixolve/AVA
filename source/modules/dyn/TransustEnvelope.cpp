@@ -1,4 +1,5 @@
 #include "TransustEnvelope.h"
+#include "BallisticsCurve.h"
 
 #include <algorithm>
 #include <cmath>
@@ -6,23 +7,6 @@
 
 namespace dyn::transust
 {
-
-namespace
-{
-
-float shapedAttackProgress(const double progress, const float curve)
-{
-    // Match the shared DYN ATTACK-CURVE scale and its LIN midpoint.
-    const auto amount = juce::jlimit(-1.0, 1.0, static_cast<double>(curve));
-    if (amount == 0.0) return static_cast<float>(progress);
-    constexpr double maximumExponent = 4.605170185988091;
-    const auto exponent = 4.0 * std::atanh(std::abs(amount) * std::tanh(maximumExponent * 0.25));
-    const auto normalisation = std::expm1(exponent);
-    return static_cast<float>(amount > 0.0
-        ? 1.0 - std::expm1(exponent * (1.0 - progress)) / normalisation
-        : std::expm1(exponent * progress) / normalisation);
-}
-}
 
 void Envelope::prepare(const double sampleRate)
 {
@@ -78,9 +62,8 @@ void Envelope::updateDerivedParameters()
 
     derived.fastReleaseCoefficient = makeReleaseCoefficient(5.0f, currentSampleRate);
     derived.normalizedReleaseCurve = juce::jlimit(-1.0f, 1.0f, parameters.releaseCurve * 0.01f);
-    derived.delaySamples = juce::jmax(0, static_cast<int>(std::round(juce::jmax(0.0f, parameters.delayMs) * 0.001 * currentSampleRate)));
     derived.attackSamples = juce::jmax(0, static_cast<int>(std::round(juce::jmax(0.0f, parameters.attackMs) * 0.001 * currentSampleRate)));
-    derived.normalizedAttackCurve = juce::jlimit(-1.0f, 1.0f, parameters.attackCurve * 0.01f);
+    derived.normalizedAttackCurve = juce::jlimit(-10.0f, 10.0f, parameters.attackCurve * 0.01f);
     derived.holdSamples = juce::jmax(0, static_cast<int>(std::round(holdMs * 0.001 * currentSampleRate)));
     const auto retriggerMs = juce::jlimit(1.0f, 5000.0f, parameters.retriggerMs);
     derived.retriggerSamples = juce::jmax(1, static_cast<int>(std::round(retriggerMs * 0.001 * currentSampleRate)));
@@ -127,7 +110,7 @@ float Envelope::processDetectorSample(const float level, const float thresholdDb
     const auto aboveThreshold = thresholdAmount > 1.0e-4f;
     detector.releaseMemory.advance(aboveThreshold, derived.releaseMemoryCoefficient, derived.autoRelease,
         derived.releaseDepth, std::clamp(static_cast<double>(thresholdAmount), 0.0, 1.0) * parameters.releaseDepthDb / 12.0);
-    const auto retriggerElapsed = detector.samplesSinceTrigger >= derived.delaySamples + derived.attackSamples
+    const auto retriggerElapsed = detector.samplesSinceTrigger >= derived.attackSamples
         + derived.holdSamples + derived.retriggerSamples;
     const auto shouldTrigger = (parameters.oneShot ? risingTrigger : aboveThreshold)
         && ! detector.attackActive && retriggerElapsed;
@@ -136,10 +119,9 @@ float Envelope::processDetectorSample(const float level, const float thresholdDb
     {
         detector.heldTransientAmount = parameters.oneShot ? juce::jmax(thresholdAmount, eventAmount) : thresholdAmount;
         detector.attackStartAmount = detector.transientEnvelope;
-        detector.delaySamplesRemaining = derived.delaySamples;
         detector.attackSamplesElapsed = 0;
         detector.attackSamplesTotal = derived.attackSamples;
-        detector.attackActive = derived.delaySamples > 0 || derived.attackSamples > 0;
+        detector.attackActive = derived.attackSamples > 0;
         if (! detector.attackActive)
             detector.transientEnvelope = juce::jmax(detector.transientEnvelope, detector.heldTransientAmount);
         detector.releaseStartAmount = detector.transientEnvelope;
@@ -196,24 +178,20 @@ float Envelope::processDetectorSample(const float level, const float thresholdDb
 
     if (detector.attackActive)
     {
-        // Keep the captured trigger even if a short transient ends during DELAY.
+        // Keep the captured trigger even if a short transient ends during ATTACK.
         detector.heldTransientAmount = juce::jmax(detector.heldTransientAmount, thresholdAmount);
-        if (detector.delaySamplesRemaining > 0)
-            --detector.delaySamplesRemaining;
-        else
+        const auto target = juce::jmax(detector.attackStartAmount, detector.heldTransientAmount);
+        const auto progress = detector.attackSamplesTotal > 0
+            ? juce::jlimit(0.0, 1.0, static_cast<double>(++detector.attackSamplesElapsed) / detector.attackSamplesTotal)
+            : 1.0;
+        detector.transientEnvelope = detector.attackStartAmount + (target - detector.attackStartAmount)
+            * static_cast<float>(dyn::ballistics::shapedAttackToSustainProgress(
+                progress, derived.normalizedAttackCurve));
+        if (progress >= 1.0)
         {
-            const auto target = juce::jmax(detector.attackStartAmount, detector.heldTransientAmount);
-            const auto progress = detector.attackSamplesTotal > 0
-                ? juce::jlimit(0.0, 1.0, static_cast<double>(++detector.attackSamplesElapsed) / detector.attackSamplesTotal)
-                : 1.0;
-            detector.transientEnvelope = detector.attackStartAmount + (target - detector.attackStartAmount)
-                * shapedAttackProgress(progress, derived.normalizedAttackCurve);
-            if (progress >= 1.0)
-            {
-                detector.attackActive = false;
-                detector.heldTransientAmount = target;
-                detector.releaseStartAmount = detector.transientEnvelope;
-            }
+            detector.attackActive = false;
+            detector.heldTransientAmount = target;
+            detector.releaseStartAmount = detector.transientEnvelope;
         }
     }
 

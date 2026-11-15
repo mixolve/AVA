@@ -5,33 +5,19 @@ namespace
 {
 constexpr int popupItemHeight = 30;
 
-class ScrollingComboBoxLabel final : public juce::Label
-{
-public:
-    void paint(juce::Graphics& graphics) override
-    {
-        graphics.setColour(findColour(juce::Label::textColourId));
-        graphics.setFont(getFont());
-
-        if (drawLoopingText(graphics,
-                            getText(),
-                            getLocalBounds().reduced(uiGap, 0),
-                            getFont(),
-                            getJustificationType()))
-        {
-            scheduleMarqueeRepaint(*this, marqueeRepaintPending);
-        }
-    }
-
-private:
-    bool marqueeRepaintPending = false;
-};
 }
 
 AvaAudioProcessorEditor::AvaLookAndFeel::AvaLookAndFeel()
 {
     if (auto typeface = getUiTypeface())
         setDefaultSansSerifTypeface(typeface);
+
+    // Menu windows are created on the desktop before their opacity is decided.
+    // An opaque popup colour makes JUCE recreate the heavyweight window as opaque,
+    // and macOS shows that fresh window white for a frame before the first paint.
+    // A transparent registered colour keeps the window non-opaque; the menu
+    // background is still painted fully opaque by drawPopupMenuBackgroundWithOptions.
+    setColour(juce::PopupMenu::backgroundColourId, juce::Colours::transparentBlack);
 }
 
 juce::Typeface::Ptr AvaAudioProcessorEditor::AvaLookAndFeel::getTypefaceForFont(const juce::Font& font)
@@ -39,19 +25,6 @@ juce::Typeface::Ptr AvaAudioProcessorEditor::AvaLookAndFeel::getTypefaceForFont(
     if (auto typeface = getUiTypeface())
         return typeface;
     return LookAndFeel_V4::getTypefaceForFont(font);
-}
-
-juce::Font AvaAudioProcessorEditor::AvaLookAndFeel::getComboBoxFont(juce::ComboBox&)
-{
-    return makeUiFont();
-}
-
-juce::Label* AvaAudioProcessorEditor::AvaLookAndFeel::createComboBoxTextBox(juce::ComboBox&)
-{
-    auto* label = new ScrollingComboBoxLabel();
-    label->setEditable(false, false, false);
-    label->setInterceptsMouseClicks(false, false);
-    return label;
 }
 
 juce::Font AvaAudioProcessorEditor::AvaLookAndFeel::getPopupMenuFont()
@@ -62,17 +35,23 @@ juce::Font AvaAudioProcessorEditor::AvaLookAndFeel::getPopupMenuFont()
 void AvaAudioProcessorEditor::AvaLookAndFeel::drawPopupMenuBackgroundWithOptions(juce::Graphics& graphics,
                                                                                  const int width,
                                                                                  const int height,
-                                                                                 const juce::PopupMenu::Options&)
+                                                                                 const juce::PopupMenu::Options& options)
 {
-    graphics.setColour(uiBackground);
-    graphics.fillRect(0, 0, width, height);
-    graphics.setColour(uiWhite);
-    graphics.drawRect(0, 0, width, height, 1);
+    const auto bounds = juce::Rectangle<float>(0.0f, 0.0f,
+                                                static_cast<float>(width), static_cast<float>(height));
+    const juce::Graphics::ScopedSaveState saved(graphics);
+    const auto* target = options.getTargetComponent();
+    const auto radius = float(defaultUiCornerRadius);
+    if (radius > 0) graphics.reduceClipRegion(makeUiCornerPath(bounds, radius));
+    if (target != nullptr) paintPluginBackground(graphics);
+    else graphics.fillAll(uiGreyLight);
+    paintUiFrame(graphics, bounds, uiWhite, 1.0f, radius);
 }
 
 int AvaAudioProcessorEditor::AvaLookAndFeel::getPopupMenuBorderSizeWithOptions(const juce::PopupMenu::Options&)
 {
-    return 1;
+    // Items own their frames; an outer inset adds a third pixel beside hover.
+    return 0;
 }
 
 void AvaAudioProcessorEditor::AvaLookAndFeel::getIdealPopupMenuItemSizeWithOptions(const juce::String& text,
@@ -91,62 +70,6 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::getIdealPopupMenuItemSizeWithOptio
 
     idealWidth = juce::jmax(80, getTextPixelWidth(makeUiFont(), text) + uiGapDouble);
     idealHeight = popupItemHeight;
-}
-
-void AvaAudioProcessorEditor::AvaLookAndFeel::drawCallOutBoxBackground(juce::CallOutBox&, juce::Graphics& graphics, const juce::Path& path, juce::Image&)
-{
-    graphics.setColour(uiPopup);
-    graphics.fillPath(path);
-    graphics.setColour(uiGreyLight);
-    graphics.strokePath(path, juce::PathStrokeType(1.0f));
-}
-
-int AvaAudioProcessorEditor::AvaLookAndFeel::getCallOutBoxBorderSize(const juce::CallOutBox&)
-{
-    return 1;
-}
-
-float AvaAudioProcessorEditor::AvaLookAndFeel::getCallOutBoxCornerSize(const juce::CallOutBox&)
-{
-    return 0.0f;
-}
-
-void AvaAudioProcessorEditor::AvaLookAndFeel::drawComboBox(juce::Graphics& g,
-                                                           int width,
-                                                           int height,
-                                                           bool,
-                                                           int,
-                                                           int,
-                                                           int,
-                                                           int,
-                                                           juce::ComboBox& box)
-{
-    auto* noTickBox = dynamic_cast<NoTickComboBox*>(&box);
-    const auto hoverAmount = noTickBox != nullptr ? noTickBox->getHoverAmount() : (isMouseHovering(box)?1.0f:0.0f);
-    ControlAppearance style(false,hoverAmount);
-    style.normalFill=box.findColour(juce::ComboBox::backgroundColourId);
-    style.normalContent=box.findColour(juce::ComboBox::textColourId);
-    style.normalBorder=box.findColour(juce::ComboBox::outlineColourId);
-    style.paint(g,juce::Rectangle<int>(0,0,width,height));
-    if(auto* label=dynamic_cast<juce::Label*>(box.getChildComponent(0)))
-        label->setColour(juce::Label::textColourId,style.contentColour());
-
-}
-
-void AvaAudioProcessorEditor::AvaLookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& label)
-{
-    if (dynamic_cast<NoTickComboBox*>(&box) == nullptr)
-    {
-        juce::LookAndFeel_V4::positionComboBoxText(box, label);
-        label.setFont(getComboBoxFont(box));
-        return;
-    }
-
-    label.setBounds(1, 1,
-                    box.getWidth() - 2,
-                    box.getHeight() - 2);
-
-    label.setFont(getComboBoxFont(box));
 }
 
 void AvaAudioProcessorEditor::AvaLookAndFeel::drawPopupMenuItem(juce::Graphics& g,
@@ -172,15 +95,12 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::drawPopupMenuItem(juce::Graphics& 
 
     const auto itemBounds = area.withSizeKeepingCentre(area.getWidth(),
                                                        juce::jmin(popupItemHeight, area.getHeight()));
-    ControlAppearance style(isActive && isTicked,isHighlighted && isActive?1.0f:0.0f);
+    ControlAppearance style;
     style.paint(g,itemBounds);
-    g.setColour(isActive?style.contentColour():uiGreyLight);
+    paintControlTextButton(g, itemBounds, isActive && isHighlighted, isActive && isTicked, false,
+        isActive ? uiGreyLight : uiIndicatorDisabled);
     g.setFont(makeUiFont());
-    g.drawFittedText(text,
-                     itemBounds.reduced(uiGap, 0),
-                     juce::Justification::centred,
-                     1,
-                     1.0f);
+    g.drawText(text, itemBounds.reduced(uiGap, 0), juce::Justification::centred, false);
 }
 
 void AvaAudioProcessorEditor::AvaLookAndFeel::drawPopupMenuItemWithOptions(juce::Graphics& g,
@@ -189,33 +109,50 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::drawPopupMenuItemWithOptions(juce:
                                                                            const juce::PopupMenu::Item& item,
                                                                            const juce::PopupMenu::Options& options)
 {
-    if (item.isSeparator)
-    {
-        g.setColour(uiGreyLight);
-        g.fillRect(area.withHeight(1).withCentre(area.getCentre()));
-        return;
-    }
-
-    const auto itemBounds = area.withSizeKeepingCentre(area.getWidth(),
-                                                       juce::jmin(popupItemHeight, area.getHeight()));
-    ControlAppearance style(item.isEnabled && item.isTicked,isHighlighted && item.isEnabled?1.0f:0.0f);
-    style.paint(g,itemBounds);
-    g.setColour(item.isEnabled?style.contentColour():uiGreyLight);
-    g.setFont(makeUiFont());
-    const auto isNoTickTarget = dynamic_cast<NoTickComboBox*>(options.getTargetComponent()) != nullptr;
-    const auto justification = isNoTickTarget ? dynamic_cast<NoTickComboBox*>(options.getTargetComponent())->getPopupMenuTextJustification()
-                                              : juce::Justification::centred;
-    g.drawFittedText(item.text,
-                     itemBounds.reduced(uiGap, 0),
-                     justification,
-                     1,
-                     1.0f);
+    juce::ignoreUnused(options);
+    drawPopupMenuItem(g, area, item.isSeparator, item.isEnabled, isHighlighted, item.isTicked,
+                      item.subMenu != nullptr, item.text, {}, nullptr, nullptr);
 }
 
 void AvaAudioProcessorEditor::AvaLookAndFeel::drawTextEditorOutline(juce::Graphics& g,int width,int height,juce::TextEditor& editor)
 {
     if(!editor.isEnabled()) return;
-    ControlAppearance style(false,0.0f,editor.hasKeyboardFocus(true) && !editor.isReadOnly());
-    style.normalBorder=editor.findColour(juce::TextEditor::outlineColourId);
+    ControlAppearance style;
+    style.frameColour=editor.findColour(juce::TextEditor::outlineColourId);
     style.paintFrame(g,juce::Rectangle<int>(0,0,width,height));
+}
+
+void AvaAudioProcessorEditor::AvaLookAndFeel::drawScrollbar(juce::Graphics& g,
+    juce::ScrollBar& bar, int x, int y, int width, int height, bool vertical,
+    int thumbStart, int thumbSize, bool hovered, bool held)
+{
+    g.setColour(uiPanelBackground);
+    g.fillRect(x, y, width, height);
+    const auto until = double(bar.getProperties().getWithDefault("scrollActiveUntil", 0.0));
+    const bool scrolling = juce::Time::getMillisecondCounterHiRes() < until;
+    const auto delayedHover = isHoverInversionReady(bar, hovered && !held && !scrolling, "scrollbar");
+    const auto desired = held || scrolling ? uiWhite : delayedHover ? uiGreyLight : uiGreyDark;
+    auto& state = bar.getProperties();
+    const auto now = juce::Time::getMillisecondCounterHiRes();
+    constexpr double fadeMs = 50.0;
+    const auto decode = [](const juce::var& value) { return juce::Colour(juce::uint32(juce::int64(value))); };
+    auto target = decode(state.getWithDefault("scrollFadeTarget", juce::int64(desired.getARGB())));
+    auto from = decode(state.getWithDefault("scrollFadeFrom", juce::int64(target.getARGB())));
+    auto started = double(state.getWithDefault("scrollFadeStarted", now - fadeMs));
+    auto colour = from.interpolatedWith(target, float(juce::jlimit(0.0, 1.0, (now - started) / fadeMs)));
+    if (target != desired)
+    {
+        from = colour;
+        target = desired;
+        started = now;
+        state.set("scrollFadeUntil", now + fadeMs);
+    }
+    state.set("scrollFadeFrom", juce::int64(from.getARGB()));
+    state.set("scrollFadeTarget", juce::int64(target.getARGB()));
+    state.set("scrollFadeStarted", started);
+    // Interpolate opaque colours, preserving the solid scrollbar surface.
+    colour = from.interpolatedWith(target, float(juce::jlimit(0.0, 1.0, (now - started) / fadeMs)));
+    g.setColour(colour);
+    if (vertical) g.fillRect(x, y + thumbStart, width, thumbSize);
+    else g.fillRect(x + thumbStart, y, thumbSize, height);
 }

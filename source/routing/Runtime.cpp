@@ -6,7 +6,15 @@
 
 namespace ava::routing
 {
-Runtime::Runtime(AvaAudioProcessor& ownerIn) : owner(ownerIn) {}
+Runtime::Runtime(AvaAudioProcessor& ownerIn, const Runtime* previous) : owner(ownerIn)
+{
+    if (previous != nullptr)
+        for (const auto& [id, instance] : previous->instances) {
+            Instance next;
+            next.processor = instance.processor;
+            instances.emplace(id, std::move(next));
+        }
+}
 Runtime::~Runtime() = default;
 
 const State::Node* Runtime::findNode(const int id) const noexcept
@@ -26,6 +34,7 @@ void Runtime::prepareBuffers(Instance& instance)
 
 void Runtime::synchronize(const juce::ValueTree& state)
 {
+    owner.invalidateHostSlotTargets();
     const auto nextTopology = readState(state);
     std::set<int> required;
     for (const auto& node : nextTopology.nodes)
@@ -56,12 +65,14 @@ void Runtime::synchronize(const juce::ValueTree& state)
         {
             instance.processor = std::make_shared<AvaAudioProcessor>(true);
             instance.processor->routingOwner = &owner;
-            instance.processor->parentStateChanged = [this]
+            instance.processor->routingNodeId = id;
+            instance.processor->parentStateChanged = [parent = &owner]
             {
-                owner.notifyHostOfStateChange();
-                owner.triggerAsyncUpdate();
+                parent->notifyHostOfStateChange();
+                parent->triggerAsyncUpdate();
             };
             instance.processor->setPlayHead(owner.getPlayHead());
+            instance.processor->setNonRealtime(owner.isNonRealtime());
             instance.processor->setBusesLayout(owner.getBusesLayout());
         }
         prepareBuffers(instance);
@@ -71,6 +82,7 @@ void Runtime::synchronize(const juce::ValueTree& state)
     }
 
     topology = nextTopology;
+    rootBypassed.store(topology.rootBypassed);
     refreshDelayCapacity();
 }
 
@@ -89,9 +101,12 @@ void Runtime::prepare(const double sampleRate, const int samplesPerBlock, const 
         if (instance.processor != nullptr)
         {
             instance.processor->setPlayHead(owner.getPlayHead());
+            instance.processor->setNonRealtime(owner.isNonRealtime());
             instance.processor->setBusesLayout(owner.getBusesLayout());
-            instance.processor->prepareToPlay(sampleRate, preparedBlockSize);
+            if (!juce::approximatelyEqual(instance.processor->currentSampleRate, sampleRate) || instance.processor->preparedBlockSize != preparedBlockSize)
+                instance.processor->prepareToPlay(sampleRate, preparedBlockSize);
         }
+        if (instance.processor != nullptr) instance.render = instance.processor->publishedRenderGraph;
         prepareBuffers(instance);
     }
     refreshDelayCapacity();
@@ -134,11 +149,25 @@ std::shared_ptr<AvaAudioProcessor> Runtime::getInstanceHandle(const int id) noex
 
 void Runtime::process(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
+    owner.syncAudioModuleParameters();
+    for (auto& [id, instance] : instances) {
+        juce::ignoreUnused(id);
+        if (instance.processor != nullptr) {
+            AvaAudioProcessor::RenderingScope scope(*instance.processor, instance.render.get());
+            if (scope) { instance.processor->syncAudioModuleParameters(); instance.processor->updateShellLatency(); }
+        }
+    }
+    planGroupDelays(topology.entryInstanceId);
     if (auto* solo = getSoloProcessor(false))
     {
         solo->setPlayHead(owner.getPlayHead());
+        solo->setNonRealtime(owner.isNonRealtime());
         if (solo == &owner) solo->processOwnChannels(buffer);
-        else solo->processChannelBlock(buffer, midi);
+        else {
+            const auto found = instances.find(solo->getRoutingInstanceId());
+            AvaAudioProcessor::RenderingScope scope(*solo, found != instances.end() ? found->second.render.get() : nullptr);
+            solo->processChannelBlock(buffer, midi);
+        }
         return;
     }
     if (! hasMultipleInstances() || preparedBlockSize <= 0)
@@ -159,6 +188,29 @@ void Runtime::process(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
     }
 }
 
+unsigned Runtime::branchChannels(int id) const noexcept
+{
+    const auto* node = findNode(id);
+    if (node == nullptr) return 0;
+    const auto found = instances.find(id);
+    const auto* processor = id == topology.rootInstanceId ? &owner
+        : node->container || found == instances.end() ? nullptr : found->second.processor.get();
+    unsigned mask = 0;
+    if (processor != nullptr) {
+        const auto selected = processor->getProcessingInputChannels();
+        mask = (1u << selected[0]) | (selected[1] >= 0 ? 1u << selected[1] : 0u);
+    }
+    return mask | groupChannels(node->serialNext);
+}
+
+unsigned Runtime::groupChannels(int firstId) const noexcept
+{
+    unsigned mask = 0;
+    for (auto* node = findNode(firstId); node != nullptr; node = findNode(node->parallelNext)) mask |= branchChannels(node->id);
+    if (const auto* first = findNode(firstId)) mask |= groupChannels(first->groupNext);
+    return mask;
+}
+
 unsigned Runtime::processGroup(const int firstId,
                                juce::AudioBuffer<float>& input,
                                juce::AudioBuffer<float>& output,
@@ -177,6 +229,9 @@ unsigned Runtime::processGroup(const int firstId,
 
     unsigned processedMask = 0;
     const auto maximumLatency = parallelLatency(firstId);
+    int branchCount = 0;
+    for (auto* node = first; node != nullptr; node = findNode(node->parallelNext)) ++branchCount;
+    const auto inputGain = first->compensated ? 1.0f / float(juce::jmax(1, branchCount)) : 1.0f;
     for (auto* node = first; node != nullptr; node = findNode(node->parallelNext))
     {
         const auto found = instances.find(node->id);
@@ -185,6 +240,11 @@ unsigned Runtime::processGroup(const int firstId,
         for (int channel = 0; channel < channels; ++channel)
             work.copyFrom(channel, 0, groupInput, channel, 0, samples);
 
+        if (inputGain != 1.0f) {
+            const auto mask = branchChannels(node->id);
+            for (int channel = 0; channel < channels; ++channel)
+                if ((mask & (1u << channel)) != 0) work.applyGain(channel, 0, samples, inputGain);
+        }
         unsigned branchMask = 0;
         if (node->id == topology.rootInstanceId)
             branchMask = owner.processOwnChannels(work);
@@ -192,6 +252,8 @@ unsigned Runtime::processGroup(const int firstId,
         {
             auto& processor = *found->second.processor;
             processor.setPlayHead(owner.getPlayHead());
+            processor.setNonRealtime(owner.isNonRealtime());
+            AvaAudioProcessor::RenderingScope scope(processor, found->second.render.get());
             processor.processChannelBlock(work, midi);
             const auto selected = processor.getProcessingInputChannels();
             branchMask = (1u << selected[0]) | (selected[1] >= 0 ? 1u << selected[1] : 0u);
@@ -240,9 +302,7 @@ int Runtime::groupLatency(const int firstId) const noexcept
 int Runtime::nodeLatency(const int id) const noexcept
 {
     if (id == topology.rootInstanceId)
-        return topology.rootBypassed || (owner.globalBypassParam != nullptr
-                && owner.globalBypassParam->load(std::memory_order_relaxed) >= 0.5f)
-            ? 0 : owner.getActiveModuleLatencySamples();
+        return owner.isInstanceBypassed() || owner.isGlobalBypassed() ? 0 : owner.getModuleChainLatencySamples();
     const auto found = instances.find(id);
     return found == instances.end() || found->second.processor == nullptr ? 0
         : found->second.processor->requestedLatencySamples.load(std::memory_order_acquire);
@@ -256,16 +316,11 @@ void Runtime::planGroupDelays(const int firstId)
         const auto branchLatency = nodeLatency(node->id) + groupLatency(node->serialNext);
         const auto needed = juce::jmax(0, maximumLatency - branchLatency);
         auto& delay = delays[node->id];
-        if (delay.delaySamples != needed
-            || delay.samples.getNumChannels() != preparedChannels)
-        {
+        jassert(needed < delay.samples.getNumSamples());
+        if (delay.delaySamples != needed) {
             delay.delaySamples = needed;
             delay.writePosition = 0;
-            if (preparedChannels > 0)
-            {
-                delay.samples.setSize(preparedChannels, needed + 1);
-                delay.samples.clear();
-            }
+            delay.filled = 0;
         }
         if (node->serialNext != 0)
             planGroupDelays(node->serialNext);
@@ -277,7 +332,58 @@ void Runtime::planGroupDelays(const int firstId)
 void Runtime::refreshDelayCapacity()
 {
     if (preparedChannels > 0)
-        planGroupDelays(topology.entryInstanceId);
+        prepareGroupDelays(topology.entryInstanceId);
+}
+
+int Runtime::maximumNodeLatency(int id) const noexcept
+{
+    if (id == topology.rootInstanceId) return owner.getMaximumChainLatencySamples();
+    const auto found = instances.find(id);
+    return found != instances.end() && found->second.render != nullptr ? found->second.render->maximumLatency : 0;
+}
+int Runtime::maximumParallelLatency(int firstId) const noexcept
+{
+    int result = 0;
+    for (auto* node = findNode(firstId); node != nullptr; node = findNode(node->parallelNext))
+        result = juce::jmax(result, maximumNodeLatency(node->id) + maximumGroupLatency(node->serialNext));
+    return result;
+}
+int Runtime::maximumGroupLatency(int firstId) const noexcept
+{
+    const auto* first = findNode(firstId);
+    return first != nullptr ? maximumParallelLatency(firstId) + maximumGroupLatency(first->groupNext) : 0;
+}
+void Runtime::prepareGroupDelays(int firstId)
+{
+    const auto capacity = maximumParallelLatency(firstId);
+    for (auto* node = findNode(firstId); node != nullptr; node = findNode(node->parallelNext)) {
+        auto& delay = delays[node->id];
+        if (delay.samples.getNumSamples() < capacity + 1 || delay.samples.getNumChannels() != preparedChannels) {
+            delay.samples.setSize(preparedChannels, capacity + 1);
+            delay.writePosition = delay.delaySamples = delay.filled = 0;
+        }
+        if (node->serialNext != 0) prepareGroupDelays(node->serialNext);
+    }
+    if (const auto* first = findNode(firstId); first != nullptr && first->groupNext != 0) prepareGroupDelays(first->groupNext);
+}
+bool Runtime::needsDelayCapacity() const noexcept
+{
+    if (preparedChannels <= 0) return false;
+    for (const auto& [id, instance] : instances) {
+        juce::ignoreUnused(id);
+        if (instance.processor != nullptr && instance.processor->publishedRenderGraph != instance.render) return true;
+    }
+    const auto check = [&](const auto& self, int firstId) -> bool {
+        const auto capacity = maximumParallelLatency(firstId);
+        for (auto* node = findNode(firstId); node != nullptr; node = findNode(node->parallelNext)) {
+            const auto found = delays.find(node->id);
+            if (found == delays.end() || found->second.samples.getNumSamples() < capacity + 1) return true;
+            if (node->serialNext != 0 && self(self, node->serialNext)) return true;
+        }
+        const auto* first = findNode(firstId);
+        return first != nullptr && first->groupNext != 0 && self(self, first->groupNext);
+    };
+    return check(check, topology.entryInstanceId);
 }
 
 void Runtime::applyDelay(const int id, juce::AudioBuffer<float>& buffer)
@@ -295,11 +401,12 @@ void Runtime::applyDelay(const int id, juce::AudioBuffer<float>& buffer)
         for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
         {
             const auto input = buffer.getSample(channel, sample);
-            const auto output = delay.samples.getSample(channel, readPosition);
+            const auto output = delay.filled >= delay.delaySamples ? delay.samples.getSample(channel, readPosition) : 0.0f;
             delay.samples.setSample(channel, delay.writePosition, input);
             buffer.setSample(channel, sample, output);
         }
         delay.writePosition = (delay.writePosition + 1) % length;
+        delay.filled = juce::jmin(length, delay.filled + 1);
     }
 }
 
@@ -342,8 +449,19 @@ int Runtime::getLatencySamples() const noexcept
     if (auto* solo = getSoloProcessor(false))
         return solo == &owner ? nodeLatency(topology.rootInstanceId)
             : solo->globalBypassParam != nullptr && solo->globalBypassParam->load() >= 0.5f
-                ? 0 : solo->getActiveModuleLatencySamples();
+                ? 0 : solo->getModuleChainLatencySamples();
     return groupLatency(topology.entryInstanceId);
+}
+
+uint64_t Runtime::getRenderControlSignature() const noexcept
+{
+    uint64_t result = rootBypassed.load() ? 1u : 0u;
+    for (const auto& [id, instance] : instances) {
+        if (instance.processor == nullptr || instance.render == nullptr) continue;
+        const auto value = instance.processor->getRenderControlSignature(*instance.render);
+        result ^= value + uint64_t(unsigned(id)) + 0x9e3779b97f4a7c15ULL + (result << 6) + (result >> 2);
+    }
+    return result;
 }
 
 void Runtime::writeProcessorStates(juce::ValueTree& state, const int excludedId) const
@@ -371,22 +489,51 @@ void Runtime::writeProcessorStates(juce::ValueTree& state, const int excludedId)
         state.setProperty(processorStatesKey, xml->toString(), nullptr);
 }
 
-void Runtime::restoreProcessorStates(const juce::ValueTree& state)
+bool Runtime::restoreProcessorStates(const juce::ValueTree& state)
 {
-    const auto xml = juce::XmlDocument::parse(state.getProperty(processorStatesKey).toString());
+    const auto serialized = state.getProperty(processorStatesKey).toString();
+    if (serialized.isEmpty())
+        return std::none_of(instances.begin(), instances.end(),
+            [] (const auto& entry) { return entry.second.processor != nullptr; });
+    const auto xml = juce::XmlDocument::parse(serialized);
     if (xml == nullptr || ! xml->hasTagName("routing_processors"))
-        return;
+        return false;
+    bool success = true;
+    std::set<int> restoredInstanceIds;
     const auto stored = juce::ValueTree::fromXml(*xml);
     for (const auto item : stored)
     {
         const auto id = static_cast<int>(item.getProperty("id", 0));
+        if (!restoredInstanceIds.insert(id).second)
+        {
+            juce::Logger::writeToLog("AVA: duplicate routing processor state: " + juce::String(id));
+            success = false;
+            continue;
+        }
         const auto found = instances.find(id);
         if (found == instances.end() || found->second.processor == nullptr)
+        {
+            juce::Logger::writeToLog("AVA: routing processor missing during restore: " + juce::String(id));
+            success = false;
             continue;
+        }
         juce::MemoryBlock binary;
-        if (binary.fromBase64Encoding(item.getProperty("state").toString()))
-            found->second.processor->setStateInformation(binary.getData(),
-                                                         static_cast<int>(binary.getSize()));
+        if (!binary.fromBase64Encoding(item.getProperty("state").toString())
+            || !found->second.processor->applyClipboardStateInformation(
+                binary.getData(), static_cast<int>(binary.getSize())))
+        {
+            juce::Logger::writeToLog("AVA: unable to restore routing processor " + juce::String(id));
+            success = false;
+        }
     }
+    for (const auto& [id, instance] : instances)
+    {
+        if (instance.processor != nullptr && !restoredInstanceIds.contains(id))
+        {
+            juce::Logger::writeToLog("AVA: routing instance missing from snapshot: " + juce::String(id));
+            success = false;
+        }
+    }
+    return success;
 }
 }

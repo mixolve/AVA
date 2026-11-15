@@ -3,7 +3,6 @@
 #include "UiSupport.h"
 
 #include "../shell/ChoiceControl.h"
-#include "../shell/LocalParameterControl.h"
 #include "../shell/ParameterControl.h"
 
 #include <algorithm>
@@ -14,8 +13,8 @@ using namespace crossover_ui;
 
 void CrossoverModuleComponent::setExternalCrossoverRange(const size_t rangeIndex)
 {
-    crossoverSettingsActive = false;
     visibleRangeIndex = juce::jmin(rangeIndex, getActiveRangeCount() - 1);
+    updateRangeNavigation();
     updatePageVisibility();
     resized();
 }
@@ -23,12 +22,11 @@ void CrossoverModuleComponent::setExternalCrossoverRange(const size_t rangeIndex
 void CrossoverModuleComponent::selectCrossoverRange(const size_t rangeIndex)
 {
     visibleRangeIndex = juce::jmin(rangeIndex, getActiveRangeCount() - 1);
-    crossoverSettingsActive = false;
 
     if (autoSoloEnabled)
         manualSoloMask = {};
 
-    updateMonitorButtons();
+    updateRangeNavigation();
     updatePageVisibility();
     syncMonitorParameters();
     saveUiState();
@@ -43,59 +41,30 @@ void CrossoverModuleComponent::toggleManualSolo(const size_t rangeIndex)
         return;
 
     visibleRangeIndex = juce::jmin(rangeIndex, numRanges - 1);
-    crossoverSettingsActive = false;
-    const auto shouldSoloRange = ! manualSoloMask[visibleRangeIndex];
-
-    if (! manualSoloInclusive)
-        manualSoloMask = {};
-
-    manualSoloMask[visibleRangeIndex] = shouldSoloRange;
-    updateMonitorButtons();
+    if (auto* parameter = soloParameters[visibleRangeIndex])
+        setParameterNormalisedValue(*parameter, parameter->getValue() >= 0.5f ? 0.0f : 1.0f);
+    synchroniseManualSoloMaskFromParameters();
+    updateRangeNavigation();
     updatePageVisibility();
     syncMonitorParameters();
     saveUiState();
     clearFocus();
 }
 
-void CrossoverModuleComponent::changeActiveSplitCount(const int delta)
+void CrossoverModuleComponent::activeSplitCountChanged()
 {
-    if (activeSplitCountParameter == nullptr)
-        return;
-
-    const auto currentValue = static_cast<int>(
-        std::round(activeSplitCountParameter->convertFrom0to1(activeSplitCountParameter->getValue())));
-    const auto newValue = juce::jlimit(0, static_cast<int>(numRanges - 1), currentValue + delta);
-
-    if (newValue == currentValue)
-        return;
-
-    setParameterPlainValue(config.makeCrossoverSplitCountParameterId(), static_cast<float>(newValue));
     visibleRangeIndex = juce::jmin(visibleRangeIndex, getActiveRangeCount() - 1);
     manualSoloMask = {};
-
-    for (size_t splitIndex = 0; splitIndex < static_cast<size_t>(newValue); ++splitIndex)
-        constrainSplitFrequency(splitIndex);
 
     if (crossoverSettingsPage != nullptr)
         crossoverSettingsPage->refreshExternalState();
 
-    updateMonitorButtons();
-    updatePageVisibility();
-    syncMonitorParameters();
-    saveUiState();
-    resized();
-}
-
-void CrossoverModuleComponent::showCrossoverSettings()
-{
-    crossoverSettingsActive = true;
-    updateMonitorButtons();
+    updateRangeNavigation();
     updatePageVisibility();
     syncMonitorParameters();
     saveUiState();
     resized();
     notifyPageChanged();
-    clearFocus();
 }
 
 void CrossoverModuleComponent::notifyPageChanged()
@@ -112,7 +81,7 @@ void CrossoverModuleComponent::setAutoSoloEnabled(const bool shouldBeEnabled)
     if (crossoverSettingsPage != nullptr)
         crossoverSettingsPage->refreshExternalState();
 
-    updateMonitorButtons();
+    updateRangeNavigation();
     syncMonitorParameters();
     saveUiState();
 }
@@ -147,13 +116,17 @@ void CrossoverModuleComponent::setManualSoloInclusive(const bool shouldBeInclusi
     if (crossoverSettingsPage != nullptr)
         crossoverSettingsPage->refreshExternalState();
 
-    updateMonitorButtons();
+    updateRangeNavigation();
     syncMonitorParameters();
     saveUiState();
 }
 
 void CrossoverModuleComponent::syncMonitorParameters()
 {
+    // Publish the mode before writing its parameter mask, so every writer sees
+    // the same exclusivity policy, including a mode switch in this editor.
+    setBool(valueTreeState.state, config.moduleKey, "auto_solo_enabled", autoSoloEnabled);
+    setBool(valueTreeState.state, config.moduleKey, "manual_solo_inclusive", manualSoloInclusive);
     for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
     {
         auto* parameter = soloParameters[rangeIndex];
@@ -162,7 +135,7 @@ void CrossoverModuleComponent::syncMonitorParameters()
             continue;
 
         const auto enabled = rangeIndex < getActiveRangeCount()
-            && ((autoSoloEnabled && ! crossoverSettingsActive && rangeIndex == visibleRangeIndex)
+            && ((autoSoloEnabled && rangeIndex == visibleRangeIndex)
                 || (! autoSoloEnabled && manualSoloMask[rangeIndex]));
         setParameterNormalisedValue(*parameter, parameter->convertTo0to1(enabled ? 1.0f : 0.0f));
     }
@@ -189,31 +162,24 @@ bool CrossoverModuleComponent::isRangeSoloEnabled(const size_t rangeIndex) const
         && soloParameters[rangeIndex]->getValue() >= 0.5f;
 }
 
-void CrossoverModuleComponent::updateMonitorButtons()
+void CrossoverModuleComponent::updateRangeNavigation()
 {
     const auto activeRangeCount = getActiveRangeCount();
-
-    for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
+    for (size_t range = 0; range < numRanges; ++range)
     {
-        if (auto* button = monitorButtons[rangeIndex].get())
+        if (auto* control = bandControls[range].get())
         {
-            const auto isActiveRange = rangeIndex < activeRangeCount;
-            button->setVisible(true);
-            button->setEnabled(isActiveRange);
-            button->setAlpha(1.0f);
-            button->setToggleState(! crossoverSettingsActive && rangeIndex == visibleRangeIndex, juce::dontSendNotification);
+            // With XOV=0 there is no other band to navigate to. Disable the
+            // entire BAND-1 control, including its SL host-slot indicator.
+            // Restore normal interaction as soon as XOV creates another band.
+            const auto selectable = activeRangeCount > 1 && range < activeRangeCount;
+            control->setInteractionEnabled(selectable);
+            // Keep Ctrl+click docking available even when navigation is inactive.
+            control->setInterceptsMouseClicks(true, true);
+            control->getProperties().set("textButtonBaseColour", juce::int64(range == visibleRangeIndex ? 0xffffffff : 0xffbbbbbb));
+            control->repaint();
         }
-
-        if (auto* page = rangePages[rangeIndex].get())
-            page->refreshExternalState();
+        if (auto* page = rangePages[range].get()) page->refreshExternalState();
     }
-
-    if (auto* button = monitorButtons[numRanges].get())
-    {
-        button->setVisible(true);
-        button->setEnabled(true);
-        button->setAlpha(1.0f);
-        button->setToggleState(crossoverSettingsActive, juce::dontSendNotification);
-    }
+    updateSoloState();
 }
-

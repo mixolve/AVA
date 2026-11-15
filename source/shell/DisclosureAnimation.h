@@ -8,7 +8,7 @@
 class DisclosureAnimation final : private juce::Timer
 {
 public:
-    static constexpr double durationMs = 80.0;
+    static constexpr double durationMs = 50.0;
     explicit DisclosureAnimation(const double duration = durationMs) : transitionDurationMs(duration) {}
     std::function<void()> onUpdate;
 

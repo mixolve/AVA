@@ -44,16 +44,18 @@ bool decodeTopology(const juce::String& encoded, State& state)
         for (const auto& record : records)
         {
             const auto fields = juce::StringArray::fromTokens(record, ":", "");
-            if ((fields.size() != 3 && fields.size() != 4 && fields.size() != 5) || fields.joinIntoString(":") != record)
+            if ((fields.size() != 3 && fields.size() != 4 && fields.size() != 5 && fields.size() != 6) || fields.joinIntoString(":") != record)
                 return false;
             State::Node node;
             if (! parseNumber(fields[0], node.id, true)
                 || ! parseNumber(fields[1], node.serialNext, false)
                 || ! parseNumber(fields[2], node.parallelNext, false)
                 || (fields.size() >= 4 && ! parseNumber(fields[3], node.groupNext, false))
-                || (fields.size() == 5 && fields[4] != "1"))
+                || (fields.size() == 5 && fields[4] != "1")
+                || (fields.size() == 6 && ((fields[4] != "0" && fields[4] != "1") || fields[5] != "1")))
                 return false;
-            node.container = fields.size() == 5;
+            node.container = fields.size() >= 5 && fields[4] == "1";
+            node.compensated = fields.size() == 6;
             state.nodes.push_back(node);
         }
     }
@@ -191,6 +193,8 @@ bool decode(const juce::ValueTree& tree, State& result)
             return false;
         decoded.rootBypassed = bypass == "1";
     }
+    for (const auto& node : decoded.nodes)
+        if (node.compensated && !isParallelHead(decoded, node.id)) return false;
     groupLooseInstances(decoded);
     result = std::move(decoded);
     return true;
@@ -277,14 +281,40 @@ void normalizeContainers(State& state)
     }
 }
 
-void write(juce::ValueTree& tree, State state)
+void write(juce::ValueTree& tree, State state, bool preserveCompensation = true)
 {
+    State previous;
+    const auto hasPrevious = preserveCompensation && decode(tree, previous);
     normalizeContainers(state);
+    if (hasPrevious)
+    {
+        // A group's head can change during insert/remove/move. Carry its switch
+        // to the surviving group with the largest overlap, never to a lone node.
+        for (auto& node : state.nodes) node.compensated = false;
+        for (const auto& old : previous.nodes)
+        {
+            if (!old.compensated) continue;
+            int bestId = 0, bestOverlap = 0;
+            for (const auto& candidate : state.nodes)
+            {
+                if (!isParallelHead(state, candidate.id)) continue;
+                int overlap = 0;
+                for (auto* a = &old; a != nullptr; a = findNode(previous, a->parallelNext))
+                    for (auto* b = &candidate; b != nullptr; b = findStateNode(state.nodes, b->parallelNext))
+                        if (a->id == b->id) ++overlap;
+                if (overlap > bestOverlap) { bestOverlap = overlap; bestId = candidate.id; }
+            }
+            if (auto* head = findNode(state, bestId)) head->compensated = true;
+        }
+    }
+    for (auto& node : state.nodes)
+        if (!isParallelHead(state, node.id)) node.compensated = false;
     juce::StringArray records;
     for (const auto& node : state.nodes)
         records.add(juce::String(node.id) + ":" + juce::String(node.serialNext)
                     + ":" + juce::String(node.parallelNext)
-                    + ":" + juce::String(node.groupNext) + (node.container ? ":1" : ""));
+                    + ":" + juce::String(node.groupNext)
+                    + (node.compensated ? (node.container ? ":1:1" : ":0:1") : (node.container ? ":1" : "")));
     tree.setProperty(instancesStateKey,
                      juce::String(state.entryInstanceId) + ";" + records.joinIntoString(","), nullptr);
     tree.setProperty(nextInstanceIdStateKey, state.nextInstanceId, nullptr);
@@ -437,6 +467,24 @@ bool detachForMove(State& state, const int id)
     source->groupNext = 0;
     return true;
 }
+}
+
+bool isParallelHead(const State& state, int id) noexcept
+{
+    const auto* node = findStateNode(state.nodes, id);
+    return node != nullptr && node->parallelNext != 0
+        && std::none_of(state.nodes.begin(), state.nodes.end(), [id](const auto& other) { return other.parallelNext == id; });
+}
+
+bool setGroupCompensated(juce::ValueTree& tree, int id, bool enabled)
+{
+    State state;
+    if (!decode(tree, state) || !isParallelHead(state, id)) return false;
+    auto* node = findNode(state, id);
+    if (node->compensated == enabled) return false;
+    node->compensated = enabled;
+    write(tree, std::move(state), false);
+    return true;
 }
 
 bool isCurrentState(const juce::ValueTree& tree)

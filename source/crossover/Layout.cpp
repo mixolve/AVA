@@ -1,11 +1,10 @@
 #include "../shell/EditorSetup.h"
 #include "Editor.h"
 #include "Page.h"
-#include "RangePage.h"
+#include "../shell/Editor.h"
 #include "UiSupport.h"
 
 #include "../shell/ChoiceControl.h"
-#include "../shell/LocalParameterControl.h"
 #include "../shell/ParameterControl.h"
 
 #include <algorithm>
@@ -14,115 +13,26 @@
 
 using namespace crossover_ui;
 
-void CrossoverModuleComponent::paint(juce::Graphics& graphics)
-{
-    graphics.fillAll(uiBackground);
-}
-
 void CrossoverModuleComponent::resized()
 {
     auto bounds = getLocalBounds();
-    if (config.moduleKey == "dyn") bounds.reduce(dynControlGroupOutset, 0);
-    if (config.showCrossoverNavigation)
-    {
-        auto monitorRow = bounds.removeFromTop(rowHeight);
-        const auto buttonCount = static_cast<int>(monitorButtons.size());
-        const auto totalGapWidth = parameterGap * (buttonCount - 1);
-        const auto rangeButtonCount = buttonCount - 1;
-        const auto rangeButtonsWidth = juce::jmax(0, monitorRow.getWidth() - totalGapWidth - iconControlSize);
-        const auto baseButtonWidth = rangeButtonsWidth / rangeButtonCount;
-        auto remainder = rangeButtonsWidth - baseButtonWidth * rangeButtonCount;
-
-        for (int index = 0; index < buttonCount; ++index)
-        {
-            const auto isSettingsButton = index == rangeButtonCount;
-            const auto buttonWidth = isSettingsButton
-                ? iconControlSize
-                : baseButtonWidth + (remainder > 0 ? 1 : 0);
-
-            if (auto& button = monitorButtons[static_cast<size_t>(index)])
-                button->setBounds(monitorRow.removeFromLeft(buttonWidth));
-            else
-                monitorRow.removeFromLeft(buttonWidth);
-
-            if (! isSettingsButton)
-            {
-                monitorRow.removeFromLeft(parameterGap);
-                remainder = juce::jmax(0, remainder - 1);
-            }
-        }
-
-        if (! bounds.isEmpty())
-            bounds.removeFromTop(verticalGap);
-    }
-
-    if (instanceHeading != nullptr && headerSoloButton != nullptr)
-    {
-        auto headerRow = bounds.removeFromTop(rowHeight);
-        if (crossoverSettingsActive)
-        {
-            const auto leftWidth = juce::jmax(0, (headerRow.getWidth() - parameterGap) / 2);
-            instanceHeading->setBounds(headerRow.removeFromLeft(leftWidth));
-            headerRow.removeFromLeft(juce::jmin(parameterGap, headerRow.getWidth()));
-            headerSoloButton->setBounds({});
-        }
-        else
-        {
-            const auto sideWidth = juce::jmin(120, juce::jmax(0, (headerRow.getWidth() - 2 * parameterGap) / 2));
-            instanceHeading->setBounds(headerRow.removeFromLeft(sideWidth));
-            headerRow.removeFromLeft(juce::jmin(parameterGap, headerRow.getWidth()));
-            const auto soloWidth = juce::jmax(0, headerRow.getWidth() - sideWidth - parameterGap);
-            headerSoloButton->setBounds(headerRow.removeFromLeft(soloWidth));
-            headerRow.removeFromLeft(juce::jmin(parameterGap, headerRow.getWidth()));
-        }
-        if (moduleAddButton != nullptr)
-            moduleAddButton->setBounds(headerRow);
-        if (moduleTitleButton != nullptr)
-            moduleTitleButton->setBounds(headerRow);
-
-        if (! bounds.isEmpty())
-            bounds.removeFromTop(verticalGap);
-    }
-
-    updatePinnedComponents();
-    const auto pinnedTailHeight = getCurrentPinnedTailHeight();
-    auto pinnedTailBounds = bounds.removeFromBottom(pinnedTailHeight);
-
-    updatePinnedComponents();
-    const auto pinnedHeaderHeight = getCurrentPinnedHeaderHeight();
-    auto pinnedHeaderBounds = bounds.removeFromTop(pinnedHeaderHeight);
-
-    if (pinnedHeaderComponent != nullptr)
-        pinnedHeaderComponent->setBounds(pinnedHeaderBounds);
-
-    if (pinnedHeaderHeight > 0 && ! bounds.isEmpty())
-        bounds.removeFromTop(verticalGap);
-
-    pageViewport.setBounds(config.moduleKey == "dyn" && ! crossoverSettingsActive
-        ? bounds.expanded(dynControlGroupOutset, 0) : bounds);
-
-    if (pinnedTailComponent != nullptr)
-    {
-        pinnedTailComponent->setBounds(pinnedTailBounds);
-        if (auto* currentPage = getCurrentPageComponent())
-            currentPage->layoutPinnedTail();
-    }
+    pageViewport.setBounds(bool(getProperties().getWithDefault("headerOnly", false)) || bool(getProperties().getWithDefault("sharedMainControls", false)) ? juce::Rectangle<int>() : bounds);
     updatePageViewport();
 }
 
-void CrossoverModuleComponent::mouseDown(const juce::MouseEvent& event)
+void CrossoverModuleComponent::mouseDown(const juce::MouseEvent&)
 {
     clearFocus();
-    if(event.mods.isPopupMenu()) showBlockArrange();
-}
-
-void CrossoverModuleComponent::showBlockArrange()
-{
-    if(auto* page=dynamic_cast<CrossoverRangePage*>(getCurrentPageComponent())) page->showBlockArrange();
 }
 
 void CrossoverModuleComponent::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
 {
+    if (bool(getProperties().getWithDefault("stackedModule", false)))
+    {
+        if (auto* editor = findParentComponentOfClass<AvaAudioProcessorEditor>())
+            editor->mouseWheelMove(event.getEventRelativeTo(editor), wheel);
+        return;
+    }
     scrollPageViewport(event, wheel);
 }
 
@@ -146,39 +56,37 @@ void CrossoverModuleComponent::scrollPageViewport(const juce::MouseEvent& event,
 void CrossoverModuleComponent::refreshRangeControls()
 {
     for (auto& page : rangePages)
-        if (page != nullptr) page->refreshExternalState();
+        if (page != nullptr && page->isVisible()) page->refreshExternalState();
 }
 
 void CrossoverModuleComponent::refreshExternalState()
 {
+    const auto now = juce::Time::getMillisecondCounter();
+    if (!externalStateDirty.exchange(false) && now - lastAvailabilityRefresh < 1000) {
+        if (pageScrollRestored && pageViewport.getViewPositionY() != restoredPageScrollY) saveUiState();
+        return;
+    }
+    lastAvailabilityRefresh = now;
     if (! restoreUiStateIfChanged()
         && pageScrollRestored
         && pageViewport.getViewPositionY() != restoredPageScrollY)
         saveUiState();
 
-    if (config.refreshExternalState != nullptr && ! config.refreshExternalState())
-        return;
-
     synchroniseManualSoloMaskFromParameters();
-    if(config.getBlockOrder) refreshRangeControls();
+    if(config.moduleKey == "chain") refreshRangeControls();
 
     if (crossoverSettingsPage != nullptr)
         crossoverSettingsPage->refreshExternalState();
 
-    updateMonitorButtons();
-    updateHeaderSoloState();
+    updateRangeNavigation();
+    updateSoloState();
     updatePageViewport();
 }
 
 int CrossoverModuleComponent::getPreferredHeight() const noexcept
 {
-    const auto pinnedHeaderHeight = getCurrentPinnedHeaderHeight();
-
-    return (config.showCrossoverNavigation ? rowHeight + verticalGap : 0)
-        + (config.showCrossoverSolo ? rowHeight + verticalGap : 0)
-         + (pinnedHeaderHeight > 0 ? pinnedHeaderHeight + verticalGap : 0)
-         + getCurrentPagePreferredHeight()
-         + getCurrentPinnedTailHeight();
+    return (config.showCrossoverNavigation || config.showCrossoverSolo ? getSquareControlSize(*this) + getUiGap(*this) : 0)
+         + getCurrentPagePreferredHeight();
 }
 
 void CrossoverModuleComponent::updatePageVisibility()
@@ -187,49 +95,22 @@ void CrossoverModuleComponent::updatePageVisibility()
 
     for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
     {
-        if (auto* page = rangePages[rangeIndex].get())
-            page->setVisible(! crossoverSettingsActive && rangeIndex < activeRangeCount && rangeIndex == visibleRangeIndex);
+        if (auto* page = rangePages[rangeIndex].get()) {
+            const auto show = rangeIndex < activeRangeCount && rangeIndex == visibleRangeIndex;
+            if (show && !page->isVisible()) page->refreshExternalState();
+            page->setVisible(show);
+        }
     }
 
     if (crossoverSettingsPage != nullptr)
-        crossoverSettingsPage->setVisible(crossoverSettingsActive);
+        crossoverSettingsPage->setVisible(config.showCrossoverControls);
 
-    updateHeaderSoloState();
-    updatePinnedComponents();
+    updateSoloState();
     updatePageViewport();
-}
-
-void CrossoverModuleComponent::updatePinnedComponents()
-{
-    auto* currentPage = getCurrentPageComponent();
-    const auto update = [this] (juce::Component*& pinned, juce::Component* next)
-    {
-        if (pinned != next)
-        {
-            if (pinned != nullptr)
-            {
-                pinned->setVisible(false);
-                removeChildComponent(pinned);
-            }
-
-            pinned = next;
-            if (pinned != nullptr)
-                addAndMakeVisible(*pinned);
-        }
-
-        if (pinned != nullptr)
-            pinned->setVisible(true);
-    };
-
-    update(pinnedHeaderComponent, currentPage != nullptr ? currentPage->getPinnedHeaderComponent() : nullptr);
-    update(pinnedTailComponent, currentPage != nullptr ? currentPage->getPinnedTailComponent() : nullptr);
 }
 
 CrossoverModulePage* CrossoverModuleComponent::getCurrentPageComponent() const noexcept
 {
-    if (crossoverSettingsActive)
-        return crossoverSettingsPage.get();
-
     return visibleRangeIndex < rangePages.size() ? rangePages[visibleRangeIndex].get()
                                                : nullptr;
 }
@@ -242,24 +123,9 @@ int CrossoverModuleComponent::getCurrentPagePreferredHeight() const noexcept
     return 0;
 }
 
-int CrossoverModuleComponent::getCurrentPinnedHeaderHeight() const noexcept
-{
-    if (auto* currentPage = getCurrentPageComponent())
-        return currentPage->getPinnedHeaderHeight();
-
-    return 0;
-}
-
-int CrossoverModuleComponent::getCurrentPinnedTailHeight() const noexcept
-{
-    if (auto* currentPage = getCurrentPageComponent())
-        return currentPage->getPinnedTailHeight();
-
-    return 0;
-}
-
 void CrossoverModuleComponent::updatePageViewport()
 {
+    if (bool(getProperties().getWithDefault("flatBlocks", false)) || bool(getProperties().getWithDefault("sharedMainControls", false))) return;
     auto* currentPage = getCurrentPageComponent();
 
     if (currentPage == nullptr)
@@ -281,9 +147,11 @@ void CrossoverModuleComponent::updatePageViewport()
             holder->setName("viewport-content");
     }
 
+    currentPage->getProperties().set("contentRightInset", getProperties().getWithDefault("contentRightInset", 0));
+    const auto pageWidth = viewportBounds.getWidth();
+    currentPage->setSize(pageWidth, currentPage->getHeight());
     const auto pageHeight = juce::jmax(viewportBounds.getHeight(), getCurrentPagePreferredHeight());
-    currentPage->setSize(viewportBounds.getWidth(), pageHeight);
-    const auto maxScrollY = juce::jmax(0, pageHeight - viewportBounds.getHeight());
-    pageViewport.setViewPosition(0, juce::jlimit(0, maxScrollY, previousScrollY));
+    currentPage->setSize(pageWidth, pageHeight);
+    pageViewport.setViewPosition(0, juce::jlimit(0, juce::jmax(0, pageHeight - viewportBounds.getHeight()), previousScrollY));
     pageScrollRestored = true;
 }

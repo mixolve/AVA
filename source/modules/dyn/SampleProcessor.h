@@ -5,6 +5,9 @@
 #include "PeakCrest.h"
 #include "AutoRelease.h"
 #include "ThresholdHysteresis.h"
+#include "HoldWindow.h"
+#include "LookaheadGainShaper.h"
+#include "AttackSourceGate.h"
 #include "../shared/SampleRangeBank.h"
 
 #include <JuceHeader.h>
@@ -34,12 +37,11 @@ public:
         float threshold = 0.0f, thresholdHysteresisDb = 0.0f;
         float adaptive = 0.0f;
         float tension = 0.0f;
-        float delayMs = 0.0f;
         float attackMs = 0.0f;
         float attackCurve = 0.0f;
         float holdMs = 0.0f;
         float autoRelease = 0.0f, releaseMemoryMs = 200.0f, releaseDepth = 0.0f;
-        float releasePeakMs = 0.0f, releaseRmsMs = 150.0f;
+        float releasePeakMs = 10.0f, releaseRmsMs = 150.0f;
         float input = 0.0f;
         float makeUp = 0.0f;
         float mix = 100.0f;
@@ -47,21 +49,19 @@ public:
         float range = 96.0f;
         float morph = 100.0f;
         float ratio = 100.0f;
-        float progression = 0.0f, progressionSpan = 12.0f;
         float peakRms = 0.0f;
         float peakCrestDb = 0.0f, rmsTime = 50.0f;
         float feedback = 0.0f;
         float compKnee = 0.0f, clipKnee = 0.0f;
+        bool clipEql = false;
         float lookaheadMs = 0.0f;
+        float lookaheadCurve = 0.0f;
         float tensionFloor = -96.0f;
         float tensionHysteresis = 0.0f;
         float releaseCurve = 0.0f;
-        float releaseType = 0.0f, rangeCurve = 0.0f;
+        float rangeCurve = 0.0f;
         float adaptiveTime = 50.0f;
         float adaptiveOffset = 0.0f;
-        float adaptiveAttack = 30.0f;
-        float adaptiveHold = 0.0f;
-        float adaptiveRelease = 300.0f;
         bool sidechainListen = false;
         bool useSidechainInput = false;
         bool delta = false;
@@ -73,7 +73,6 @@ public:
                 && juce::approximatelyEqual(thresholdHysteresisDb, other.thresholdHysteresisDb)
                 && juce::approximatelyEqual(adaptive, other.adaptive)
                 && juce::approximatelyEqual(tension, other.tension)
-                && juce::approximatelyEqual(delayMs, other.delayMs)
                 && juce::approximatelyEqual(attackMs, other.attackMs)
                 && juce::approximatelyEqual(attackCurve, other.attackCurve)
                 && juce::approximatelyEqual(holdMs, other.holdMs)
@@ -89,25 +88,21 @@ public:
                 && juce::approximatelyEqual(output, other.output)
                 && juce::approximatelyEqual(morph, other.morph)
                 && juce::approximatelyEqual(ratio, other.ratio)
-                && juce::approximatelyEqual(progression, other.progression)
-                && juce::approximatelyEqual(progressionSpan, other.progressionSpan)
                 && juce::approximatelyEqual(peakRms, other.peakRms)
                 && juce::approximatelyEqual(peakCrestDb, other.peakCrestDb)
                 && juce::approximatelyEqual(rmsTime, other.rmsTime)
                 && juce::approximatelyEqual(feedback, other.feedback)
                 && juce::approximatelyEqual(compKnee, other.compKnee)
                 && juce::approximatelyEqual(clipKnee, other.clipKnee)
+                && clipEql == other.clipEql
                 && juce::approximatelyEqual(lookaheadMs, other.lookaheadMs)
+                && juce::approximatelyEqual(lookaheadCurve, other.lookaheadCurve)
                 && juce::approximatelyEqual(tensionFloor, other.tensionFloor)
                 && juce::approximatelyEqual(tensionHysteresis, other.tensionHysteresis)
                 && juce::approximatelyEqual(releaseCurve, other.releaseCurve)
-                && juce::approximatelyEqual(releaseType, other.releaseType)
                 && juce::approximatelyEqual(rangeCurve, other.rangeCurve)
                 && juce::approximatelyEqual(adaptiveTime, other.adaptiveTime)
                 && juce::approximatelyEqual(adaptiveOffset, other.adaptiveOffset)
-                && juce::approximatelyEqual(adaptiveAttack, other.adaptiveAttack)
-                && juce::approximatelyEqual(adaptiveHold, other.adaptiveHold)
-                && juce::approximatelyEqual(adaptiveRelease, other.adaptiveRelease)
                 && sidechainListen == other.sidechainListen
                 && useSidechainInput == other.useSidechainInput
                 && delta == other.delta
@@ -136,7 +131,6 @@ private:
         std::array<double, numBranches> tensions { 0.0, 0.0, 0.0, 0.0 };
         std::array<int, detector::count> releaseSamples {};
         int holdSamples = 0;
-        int delaySamples = 0;
         int attackSamples = 0;
         double attackCurve = 0.0;
         double makeUpGain = 1.0;
@@ -146,32 +140,29 @@ private:
         double inputGain = 1.0;
         double morph = 1.0;
         double ratio = 100.0;
-        double progression = 0.0, progressionSpan = 12.0;
         double rmsMix = 0.0;
         double peakCrestDb = 0.0, peakScale = 1.0, thresholdHysteresisDb = 0.0;
         double transientGain = 1.0, sustainGain = 1.0;
-        double feedback = 0.0, feedbackSmoothingCoefficient = 0.0;
+        double feedback = 0.0;
         double autoRelease = 0.0, releaseMemoryCoefficient = 0.0, releaseDepth = 0.0;
         double releaseGainExponent = 1.0;
         double compKneeDb = 0.0;
         double clipKneeDb = 0.0, clipLower = 1.0, clipUpper = 1.0;
+        bool clipEql = false;
         double tensionFloor = 0.0;
         double tensionHysteresis = 0.0;
-        double tensionSmoothingCoefficient = 0.0;
         double releaseCurve = 0.0;
-        double releaseType = 0.0, rangeCurve = 0.0, rangeDb = 96.0;
+        double rangeCurve = 0.0, rangeDb = 96.0;
         double adaptiveOffsetDb = 0.0;
-        double adaptiveAttackCoefficient = 0.0;
-        double adaptiveReleaseCoefficient = 0.0;
-        int adaptiveHoldSamples = 0;
         bool delta = false;
         int lookaheadSamples = 0;
+        double lookaheadCurve = 0.0;
         int bufferSize = 1;
         int dryBufferSize = 1;
         int latencySamples = 0;
     };
 
-    double satShape(double value) const;
+    double satShape(double value, double referenceLevel) const;
     static double tensionTarget(double env, double threshold, double floorThreshold, double floorHysteresis, double tension);
     struct ReleaseState
     {
@@ -179,17 +170,23 @@ private:
         double target = 0.0;
         int elapsedSamples = 0;
         int durationSamples = 0;
-        int holdSamplesRemaining = 0;
+        // Elapsed HOLD time, not a countdown frozen at the beginning of a cycle.
+        // This lets editing HOLD in real time extend/shorten the current hold.
+        int holdElapsedSamples = 0;
+        bool holdCompleted = false;
         bool active = false;
     };
 
     struct AttackState
     {
         double startGain = 1.0;
+        // Most compression requested during this Attack. Do not substitute
+        // the sample-varying detector target into the running interpolation.
+        double targetGain = 1.0;
         int elapsedSamples = 0;
         int durationSamples = 0;
-        int delaySamplesRemaining = 0;
         bool active = false;
+        bool settled = false;
     };
 
     double releaseTowards(ReleaseState& state,
@@ -229,43 +226,26 @@ private:
     int maxBuf = 1;
 
     std::array<double, detector::count> envBase {};
-    std::array<double, branchCount> baseGainState { 1.0, 1.0, 1.0, 1.0 };
-    std::array<double, branchCount> smoothedTensions { 0.0, 0.0, 0.0, 0.0 };
-    bool tensionSmoothingInitialised = false;
-    struct SignalPeakState
-    {
-        struct Entry { double level = 0.0; juce::uint64 sample = 0; };
-        std::vector<Entry> queue;
-        size_t head = 0, count = 0, window = 1;
-        juce::uint64 sample = 0, lastCrossing = 0;
-        bool positive = true, hasCrossing = false;
-    };
-    SignalPeakState baseSignalPeak, cleanSignalPeak;
-    // Minimum gain over the audio lookahead interval; storage is prepared off the audio path.
-    SignalPeakState lookaheadGain;
-    double alignLookaheadGain(double gain);
     std::array<detector::ReleaseMemory, detector::count> releaseMemories;
-    double smoothedFeedback = 0.0;
-    bool feedbackInitialised = false;
-    void prepareSignalPeak(SignalPeakState& state, bool positive);
-    void updateCompressorGain(size_t detectorIndex, double peakNow, bool inputPositive,
-                              double releaseSignal, double releaseThreshold, int releaseSamples,
-                              double gainExponent, double trackingBlend, double feedbackGainScale = 1.0);
-    double updateSignalPeak(SignalPeakState& state, double level, bool positive);
+    void updateCompressorGain(size_t detectorIndex, double detectorLevel, double threshold,
+                              int releaseSamples, double gainExponent, double feedbackGainScale);
+    std::array<HoldWindow, detector::count> compressorHoldWindows;
+    LookaheadGainShaper lookaheadGain;
+    dyn::ballistics::AttackSourceGate attackSourceGate;
+    bool attackSourceQuiet = false;
     std::array<double, detector::count> cleanEnvPeak { 0.0, 0.0 };
     std::array<double, detector::count> cleanGainState { 1.0, 1.0 };
     std::array<double, detector::count> cleanGainTarget { 1.0, 1.0 };
     std::array<AttackState, detector::count> cleanAttackStates;
-    std::array<double, detector::count> cleanHalfPeak { 0.0, 0.0 };
-    std::array<bool, detector::count> cleanInputPositive { true, true };
     std::array<ReleaseState, detector::count> baseReleaseStates;
     std::array<ReleaseState, detector::count> cleanReleaseStates;
     std::array<detector::ThresholdHysteresis, detector::count> cleanThresholdHysteresis;
     std::array<detector::ThresholdHysteresis, branchCount> tensionThresholdHysteresis;
     std::array<double, branchCount> adaptiveReferenceDb { -96.0, -96.0, -96.0, -96.0 };
-    std::array<int, branchCount> adaptiveHoldSamplesRemaining { 0, 0, 0, 0 };
-    std::array<std::vector<double>, channelCount> adaptiveRmsPower;
-    std::array<double, channelCount> adaptiveRmsPowerSum { 0.0, 0.0 };
+    // Ring of cumulative energies: an arbitrary-length RMS window can be
+    // queried in O(1), even while ADAP-TIME is being automated.
+    std::array<std::vector<double>, channelCount> adaptiveRmsCumulativePowerHistory;
+    std::array<double, channelCount> adaptiveRmsCumulativePower { 0.0, 0.0 };
     size_t adaptiveRmsWindowSamples = 1;
     size_t adaptiveRmsPosition = 0;
     size_t adaptiveRmsSampleCount = 0;
@@ -276,6 +256,7 @@ private:
     size_t detectorRmsWindowSamples = 1, detectorRmsPosition = 0, detectorRmsSampleCount = 0;
     int bufPos = 0;
     int bufPosDry = 0;
+    double delayedSample(const std::vector<double>& history, int writeIndex) const noexcept;
 
     std::array<std::vector<double>, branchCount> dmBase;
     std::vector<double> dryL;

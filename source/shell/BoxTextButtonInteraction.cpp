@@ -6,13 +6,11 @@ void BoxTextButton::enablementChanged()
 {
     if (! isEnabled())
     {
-        dismissActionPrompt();
-        stopTimer();
         pointerDown = false;
         dragActive = false;
         pressHighlight = false;
         pressCanceled = false;
-        longPressEligible = false;
+        pressedBottomIndicator = -1;
     }
 
     repaint();
@@ -20,34 +18,23 @@ void BoxTextButton::enablementChanged()
 
 void BoxTextButton::mouseDown(const juce::MouseEvent& event)
 {
-    if (! isEnabled())
-        return;
-
-    if(event.mods.isPopupMenu() && onPopupClick) { onPopupClick(); return; }
-
-    if (actionPromptActive)
+    if(bool(getProperties().getWithDefault("passiveIndicator",false)))return;
+    if (!bool(getProperties().getWithDefault("preserveCtrlClick", false)) && selectionGesture.begin(*this, event))
     {
-        if (! event.mods.isLeftButtonDown() || ! contains(event.getPosition()))
-        {
-            dismissActionPrompt();
-            return;
-        }
-
-        const auto actionIndex = getActionPromptHitIndex(event.getPosition());
-
-        if (actionIndex < 0)
-        {
-            dismissActionPrompt();
-            return;
-        }
-
-        actionPromptPressedIndex = actionIndex;
-        actionPromptHoverIndex = actionIndex;
+        pointerDown = pressHighlight = false;
+        return;
+    }
+    if (!isEnabled()) return;
+    const auto bottom = bottomIndicatorAt(event.getPosition());
+    if (bottom >= 0 && event.mods.isLeftButtonDown())
+    {
+        pressedBottomIndicator = bottom;
         repaint();
         return;
     }
 
-    const auto modifiedClick = (onModifiedClick != nullptr
+    const auto modifiedClick = (onShiftClick != nullptr && event.mods.isShiftDown())
+        || (onModifiedClick != nullptr
         && (event.mods.isAltDown() || event.mods.isCtrlDown()))
         || (onControlDrag != nullptr && event.mods.isCtrlDown() && ! event.mods.isAltDown());
     if (! event.mods.isLeftButtonDown() || (event.mods.isPopupMenu() && ! modifiedClick))
@@ -59,61 +46,36 @@ void BoxTextButton::mouseDown(const juce::MouseEvent& event)
     dragActive = false;
     pressCanceled = false;
     pressHighlight = true;
-    longPressEligible = ! modifiedClick && getActionPromptCount() > 0;
-    if (longPressEligible)
-        startTimer(longPressDelayMs);
-    else
-        stopTimer();
     repaint();
-}
-
-void BoxTextButton::mouseDoubleClick(const juce::MouseEvent& event)
-{
-    if (onModifiedClick != nullptr && (event.mods.isAltDown() || event.mods.isCtrlDown()))
-        return;
-
-    if (isEnabled() && ! actionPromptActive && onDoubleClick != nullptr
-        && event.mods.isLeftButtonDown())
-    {
-        ++pendingClickGeneration;
-        onDoubleClick();
-        return;
-    }
-
-    juce::TextButton::mouseDoubleClick(event);
 }
 
 void BoxTextButton::mouseDrag(const juce::MouseEvent& event)
 {
+    if(bool(getProperties().getWithDefault("passiveIndicator",false)))return;
+    if (selectionGesture.isActive()) return;
     if (! isEnabled())
         return;
 
-    if (actionPromptActive)
-    {
-        if (event.mouseWasDraggedSinceMouseDown())
-        {
-            actionPromptPressedIndex = -1;
-            actionPromptHoverIndex = -1;
-            repaint();
-        }
+    if (pressedBottomIndicator >= 0)
         return;
-    }
 
     if (! pointerDown)
         return;
 
-    if (onControlDrag != nullptr && clickModifiers.isCtrlDown() && ! clickModifiers.isAltDown()
+    const auto dragGesture = dragRequiresControl
+        ? clickModifiers.isCtrlDown() && !clickModifiers.isAltDown()
+        : !clickModifiers.isAnyModifierKeyDown();
+    if (onControlDrag != nullptr && dragGesture
         && (controlDragActive || event.getDistanceFromDragStart() >= 4))
     {
         const auto starting = ! controlDragActive;
         controlDragActive = true;
         dragActive = true;
         pressHighlight = false;
-        longPressEligible = false;
-        stopTimer();
         repaint();
         if (starting && onControlDragStarted != nullptr)
             onControlDragStarted();
+        if(starting){auto input=event.source;input.forceMouseCursorUpdate();}
         const auto action = onControlDrag;
         action(event, false);
         return;
@@ -123,17 +85,11 @@ void BoxTextButton::mouseDrag(const juce::MouseEvent& event)
     {
         pressCanceled = true;
         pressHighlight = false;
-        longPressEligible = false;
-        stopTimer();
         repaint();
     }
 
     if (! dragActive && event.getDistanceFromDragStart() >= 4)
-    {
         dragActive = true;
-        longPressEligible = false;
-        stopTimer();
-    }
 
     const auto shouldHighlight = ! dragActive && contains(event.getPosition());
 
@@ -143,84 +99,28 @@ void BoxTextButton::mouseDrag(const juce::MouseEvent& event)
         repaint();
     }
 
-    if (! shouldHighlight)
-    {
-        longPressEligible = false;
-        stopTimer();
-    }
 }
 
 void BoxTextButton::mouseUp(const juce::MouseEvent& event)
 {
+    if(bool(getProperties().getWithDefault("passiveIndicator",false)))return;
+    if (selectionGesture.finish(event)) return;
+    if (pressedBottomIndicator >= 0)
+    {
+        const auto index = std::exchange(pressedBottomIndicator, -1);
+        repaint();
+        if (isEnabled() && bottomIndicatorAt(event.getPosition()) == index
+            && !event.mouseWasDraggedSinceMouseDown())
+        {
+            repaint();
+            const auto indicator = bottomIndicators[static_cast<size_t>(index)];
+            indicator.toggle();
+        }
+        return;
+    }
+
     if (! isEnabled())
         return;
-
-    if (consumeNextMouseUp)
-    {
-        consumeNextMouseUp = false;
-        return;
-    }
-
-    if (actionPromptActive)
-    {
-        const auto actionIndex = getActionPromptHitIndex(event.getPosition());
-        const auto selectedIndex = actionPromptPressedIndex;
-        actionPromptPressedIndex = -1;
-
-        if (selectedIndex < 0 || selectedIndex != actionIndex)
-        {
-            dismissActionPrompt();
-            return;
-        }
-
-        std::function<void()> action;
-        auto resolvedIndex = 0;
-
-        if (longPressResetAction != nullptr)
-        {
-            if (selectedIndex == resolvedIndex)
-                action = longPressResetAction;
-            ++resolvedIndex;
-        }
-
-        if (action == nullptr && longPressSecondaryAction != nullptr)
-        {
-            if (selectedIndex == resolvedIndex)
-                action = longPressSecondaryAction;
-            ++resolvedIndex;
-        }
-
-        const auto hasMoveAction = onMoveArmed != nullptr;
-        const auto selectMove = action == nullptr
-            && hasMoveAction
-            && selectedIndex == resolvedIndex;
-
-        if (hasMoveAction)
-            ++resolvedIndex;
-
-        if (action == nullptr
-            && ! selectMove
-            && longPressTrailingAction != nullptr
-            && selectedIndex == resolvedIndex)
-        {
-            action = longPressTrailingAction;
-        }
-
-        dismissActionPrompt();
-
-        if (selectMove)
-        {
-            onMoveArmed();
-        }
-        else if (action != nullptr)
-        {
-            action();
-        }
-
-        return;
-    }
-
-    stopTimer();
 
     if (controlDragActive)
     {
@@ -228,12 +128,12 @@ void BoxTextButton::mouseUp(const juce::MouseEvent& event)
         pointerDown = false;
         dragActive = false;
         pressHighlight = false;
-        longPressEligible = false;
         pressCanceled = false;
         repaint();
         const auto action = onControlDrag;
         if (action != nullptr)
             action(event, true);
+        auto input=event.source;input.forceMouseCursorUpdate();
         return;
     }
 
@@ -242,37 +142,27 @@ void BoxTextButton::mouseUp(const juce::MouseEvent& event)
     pointerDown = false;
     dragActive = false;
     pressHighlight = false;
-    longPressEligible = false;
     pressCanceled = false;
     repaint();
 
     if (! shouldClick)
         return;
 
+    if (onShiftClick && clickModifiers.isShiftDown() && !clickModifiers.isCtrlDown() && !clickModifiers.isAltDown())
+    {
+        const auto action = onShiftClick;
+        action();
+        return;
+    }
+
     if (onModifiedClick != nullptr && (clickModifiers.isAltDown() || clickModifiers.isCtrlDown()))
     {
-        ++pendingClickGeneration;
         const auto action = onModifiedClick;
         action(clickModifiers);
         return;
     }
 
-    if (onDoubleClick != nullptr && onClick != nullptr)
-    {
-        if (event.getNumberOfClicks() > 1)
-            return;
-
-        const auto generation = ++pendingClickGeneration;
-        juce::Timer::callAfterDelay(juce::MouseEvent::getDoubleClickTimeout(),
-                                   [safeThis = juce::Component::SafePointer<BoxTextButton>(this), generation]
-        {
-            if (safeThis != nullptr && safeThis->isEnabled()
-                && safeThis->pendingClickGeneration == generation)
-                safeThis->triggerClick();
-        });
-    }
-    else
-        triggerClick();
+    triggerClick();
 }
 
 void BoxTextButton::mouseExit(const juce::MouseEvent&)
@@ -280,70 +170,19 @@ void BoxTextButton::mouseExit(const juce::MouseEvent&)
     if (! isEnabled())
         return;
 
-    if (actionPromptActive)
-    {
-        if (actionPromptPressedIndex >= 0 || actionPromptHoverIndex >= 0)
-        {
-            actionPromptPressedIndex = -1;
-            actionPromptHoverIndex = -1;
-            repaint();
-        }
-
-        return;
-    }
-
     if (! pointerDown || ! pressHighlight)
     {
         repaint();
         return;
     }
 
-    if (cancelClickOnLeave)
-    {
-        pressCanceled = true;
-        longPressEligible = false;
-        stopTimer();
-    }
+    if (cancelClickOnLeave) pressCanceled = true;
 
     pressHighlight = false;
-    longPressEligible = false;
-    stopTimer();
     repaint();
 }
 
-void BoxTextButton::mouseMove(const juce::MouseEvent& event)
+void BoxTextButton::mouseEnter(const juce::MouseEvent&)
 {
-    if (! isEnabled() || ! actionPromptActive || actionPromptPressedIndex >= 0
-        || ! event.source.isMouse() || event.source.isDragging())
-        return;
-
-    const auto hoverIndex = getActionPromptHitIndex(event.getPosition());
-
-    if (actionPromptHoverIndex == hoverIndex)
-        return;
-
-    actionPromptHoverIndex = hoverIndex;
-    repaint();
-}
-
-void BoxTextButton::mouseEnter(const juce::MouseEvent& event)
-{
-    if (actionPromptActive && actionPromptPressedIndex < 0)
-        actionPromptHoverIndex = getActionPromptHitIndex(event.getPosition());
-    if (isEnabled())
-        repaint();
-}
-
-void BoxTextButton::timerCallback()
-{
-    stopTimer();
-
-    if (! isEnabled())
-        return;
-
-    if (! pointerDown || ! pressHighlight || dragActive || !longPressEligible)
-        return;
-
-    longPressEligible = false;
-    showActionPrompt();
+    if (isEnabled()) repaint();
 }

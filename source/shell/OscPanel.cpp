@@ -4,163 +4,102 @@
 
 #include <utility>
 
-using crossover_ui::makeTextButton;
 
 OscPanel::OscPanel(Actions actionsIn) : actions(std::move(actionsIn))
 {
-    setOpaque(true);
-
-    enableButton = makeTextButton("OSC-ENABLE");
-    enableButton->setClickingTogglesState(true);
-    enableButton->onClick = [this]
+    getProperties().set("emptyEditorBackground",true);
+    enableControl = std::make_unique<LocalChoiceControl>("OSC", juce::StringArray { "OFF", "ON" }, 0);
+    enableControl->setBottomIndicatorsVisible(false, false);
+    enableControl->onValueChanged = [this]
     {
         auto settings = actions.getSettings();
-        settings.enabled = enableButton->getToggleState();
+        settings.enabled = enableControl->getSelectedChoiceIndex() == 1;
         actions.setSettings(settings);
         refresh();
-        actions.clearFocus();
     };
-    addAndMakeVisible(*enableButton);
+    addAndMakeVisible(*enableControl);
 
-    listButton = makeTextButton("LIST");
-    listButton->setClickingTogglesState(true);
-    listButton->onClick = [this]
-    {
-        actions.toggleParameterList();
-        refresh();
-        actions.clearFocus();
-    };
-    addAndMakeVisible(*listButton);
-
-    statusLabel = std::make_unique<juce::Label>();
+    statusLabel = std::make_unique<SquareTextLabel>();
     statusLabel->setFont(makeUiFont());
     statusLabel->setColour(juce::Label::textColourId, uiWhite);
     statusLabel->setColour(juce::Label::outlineColourId, uiGreyLight);
     statusLabel->setBorderSize(juce::BorderSize<int> { 1 });
     statusLabel->setJustificationType(juce::Justification::centred);
-    statusLabel->setInterceptsMouseClicks(false, false);
+    statusLabel->setName("status");
     addAndMakeVisible(*statusLabel);
 
-    inputPortLabel = makeLabel("IN-PORT");
-    inputPortButton = makeTextButton({});
-    inputPortButton->onClick = [this] { editPort(true); };
-    addAndMakeVisible(*inputPortButton);
-
-    outputPortLabel = makeLabel("OUT-PORT");
-    outputPortButton = makeTextButton({});
-    outputPortButton->onClick = [this] { editPort(false); };
-    addAndMakeVisible(*outputPortButton);
-
-    outputHostLabel = makeLabel("HOST");
-    outputHostButton = makeTextButton({});
-    outputHostButton->onClick = [this]
+    const auto makePortControl = [this](const juce::String& name, bool input, int defaultPort)
     {
-        const auto settings = actions.getSettings();
-        actions.showTextPrompt(*outputHostButton, settings.outputHost,
-                               [this] (const juce::String& text)
-                               {
-                                   const auto host = text.trim();
-                                   if (host.isEmpty() || host.length() > 253)
-                                       return false;
-                                   auto updated = actions.getSettings();
-                                   updated.outputHost = host;
-                                   if (! actions.setSettings(updated))
-                                       return false;
-                                   refresh();
-                                   actions.clearFocus();
-                                   return true;
-                               });
+        auto control = std::make_unique<TextControl>(name, juce::String(defaultPort));
+        control->setBottomIndicatorsVisible(false, false);
+        control->onValueChanged = [this, input](const juce::String& text)
+        {
+            const auto digits = text.trim();
+            if (digits.isEmpty() || digits.length() > 5 || !digits.containsOnly("0123456789")) return false;
+            const auto port = digits.getIntValue();
+            if (port < 1 || port > 65535) return false;
+            auto settings = actions.getSettings();
+            if (input) settings.inputPort = port;
+            else settings.outputPort = port;
+            return actions.setSettings(settings);
+        };
+        return control;
     };
-    addAndMakeVisible(*outputHostButton);
+    inputPortControl = makePortControl("IN-PORT", true, OscSettings::defaultInputPort);
+    outputPortControl = makePortControl("OUT-PORT", false, OscSettings::defaultOutputPort);
+    addAndMakeVisible(*inputPortControl);
+    addAndMakeVisible(*outputPortControl);
+
+    outputHostControl = std::make_unique<TextControl>("HOST", OscSettings().outputHost);
+    outputHostControl->setFittedText();
+    outputHostControl->setBottomIndicatorsVisible(false, false);
+    outputHostControl->onValueChanged = [this](const juce::String& text)
+    {
+        const auto host = text.trim();
+        if (host.isEmpty() || host.length() > 253) return false;
+        auto settings = actions.getSettings();
+        settings.outputHost = host;
+        return actions.setSettings(settings);
+    };
+    addAndMakeVisible(*outputHostControl);
     refresh();
 }
 
-std::unique_ptr<BoxTextButton> OscPanel::makeLabel(const juce::String& text)
+int OscPanel::getPreferredHeight() const noexcept
 {
-    auto label = makeTextButton(text, uiGreyLight);
-    label->setClickingTogglesState(false);
-    label->setInteractionOutlineEnabled(false);
-    label->setTextJustification(juce::Justification::centredLeft);
-    label->setInterceptsMouseClicks(false, false);
-    addAndMakeVisible(*label);
-    return label;
-}
-
-void OscPanel::paint(juce::Graphics& graphics)
-{
-    graphics.fillAll(uiBackground);
+    if (isBlockCollapsed("OSC")) return controlBlockHeaderHeight;
+    return measureControlGrid(*this, getLocalBounds().reduced(controlBlockPadding + controlBlockFrameThickness), {
+        {enableControl.get()}, {inputPortControl.get()}, {outputPortControl.get()},
+        {statusLabel.get()}, {outputHostControl.get(), 2} }).getHeight() + 2 * (controlBlockPadding + controlBlockFrameThickness) + controlBlockHeaderHeight;
 }
 
 void OscPanel::resized()
 {
-    auto bounds = getLocalBounds();
-    auto controls = bounds.removeFromTop(rowHeight);
-    const auto enableWidth = juce::jmax((controls.getWidth() - parameterGap * 2) / 3,
-                                       getTextPixelWidth(makeUiFont(), "OSC-ENABLED") + uiGapDouble);
-    enableButton->setBounds(controls.removeFromLeft(enableWidth));
-    controls.removeFromLeft(parameterGap);
-    listButton->setBounds(controls.removeFromLeft((controls.getWidth() - parameterGap) / 2));
-    controls.removeFromLeft(parameterGap);
-    statusLabel->setBounds(controls);
-    bounds.removeFromTop(verticalGap);
-
-    const auto placePair = [&bounds] (BoxTextButton& label, BoxTextButton& value)
+    const auto collapsed = isBlockCollapsed("OSC");
+    for (auto* control : std::array<juce::Component*, 5> {
+            enableControl.get(), inputPortControl.get(), outputPortControl.get(),
+            statusLabel.get(), outputHostControl.get() })
     {
-        auto row = bounds.removeFromTop(rowHeight);
-        const auto labelWidth = (row.getWidth() - parameterGap) / 2;
-        label.setBounds(row.removeFromLeft(labelWidth));
-        row.removeFromLeft(parameterGap);
-        value.setBounds(row);
-        bounds.removeFromTop(verticalGap);
-    };
-    placePair(*inputPortLabel, *inputPortButton);
-    placePair(*outputPortLabel, *outputPortButton);
-    placePair(*outputHostLabel, *outputHostButton);
-}
-
-void OscPanel::editPort(const bool inputPort)
-{
-    auto& button = inputPort ? *inputPortButton : *outputPortButton;
-    const auto settings = actions.getSettings();
-    const auto currentPort = inputPort ? settings.inputPort : settings.outputPort;
-    actions.showTextPrompt(button, juce::String(currentPort),
-                           [this, inputPort] (const juce::String& text)
-                           {
-                               const auto trimmed = text.trim();
-                               if (trimmed.isEmpty() || ! trimmed.containsOnly("0123456789"))
-                                   return false;
-                               const auto port = trimmed.getIntValue();
-                               if (port < 1 || port > 65535)
-                                   return false;
-
-                               auto updated = actions.getSettings();
-                               if (inputPort)
-                                   updated.inputPort = port;
-                               else
-                                   updated.outputPort = port;
-
-                               if (! actions.setSettings(updated))
-                               {
-                                   if (! inputPort || ! updated.enabled)
-                                       return false;
-                                   updated.enabled = false;
-                                   if (! actions.setSettings(updated))
-                                       return false;
-                               }
-                               refresh();
-                               actions.clearFocus();
-                               return true;
-                           });
+        control->setVisible(!collapsed);
+        if (collapsed) control->setBounds({});
+    }
+    if (collapsed)
+    {
+        controlBlockFrames = {{getLocalBounds(), "OSC", uiGreyDark}};
+        return;
+    }
+    layoutControlGrid(*this, getLocalBounds().reduced(controlBlockPadding + controlBlockFrameThickness).withTrimmedTop(controlBlockHeaderHeight), {
+        {enableControl.get()}, {inputPortControl.get()}, {outputPortControl.get()},
+        {statusLabel.get()}, {outputHostControl.get(), 2} });
+    controlBlockFrames = {{getLocalBounds(), "OSC", uiGreyDark}};
 }
 
 void OscPanel::refresh()
 {
     const auto settings = actions.getSettings();
-    enableButton->setToggleState(settings.enabled, juce::dontSendNotification);
-    enableButton->setButtonText(settings.enabled ? "OSC-ENABLED" : "OSC-ENABLE");
-    listButton->setToggleState(actions.isParameterListVisible(), juce::dontSendNotification);
+    enableControl->setSelectedChoiceIndex(settings.enabled ? 1 : 0, false);
     statusLabel->setText(actions.isInputPortBusy() ? "BUSY" : "FREE", juce::dontSendNotification);
-    inputPortButton->setButtonText(juce::String(settings.inputPort));
-    outputPortButton->setButtonText(juce::String(settings.outputPort));
-    outputHostButton->setButtonText(settings.outputHost);
+    inputPortControl->setValue(juce::String(settings.inputPort));
+    outputPortControl->setValue(juce::String(settings.outputPort));
+    outputHostControl->setValue(settings.outputHost);
 }

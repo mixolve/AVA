@@ -1,5 +1,7 @@
 #include "Editor.h"
+#include "ChoiceControl.h"
 #include "PresetSection.h"
+#include "../modules/eql/RangeBank.h"
 
 void AvaAudioProcessorEditor::setupPresetControls()
 {
@@ -12,79 +14,98 @@ void AvaAudioProcessorEditor::setupPresetControls()
         const auto presetName = presetsSection->getSelectedPresetName();
 
         if (presetName.isEmpty())
+        {
+            refreshFilterPresetList();
             return;
+        }
 
-        const juce::ScopedValueSetter<bool> suppressHandlers(suppressFilterSectionValueChangeHandlers, true);
+        // EQL presets replace a module ValueTree in one operation. Record
+        // complete host snapshots around the operation: individual parameter
+        // listeners cannot be relied upon to see a replaceState() transaction.
+        auto& owner = audioProcessor.getRoutingOwner();
+        auto* historyEditor = owner.getContentEditor();
+        if (historyEditor != nullptr)
+            historyEditor->commitPendingHistorySnapshot(true);
 
-        if (auto* eqlProcessor = getActiveEqlProcessor(); eqlProcessor != nullptr && eqlProcessor->loadFilterPreset(presetName))
+        juce::MemoryBlock before;
+        owner.getStateInformationForABCompareSnapshot(before);
+
+        // Capture the actual EQL bank BEFORE applying the preset. Unlike an
+        // outer-plugin snapshot, these bytes can be restored directly into the
+        // same instance and cannot be lost in routing-state reconstruction.
+        const auto instanceId = audioProcessor.getRoutingInstanceId();
+        juce::MemoryBlock eqlBefore;
+        if (auto* bank = audioProcessor.getEqlProcessorBank())
+            bank->getStateInformation(eqlBefore);
+
+        bool loaded = false;
         {
-            reloadFilterPresetFromProcessor();
-            refreshFilterPresetList(presetName);
+            const juce::ScopedValueSetter<bool> suppressHandlers(suppressFilterSectionValueChangeHandlers, true);
+            if (auto* eqlProcessor = getActiveEqlProcessor(); eqlProcessor != nullptr)
+                loaded = eqlProcessor->loadFilterPreset(presetName);
+            if (loaded)
+                reloadFilterPresetFromProcessor();
+        }
+        refreshFilterPresetList();
+
+        if (loaded)
+        {
+            juce::MemoryBlock after;
+            owner.getStateInformationForABCompareSnapshot(after);
+            juce::MemoryBlock eqlAfter;
+            if (auto* bank = audioProcessor.getEqlProcessorBank())
+                bank->getStateInformation(eqlAfter);
+            if (historyEditor != nullptr)
+            {
+                if (audioProcessor.getSelectedModuleCopy() >= ava::module_stack::originalCount)
+                    // Undo for a duplicate must restore the whole module stack:
+                    // the EQL-only history path targets the ORIGINAL bank.
+                    historyEditor->scheduleHistorySnapshot();
+                else
+                    historyEditor->recordPresetHistoryChange(before, after, instanceId, eqlBefore, eqlAfter);
+            }
+            // Preset data is stored in a nested EQL processor, not in the
+            // outer APVTS. Explicitly mark the complete host state dirty.
+            audioProcessor.notifyHostOfStateChange();
+            if (historyEditor != nullptr)
+                historyEditor->observedStateRevision = owner.getStateRevision();
         }
     };
-    presetsSection->actionsReveal.onUpdate = [safeEditor = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
-    {
-        if (safeEditor != nullptr)
-        {
-            safeEditor->updateSectionStates();
-            safeEditor->resized();
-        }
-    };
-    presetsSection->actionsToggleButton->onClick = [this]
-    {
-        presetsSection->actionsToggleButton->setTablerIcon(
-            presetsSection->actionsToggleButton->getToggleState() ? "arrows-up" : "arrows-down");
-        presetsSection->actionsReveal.setExpanded(presetsSection->actionsToggleButton->getToggleState());
-        updateSectionStates();
-        resized();
-        clearKeyboardFocus(*this);
-    };
-    presetsSection->addButton->onClick = [this]
+    presetsSection->addButton->onTrigger = [this]
     {
         addFilterPreset();
         clearKeyboardFocus(*this);
     };
-    presetsSection->saveButton->onClick = [this]
+    presetsSection->saveButton->onTrigger = [this]
     {
         saveFilterPreset();
         clearKeyboardFocus(*this);
     };
-    presetsSection->renameButton->onClick = [this]
+    presetsSection->renameButton->onTrigger = [this]
     {
         if (presetsSection != nullptr)
             presetsSection->beginRename();
     };
-    presetsSection->defaultButton->onClick = [this]
+    presetsSection->defaultButton->onTrigger = [this]
     {
         setDefaultFilterPreset();
         clearKeyboardFocus(*this);
     };
-    presetsSection->deleteButton->onClick = [this]
-    {
-        clearKeyboardFocus(*this);
-    };
-    presetsSection->deleteButton->setLongPressPromptActions([this]
+    presetsSection->copyFiltersButton->onTrigger = [this] { copyAllEqlFilters(); };
+    presetsSection->pasteFilterButton->onTrigger = [this] { pasteAllEqlFilters(); };
+    presetsSection->deleteButton->onTrigger = [this]
     {
         deleteSelectedFilterPreset();
         clearKeyboardFocus(*this);
-    });
-    presetsSection->deleteButton->setLongPressPrimaryPromptIcon("trash");
-    addAndMakeVisible(*presetsSection->actionsToggleButton);
-    addAndMakeVisible(presetsSection->presetClip);
-    addAndMakeVisible(presetsSection->actionsClip);
-    presetsSection->presetClip.addAndMakeVisible(presetsSection->presetCombo);
-    presetsSection->presetClip.addAndMakeVisible(*presetsSection->addButton);
-    presetsSection->actionsClip.addAndMakeVisible(*presetsSection->saveButton);
-    presetsSection->actionsClip.addAndMakeVisible(*presetsSection->renameButton);
-    presetsSection->actionsClip.addAndMakeVisible(*presetsSection->defaultButton);
-    presetsSection->actionsClip.addAndMakeVisible(*presetsSection->deleteButton);
+    };
+    eqlContent.addAndMakeVisible(presetsSection->presetChoice);
+    for (auto* button : { presetsSection->addButton.get(), presetsSection->saveButton.get(),
+            presetsSection->renameButton.get(), presetsSection->defaultButton.get(), presetsSection->deleteButton.get(),
+            presetsSection->copyFiltersButton.get(), presetsSection->pasteFilterButton.get() })
+        eqlContent.addAndMakeVisible(*button);
     presetsSection->onRenameRequested = [this] (const juce::String& currentName)
     {
-        auto promptBounds = moduleTitle != nullptr ? getLocalArea(moduleTitle.get(), moduleTitle->getLocalBounds())
-                                                   : juce::Rectangle<int>();
-
-        if (! promptBounds.isEmpty())
-            promptBounds.setY(uiGap);
+        const auto promptBounds = getLocalArea(&presetsSection->presetChoice, presetsSection->presetChoice.getLocalBounds());
 
         showTextPrompt(currentName,
                        [this, currentName] (const juce::String& newName)
@@ -95,10 +116,7 @@ void AvaAudioProcessorEditor::setupPresetControls()
                            clearKeyboardFocus(*this);
                            return true;
                        },
-                       promptBounds);
+                       promptBounds, {}, {}, true, nullptr, {}, {}, {}, &presetsSection->presetChoice);
     };
-    if (auto* eqlProcessor = getActiveEqlProcessor())
-        refreshFilterPresetList(eqlProcessor->getSelectedFilterPresetName());
-    else
-        refreshFilterPresetList({});
+    refreshFilterPresetList();
 }

@@ -3,71 +3,43 @@
 
 namespace
 {
-void configurePresetCombo(NoTickComboBox& combo)
+std::unique_ptr<PushControl> makeSectionButton(const juce::String& text)
 {
-    combo.setEditableText(false);
-    combo.setJustificationType(juce::Justification::centred);
-    combo.setPopupMenuTextJustification(juce::Justification::centred);
-    combo.setColour(juce::ComboBox::backgroundColourId, uiGreyDark);
-    combo.setColour(juce::ComboBox::outlineColourId, uiGreyLight);
-    combo.setColour(juce::ComboBox::textColourId, uiWhite);
-    combo.setColour(juce::ComboBox::arrowColourId, uiWhite);
-    combo.setColour(juce::ComboBox::buttonColourId, uiGreyDark);
-    combo.setWantsKeyboardFocus(false);
-    combo.setMouseClickGrabsKeyboardFocus(false);
-    combo.setPromptStylePopupEnabled(true);
-}
-
-std::unique_ptr<BoxTextButton> makeSectionButton(const juce::String& text, const juce::Colour accent)
-{
-    auto button = std::make_unique<BoxTextButton>(accent);
-    button->setButtonText(text);
-    return button;
+    auto control = std::make_unique<PushControl>(text);
+    control->setBottomIndicatorsVisible(false, false);
+    return control;
 }
 }
 
 AvaAudioProcessorEditor::PresetsSection::PresetsSection()
 {
-    configurePresetCombo(presetCombo);
+    presetChoice.setBottomIndicatorsVisible(false, false);
+    presetChoice.getProperties().set("layoutCellSpan", 1);
 
-    presetClip.setName("presets");
-    actionsClip.setName("preset-actions");
-    presetCombo.setName("preset-list");
-
-    actionsToggleButton = makeSectionButton({}, uiAccent);
-    actionsToggleButton->setName("presets-toggle");
-    actionsToggleButton->setTablerIcon("arrows-down");
-    actionsToggleButton->setClickingTogglesState(true);
-    actionsToggleButton->setToggleActiveFillEnabled(false);
-    addButton = makeSectionButton("ADD", uiAccent);
-    saveButton = makeSectionButton("SAVE", uiGreyLight);
-    renameButton = makeSectionButton("RENAME", uiGreyLight);
-    defaultButton = makeSectionButton("DEFAULT", uiAccent);
-    deleteButton = makeSectionButton("DELETE", uiAccent);
-
-    auto handlePresetSelection = [this]
+    presetChoice.setName("preset-list");
+    // Show PRESET / SELECT at rest; reveal the selected preset on hover.
+    presetChoice.setIdleLabelVisible(true);
+    presetChoice.displayFormatter = [](int, const juce::String& value)
     {
-        const auto selectedIndex = presetCombo.getSelectedItemIndex();
+        return value.isEmpty() || value.equalsIgnoreCase("none") ? juce::String("PRESET\nSELECT") : value;
+    };
+
+    addButton = makeSectionButton("PRESET\nADD");
+    saveButton = makeSectionButton("PRESET\nSAVE");
+    renameButton = makeSectionButton("PRESET\nRENAME");
+    defaultButton = makeSectionButton("PRESET\nDEFAULT");
+    deleteButton = makeSectionButton("PRESET\nDELETE");
+    copyFiltersButton = makeSectionButton("ALL\nCOPY");
+    pasteFilterButton = makeSectionButton("ALL\nPASTE");
+
+    presetChoice.onValueChanged = [this]
+    {
+        if (ignorePresetCallbacks) return;
+        const auto selectedIndex = presetChoice.getSelectedChoiceIndex();
         selectedPresetName = juce::isPositiveAndBelow(selectedIndex, presetNames.size())
-            ? presetNames[selectedIndex]
-            : juce::String {};
-
-        if (onPresetSelected)
-            onPresetSelected();
+            ? presetNames[selectedIndex] : juce::String {};
+        if (onPresetSelected) onPresetSelected();
     };
-
-    presetCombo.onChange = [this, handlePresetSelection]
-    {
-        if (ignorePresetCallbacks)
-            return;
-
-        if (presetCombo.getSelectedItemIndex() < 0)
-            return;
-
-        handlePresetSelection();
-    };
-
-    presetCombo.onReselectedCurrentItem = handlePresetSelection;
 }
 
 void AvaAudioProcessorEditor::PresetsSection::beginRename()
@@ -88,18 +60,10 @@ void AvaAudioProcessorEditor::PresetsSection::setPresetNames(const juce::StringA
 {
     const juce::ScopedValueSetter<bool> scopedIgnore(ignorePresetCallbacks, true);
     presetNames = names;
-    presetCombo.clear(juce::dontSendNotification);
-
-    for (int index = 0; index < names.size(); ++index)
-        presetCombo.addItem(names[index].toUpperCase(), index + 1);
-
-    if (names.isEmpty())
-    {
-        presetCombo.setText({}, juce::dontSendNotification);
-        selectedPresetName.clear();
-        return;
-    }
-
+    juce::StringArray choices;
+    for (const auto& name : names) choices.add(name.toUpperCase());
+    presetChoice.setChoices(choices);
+    presetChoice.setInteractionEnabled(!names.isEmpty());
     auto selectedIndex = -1;
 
     if (preferredSelection.isNotEmpty())
@@ -114,7 +78,12 @@ void AvaAudioProcessorEditor::PresetsSection::setPresetNames(const juce::StringA
         }
     }
 
-    presetCombo.setSelectedItemIndex(selectedIndex, juce::dontSendNotification);
+    if (selectedIndex >= 0) presetChoice.setSelectedChoiceIndex(selectedIndex, false);
+    else
+    {
+        presetChoice.setChoices({});
+        presetChoice.setInteractionEnabled(false);
+    }
     selectedPresetName = juce::isPositiveAndBelow(selectedIndex, names.size())
         ? names[selectedIndex]
         : juce::String {};

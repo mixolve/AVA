@@ -1,11 +1,17 @@
 #include "Processor.h"
+#include "../../shell/Processor.h"
 
 #include "../shared/DspUtilities.h"
 
 DynModuleProcessor::DynModuleProcessor(juce::AudioProcessor& owner)
     : ownerProcessor(owner),
-      valueTreeState(moduleParameterHost, &undoManager, "dyn_state", createParameterLayout())
+      valueTreeState(moduleParameterHost, nullptr, "dyn_state", dyn::parameters::createParameterLayout())
 {
+    if (auto* instance = dynamic_cast<AvaAudioProcessor*>(&ownerProcessor))
+    {
+        syncTypeParameter = instance->getValueTreeState().getRawParameterValue(AvaAudioProcessor::paramSyncTypeId);
+        bpmParameter = instance->getValueTreeState().getRawParameterValue(AvaAudioProcessor::paramBpmId);
+    }
     cacheParameterPointers();
     spectralProcessors[0] = std::make_unique<DynSpectralProcessor>(ownerProcessor);
     setParameterListenersEnabled(true);
@@ -23,9 +29,6 @@ void DynModuleProcessor::prepareToPlay(const double sampleRate, const int sample
     processorBank.reset();
     spectralSampleRate = sampleRate;
     spectralBlockSize = samplesPerBlock;
-    domainFadeSamples = juce::jmax(1, juce::roundToInt(sampleRate * 0.005));
-    domainFadeRemaining.fill(0);
-    lastDomainOutput = {};
     for (size_t range = 0; range < numRanges; ++range)
     {
         processingSidechainChannel[range] = juce::roundToInt(loadParameter(range, dyn::parameters::ParameterSlot::sidechainChannel));
@@ -50,16 +53,6 @@ void DynModuleProcessor::resetProcessingState() noexcept
     processorBank.reset();
     for (auto& spectral : spectralProcessors)
         if (spectral != nullptr) spectral->resetProcessingState();
-    domainFadeRemaining.fill(0);
-    lastDomainOutput = {};
-}
-
-void DynModuleProcessor::processBlock(juce::AudioBuffer<float>& buffer)
-{
-    juce::ScopedNoDenormals noDenormals;
-    ava::modules::dsp::clearOutputOnlyChannels(ownerProcessor, buffer);
-    syncParameters(false, true);
-    processRange(0, buffer);
 }
 
 juce::AudioProcessorValueTreeState& DynModuleProcessor::getValueTreeState() noexcept
@@ -72,20 +65,10 @@ const juce::AudioProcessorValueTreeState& DynModuleProcessor::getValueTreeState(
     return valueTreeState;
 }
 
-juce::UndoManager& DynModuleProcessor::getUndoManager() noexcept
-{
-    return undoManager;
-}
-
-const juce::UndoManager& DynModuleProcessor::getUndoManager() const noexcept
-{
-    return undoManager;
-}
-
 dyn::dsp::ProcessorBank::RangeLatencies DynModuleProcessor::getRangeLatencies() const noexcept
 {
     auto latencies = processorBank.getRangeLatencies();
-    for (size_t range = 0; range < numRanges; ++range)
+    for (size_t range = 0; range < getCreatedRangeCount(); ++range)
         if (isSpectralRange(range) && spectralProcessors[range] != nullptr)
             latencies[range] = spectralProcessors[range]->getLatencySamples(juce::roundToInt(
                 spectralSampleRate * loadParameter(range, dyn::parameters::ParameterSlot::lookahead) * 0.001));
@@ -94,15 +77,14 @@ dyn::dsp::ProcessorBank::RangeLatencies DynModuleProcessor::getRangeLatencies() 
 
 size_t DynModuleProcessor::ensureRangeCount(const size_t rangeCount)
 {
-    const auto createdRangeCount = processorBank.ensureRangeCount(rangeCount);
-    processorBank.setRangeParameters(currentRangeParameters);
-    for (size_t range = 0; range < createdRangeCount; ++range)
-        if (spectralProcessors[range] == nullptr)
-        {
+    const auto target = std::clamp(rangeCount, size_t(1), numRanges);
+    for (size_t range = processorBank.getCreatedRangeCount(); range < target; ++range)
+        if (spectralProcessors[range] == nullptr) {
             spectralProcessors[range] = std::make_unique<DynSpectralProcessor>(ownerProcessor);
-            if (spectralSampleRate > 0.0)
-                spectralProcessors[range]->prepareToPlay(spectralSampleRate, spectralBlockSize);
+            if (spectralSampleRate > 0.0) spectralProcessors[range]->prepareToPlay(spectralSampleRate, spectralBlockSize);
         }
+    const auto createdRangeCount = processorBank.ensureRangeCount(target);
+    markParametersDirty();
     return createdRangeCount;
 }
 
@@ -145,12 +127,10 @@ void DynModuleProcessor::processRange(const size_t rangeIndex, juce::AudioBuffer
         processingCorrelation[rangeIndex] = correlation;
         if (auto* core = processorBank.getProcessor(rangeIndex)) core->reset();
         if (spectralProcessors[rangeIndex] != nullptr) spectralProcessors[rangeIndex]->resetProcessingState();
-        domainFadeRemaining[rangeIndex] = domainFadeSamples;
     }
     if (spectral)
     {
         processSpectralRange(rangeIndex, buffer, sidechain, sidechainOffset);
-        applyDomainFade(rangeIndex, buffer);
         return;
     }
     auto* core = processorBank.getProcessor(rangeIndex);
@@ -171,7 +151,6 @@ void DynModuleProcessor::processRange(const size_t rangeIndex, juce::AudioBuffer
         if (right != nullptr)
             right[sample] = static_cast<float>(result.right);
     }
-    applyDomainFade(rangeIndex, buffer);
 }
 
 void DynModuleProcessor::setProcessingInputChannel(const int choice) noexcept
@@ -191,16 +170,19 @@ void DynModuleProcessor::markParametersDirty() noexcept
     parametersDirty.store(true, std::memory_order_relaxed);
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout DynModuleProcessor::createParameterLayout()
-{
-    return dyn::parameters::createParameterLayout();
-}
-
 float DynModuleProcessor::loadParameter(size_t rangeIndex, dyn::parameters::ParameterSlot slot) const noexcept
 {
     if (rangeIndex >= numRanges) return 0.0f;
+    if (isParameterBypassed(rangeIndex, slot)) return dyn::parameters::bypassValue(slot);
     const auto* value = rawRangeParameters[rangeIndex][dyn::parameters::toIndex(slot)];
     return value != nullptr ? value->load(std::memory_order_relaxed) : 0.0f;
+}
+
+bool DynModuleProcessor::isParameterBypassed(size_t rangeIndex, dyn::parameters::ParameterSlot slot) const noexcept
+{
+    if (rangeIndex >= numRanges) return false;
+    const auto* value = rawRangeBypasses[rangeIndex][dyn::parameters::toIndex(slot)];
+    return value != nullptr && value->load(std::memory_order_relaxed) >= 0.5f;
 }
 
 bool DynModuleProcessor::isSpectralRange(size_t rangeIndex) const noexcept
@@ -246,13 +228,9 @@ void DynModuleProcessor::processSpectralRange(size_t rangeIndex, juce::AudioBuff
     settings.thresholdHysteresisDb = p.thresholdHysteresisDb;
     settings.adaptiveAmount = p.adaptive;
     settings.adaptiveOffset = p.adaptiveOffset;
-    settings.adaptiveAttackMs = p.adaptiveAttack;
-    settings.adaptiveHoldMs = p.adaptiveHold;
-    settings.adaptiveReleaseMs = p.adaptiveRelease;
     settings.adaptiveTimeMs = p.adaptiveTime;
     settings.attackMs = p.attackMs;
     settings.holdMs = p.holdMs;
-    settings.delayMs = p.delayMs;
     settings.autoRelease = static_cast<float>(ava::modules::dsp::roundToParameterStep(p.autoRelease)) * 0.01f;
     settings.releaseMemoryMs = p.releaseMemoryMs;
     settings.releaseDepth = static_cast<float>(ava::modules::dsp::roundToParameterStep(p.releaseDepth)) * 0.01f;
@@ -260,17 +238,15 @@ void DynModuleProcessor::processSpectralRange(size_t rangeIndex, juce::AudioBuff
     settings.releaseRmsMs = p.releaseRmsMs;
     settings.attackCurve = p.attackCurve;
     settings.releaseCurve = p.releaseCurve;
-    settings.releaseType = p.releaseType * 0.01f;
     settings.tension = p.tension;
     settings.tensionFloorDb = p.tensionFloor;
     settings.tensionHysteresis = p.tensionHysteresis * 0.01f;
     settings.kneeDb = p.compKnee;
     settings.ratio = p.ratio >= 99.995f ? std::numeric_limits<float>::infinity() : p.ratio;
-    settings.progression = static_cast<float>(ava::modules::dsp::roundToParameterStep(p.progression)) * 0.01f;
-    settings.progressionSpan = p.progressionSpan;
     settings.rangeDb = p.range;
     settings.rangeCurve = p.rangeCurve * 0.01f;
     settings.lookaheadMs = p.lookaheadMs;
+    settings.lookaheadCurve = p.lookaheadCurve;
     settings.rmsMix = juce::jlimit(0.0f, 1.0f, static_cast<float>(ava::modules::dsp::roundToParameterStep(p.peakRms)) * 0.01f);
     settings.peakCrestDb = p.peakCrestDb;
     settings.rmsTimeMs = p.rmsTime;
@@ -283,7 +259,6 @@ void DynModuleProcessor::processSpectralRange(size_t rangeIndex, juce::AudioBuff
     if (isCorrelationRange(rangeIndex))
     {
         settings.correlationMode = true;
-        settings.progressionSpan = loadParameter(rangeIndex, Slot::corrProgressionSpan);
         settings.correlationPeakCrest = loadParameter(rangeIndex, Slot::corrPeakCrest);
         settings.correlationThresholdHysteresis = loadParameter(rangeIndex, Slot::corrThresholdHysteresis);
         settings.correlationThreshold = loadParameter(rangeIndex, Slot::corrThreshold);
@@ -297,18 +272,3 @@ void DynModuleProcessor::processSpectralRange(size_t rangeIndex, juce::AudioBuff
     spectral->processBlock(buffer, settings, p.delta, sidechain, sidechainOffset);
 }
 
-void DynModuleProcessor::applyDomainFade(size_t rangeIndex, juce::AudioBuffer<float>& buffer) noexcept
-{
-    auto& remaining = domainFadeRemaining[rangeIndex];
-    const auto channels = juce::jmin(2, buffer.getNumChannels());
-    const auto previous = lastDomainOutput[rangeIndex];
-    for (int i = 0; i < buffer.getNumSamples() && remaining > 0; ++i, --remaining)
-    {
-        const auto amount = 1.0f - static_cast<float>(remaining) / static_cast<float>(domainFadeSamples);
-        for (int c = 0; c < channels; ++c)
-            buffer.setSample(c, i, previous[static_cast<size_t>(c)] * (1.0f - amount) + buffer.getSample(c, i) * amount);
-    }
-    if (buffer.getNumSamples() > 0)
-        for (int c = 0; c < channels; ++c)
-            lastDomainOutput[rangeIndex][static_cast<size_t>(c)] = buffer.getSample(c, buffer.getNumSamples() - 1);
-}

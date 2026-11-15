@@ -14,6 +14,31 @@ inline constexpr auto namesStateKey = "ava.routing.names";
 inline constexpr auto processorStatesKey = "ava.routing.processor_states";
 inline constexpr int maximumInstanceCount = 64;
 
+inline juce::String parameterTargetId(int id, const juce::String& parameterId)
+{
+    return "instance-" + juce::String(id) + "_" + parameterId;
+}
+inline bool parseParameterTarget(const juce::String& target, int& id, juce::String& parameterId)
+{
+    if (!target.startsWith("instance-")) return false;
+    const auto separator = target.indexOfChar('_');
+    if (separator < 10) return false;
+    const auto number = target.substring(9, separator);
+    id = number.getIntValue();
+    parameterId = target.substring(separator + 1);
+    return id > 0 && number == juce::String(id) && parameterId.isNotEmpty()
+        && !parameterId.startsWith("instance-");
+}
+inline constexpr auto compensationParameterId = "compensation";
+inline juce::String compensationTargetId(int id) { return parameterTargetId(id, compensationParameterId); }
+inline juce::String bypassTargetId(int id) { return parameterTargetId(id, "bp"); }
+inline int bypassTargetInstance(const juce::String& target)
+{
+    int id = 0;
+    juce::String parameter;
+    return parseParameterTarget(target, id, parameter) && parameter == "bp" ? id : 0;
+}
+
 struct State
 {
     struct Node
@@ -24,6 +49,7 @@ struct State
         int groupNext = 0;
 
         bool container = false;
+        bool compensated = false;
 
         bool operator==(const Node&) const = default;
     };
@@ -51,6 +77,8 @@ inline const State::Node* findStateNode(const std::vector<State::Node>& nodes, c
     return found == nodes.end() ? nullptr : &*found;
 }
 
+bool isParallelHead(const State&, int id) noexcept;
+bool setGroupCompensated(juce::ValueTree&, int id, bool enabled);
 bool isCurrentState(const juce::ValueTree& tree);
 bool hasCurrentProcessorStates(const juce::ValueTree& tree);
 State readState(const juce::ValueTree& tree);

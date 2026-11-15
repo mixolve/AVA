@@ -2,6 +2,7 @@
 #include "FilterSection.h"
 #include "PresetSection.h"
 #include "../modules/eql/Processor.h"
+#include "../modules/eql/Presets.h"
 
 namespace
 {
@@ -73,31 +74,29 @@ juce::String makeUniquePresetName(const juce::String& requestedName,
 }
 }
 
-void AvaAudioProcessorEditor::refreshFilterPresetList(const juce::String& preferredSelection)
+void AvaAudioProcessorEditor::refreshFilterPresetList()
 {
     if (presetsSection == nullptr)
         return;
 
-    const auto* eqlProcessor = getActiveEqlProcessor();
+    auto* eqlProcessor = getActiveEqlProcessor();
     const auto presetNames = eqlProcessor != nullptr ? eqlProcessor->getFilterPresetNames()
                                                      : juce::StringArray {};
-    presetsSection->setPresetNames(presetNames, preferredSelection);
+    presetsSection->setPresetNames(presetNames,
+        eqlProcessor != nullptr ? eqlProcessor->getSelectedFilterPresetName() : juce::String {});
 
     const auto hasPresetSelection = presetNames.size() > 0
         && presetsSection->getSelectedPresetName().isNotEmpty();
-    const auto selectedPresetName = presetsSection->getSelectedPresetName();
-    const auto defaultPresetName = eqlProcessor != nullptr ? eqlProcessor->getDefaultFilterPresetName()
-                                                           : juce::String {};
-    const auto selectedPresetIsDefault = hasPresetSelection
-        && selectedPresetName.equalsIgnoreCase(defaultPresetName);
-    const auto canDeletePreset = presetNames.size() > 1 && hasPresetSelection;
-    presetsSection->deleteButton->setEnabled(canDeletePreset);
+    const auto isNonePreset = presetsSection->getSelectedPresetName().equalsIgnoreCase(eql_presets::nonePresetName);
+    const auto canDeletePreset = presetNames.size() > 1 && hasPresetSelection && !isNonePreset;
+    presetsSection->deleteButton->setInteractionEnabled(canDeletePreset);
     presetsSection->deleteButton->setAlpha(1.0f);
-    presetsSection->renameButton->setEnabled(hasPresetSelection);
+    presetsSection->renameButton->setInteractionEnabled(hasPresetSelection && !isNonePreset);
     presetsSection->renameButton->setAlpha(1.0f);
-    presetsSection->defaultButton->setEnabled(hasPresetSelection);
+    presetsSection->defaultButton->setInteractionEnabled(hasPresetSelection);
+    presetsSection->defaultButton->setRestingState(hasPresetSelection && eqlProcessor != nullptr
+        && presetsSection->getSelectedPresetName().equalsIgnoreCase(eqlProcessor->getDefaultFilterPresetName()));
     presetsSection->defaultButton->setAlpha(1.0f);
-    presetsSection->defaultButton->setActiveFill(selectedPresetIsDefault);
 }
 
 void AvaAudioProcessorEditor::reloadFilterPresetFromProcessor()
@@ -181,15 +180,15 @@ void AvaAudioProcessorEditor::addFilterPreset()
         return;
 
     auto* eqlProcessor = getActiveEqlProcessor();
-    const auto presetName = makeUniquePresetName(presetsSection->getSelectedPresetName(),
-                                                 eqlProcessor != nullptr ? eqlProcessor->getFilterPresetNames()
-                                                                         : juce::StringArray {},
-                                                 "PRESET");
+    if (eqlProcessor == nullptr) return;
+    auto sourceName = presetsSection->getSelectedPresetName();
+    if (sourceName.equalsIgnoreCase(eql_presets::nonePresetName)) sourceName.clear();
+    const auto presetName = makeUniquePresetName(sourceName, eqlProcessor->getFilterPresetNames(), "PRESET");
 
     commitFilterDisplayOrderToProcessor();
 
     if (eqlProcessor != nullptr && eqlProcessor->saveFilterPreset(presetName))
-        refreshFilterPresetList(presetName);
+        refreshFilterPresetList();
 }
 
 void AvaAudioProcessorEditor::saveFilterPreset()
@@ -212,7 +211,7 @@ void AvaAudioProcessorEditor::saveFilterPreset()
     commitFilterDisplayOrderToProcessor();
 
     if (eqlProcessor->saveFilterPreset(presetName))
-        refreshFilterPresetList(presetName);
+        refreshFilterPresetList();
 }
 
 bool AvaAudioProcessorEditor::renameFilterPreset(const juce::String& sourcePresetName, const juce::String& newPresetName)
@@ -228,7 +227,7 @@ bool AvaAudioProcessorEditor::renameFilterPreset(const juce::String& sourcePrese
     if (eqlProcessor == nullptr || ! eqlProcessor->renameFilterPreset(trimmedSourceName, trimmedNewName))
         return false;
 
-    refreshFilterPresetList(trimmedNewName);
+    refreshFilterPresetList();
     return true;
 }
 
@@ -243,7 +242,7 @@ void AvaAudioProcessorEditor::setDefaultFilterPreset()
         return;
 
     if (auto* eqlProcessor = getActiveEqlProcessor(); eqlProcessor != nullptr && eqlProcessor->setDefaultFilterPreset(presetName))
-        refreshFilterPresetList(presetName);
+        refreshFilterPresetList();
 }
 
 void AvaAudioProcessorEditor::deleteSelectedFilterPreset()
@@ -262,5 +261,9 @@ void AvaAudioProcessorEditor::deleteSelectedFilterPreset()
         return;
 
     if (eqlProcessor->deleteFilterPreset(presetName))
+    {
+        reloadFilterPresetFromProcessor();
         refreshFilterPresetList();
+        scheduleHistorySnapshot();
+    }
 }

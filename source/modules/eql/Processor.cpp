@@ -6,19 +6,19 @@
 void EqlModuleProcessor::prepareToPlay(const double sampleRate, const int samplesPerBlock)
 {
     prepared.store(false, std::memory_order_release);
-    const juce::ScopedLock lock(filterProcessLock);
+    processingModelUpdatesEnabled = true;
+    processingFilterLimit = maxFilterCount;
 
     currentSampleRate = sampleRate;
     preparedNumChannels = static_cast<int>(maxSupportedChannels);
     filterProcessBufferA.setSize(preparedNumChannels, juce::jmax(1, samplesPerBlock));
     filterProcessBufferB.setSize(preparedNumChannels, juce::jmax(1, samplesPerBlock));
 
+    syncParameters();
     for (int filterIndex = 0; filterIndex < maxFilterCount; ++filterIndex)
     {
         const auto arrayIndex = static_cast<size_t>(filterIndex);
-        const auto gainDb = filterGainParams[arrayIndex] != nullptr
-            ? juce::jlimit(-48.0f, 48.0f, filterGainParams[arrayIndex]->load(std::memory_order_relaxed))
-            : 0.0f;
+        const auto gainDb = blockSettings.filters[arrayIndex].gain;
         filterGainSmoothers[arrayIndex].reset(sampleRate, 0.10);
         filterGainSmoothers[arrayIndex].setCurrentAndTargetValue(gainDb);
         effectiveFilterGainDb[arrayIndex] = gainDb;
@@ -34,7 +34,6 @@ void EqlModuleProcessor::prepareToPlay(const double sampleRate, const int sample
 void EqlModuleProcessor::releaseResources()
 {
     prepared.store(false, std::memory_order_release);
-    const juce::ScopedLock lock(filterProcessLock);
 
     resetFilters();
     currentSampleRate = 0.0;
@@ -47,12 +46,11 @@ bool EqlModuleProcessor::updateSmoothedFilterGains(const int samplesPerBlock) no
     for (int filterIndex = 0; filterIndex < maxFilterCount; ++filterIndex)
     {
         const auto arrayIndex = static_cast<size_t>(filterIndex);
-        const auto targetGainDb = filterGainParams[arrayIndex] != nullptr
-            ? juce::jlimit(-48.0f, 48.0f, filterGainParams[arrayIndex]->load(std::memory_order_relaxed))
-            : 0.0f;
-        if (filterPhaseParams[arrayIndex] != nullptr && filterPhaseParams[arrayIndex]->load() >= 0.5f
-            && !isCutFilterType(getFilterTypeForSection(arrayIndex)) && !isVolumeFilterType(getFilterTypeForSection(arrayIndex)))
+        const auto targetGainDb = blockSettings.filters[arrayIndex].gain;
+        if (blockSettings.filters[arrayIndex].phase
+            && !isCutFilterType(blockSettings.filters[arrayIndex].type) && !isVolumeFilterType(blockSettings.filters[arrayIndex].type))
         {
+            changed = changed || std::abs(effectiveFilterGainDb[arrayIndex] - targetGainDb) > 1.0e-5f;
             filterGainSmoothers[arrayIndex].setCurrentAndTargetValue(targetGainDb);
             effectiveFilterGainDb[arrayIndex] = targetGainDb;
             continue;
@@ -74,7 +72,6 @@ bool EqlModuleProcessor::updateSmoothedFilterGains(const int samplesPerBlock) no
 
 void EqlModuleProcessor::resetProcessingState() noexcept
 {
-    const juce::ScopedLock lock(filterProcessLock);
 
     resetFilterHistory();
 
@@ -87,14 +84,6 @@ void EqlModuleProcessor::processBlock(juce::AudioBuffer<float>& buffer)
     if (! prepared.load(std::memory_order_acquire))
         return;
 
-    const juce::ScopedTryLock lock(filterProcessLock);
-
-    if (! lock.isLocked())
-        return;
-
-    if (! prepared.load(std::memory_order_acquire))
-        return;
-
     const auto processChannels = juce::jmin(buffer.getNumChannels(), preparedNumChannels);
     const auto processSamples = buffer.getNumSamples();
 
@@ -104,13 +93,20 @@ void EqlModuleProcessor::processBlock(juce::AudioBuffer<float>& buffer)
     filterProcessBufferA.setSize(processChannels, processSamples, false, false, true);
     filterProcessBufferB.setSize(processChannels, processSamples, false, false, true);
 
+    const auto coherent = syncParameters();
+    if (coherent && resetRequested.exchange(false, std::memory_order_acq_rel)) resetFilters();
+    if (coherent && restoreGainsRequested.exchange(false, std::memory_order_acq_rel))
+        for (size_t i = 0; i < blockSettings.filters.size(); ++i) {
+            effectiveFilterGainDb[i] = blockSettings.filters[i].gain;
+            filterGainSmoothers[i].setCurrentAndTargetValue(effectiveFilterGainDb[i]);
+        }
     const auto gainSmoothingChanged = updateSmoothedFilterGains(processSamples);
-    const auto filtersDirty = eqlFiltersDirty.exchange(false, std::memory_order_acq_rel);
+    const auto filtersDirty = coherent && eqlFiltersDirty.exchange(false, std::memory_order_acq_rel);
 
     if (gainSmoothingChanged || filtersDirty)
         updateFilters();
 
-    const auto filterCount = getActiveFilterCount();
+    const auto filterCount = blockSettings.count;
 
     for (int filterIndex = 0; filterIndex < filterCount; ++filterIndex)
         processFilterSection(buffer, filterIndex, processChannels);
@@ -126,19 +122,17 @@ void EqlModuleProcessor::processFilterSection(juce::AudioBuffer<float>& targetBu
     };
 
     const auto filterArrayIndex = static_cast<size_t>(filterIndex);
-    const auto filterType = getFilterTypeForSection(filterArrayIndex);
-    const auto filterBypassed = filterBypassParams[filterArrayIndex] != nullptr
-        && filterBypassParams[filterArrayIndex]->load(std::memory_order_relaxed) >= 0.5f;
+    const auto& settings = blockSettings.filters[filterArrayIndex];
+    const auto filterType = settings.type;
+    const auto filterBypassed = settings.bypass;
 
     if (filterBypassed)
         return;
 
-    const auto phaseEnabled = filterPhaseParams[filterArrayIndex] != nullptr
-        && filterPhaseParams[filterArrayIndex]->load() >= 0.5f;
+    const auto phaseEnabled = settings.phase;
     if (phaseEnabled && !isCutFilterType(filterType) && !isVolumeFilterType(filterType))
     {
-        if (filterType == FilterType::bell && filterOrderParams[filterArrayIndex] != nullptr
-            && filterOrderParams[filterArrayIndex]->getIndex() == 0)
+        if (filterType == FilterType::bell && settings.order == 0)
             return;
         phaseFirFilters[filterArrayIndex].process(targetBuffer, processChannels);
         return;
@@ -160,14 +154,11 @@ void EqlModuleProcessor::processFilterSection(juce::AudioBuffer<float>& targetBu
         return;
     }
 
-    const auto slopeDbPerOct = filterOrderParams[filterArrayIndex] != nullptr
-        ? static_cast<double>(EqlModuleProcessor::getSlopeDbPerOctForOrderChoice(filterOrderParams[filterArrayIndex]->getIndex()))
-        : static_cast<double>(EqlModuleProcessor::fixedSlopeDbPerOct);
+    const auto slopeDbPerOct = static_cast<double>(getSlopeDbPerOctForOrderChoice(settings.order));
 
     if (filterType == FilterType::bell)
     {
-        if (filterOrderParams[filterArrayIndex] != nullptr
-            && filterOrderParams[filterArrayIndex]->getIndex() == 0)
+        if (settings.order == 0)
             return;
 
         if (bellOrderFilters[filterArrayIndex].front().sectionCount <= 0)
@@ -184,14 +175,14 @@ void EqlModuleProcessor::processFilterSection(juce::AudioBuffer<float>& targetBu
             if (lowerOrder == upperOrder || blend < 1.0e-6)
             {
                 if (lowerOrder > 0)
-                    orderFilters[static_cast<size_t>(lowerOrder - 1)].process(targetBufferToProcess, targetChannels);
+                    orderFilters[0].process(targetBufferToProcess, targetChannels);
                 return;
             }
 
             if (lowerOrder > 0)
             {
                 filterProcessBufferA.makeCopyOf(targetBufferToProcess, true);
-                orderFilters[static_cast<size_t>(lowerOrder - 1)].process(filterProcessBufferA, targetChannels);
+                orderFilters[0].process(filterProcessBufferA, targetChannels);
             }
             else
             {
@@ -201,7 +192,7 @@ void EqlModuleProcessor::processFilterSection(juce::AudioBuffer<float>& targetBu
             filterProcessBufferB.makeCopyOf(targetBufferToProcess, true);
 
             if (upperOrder > 0)
-                orderFilters[static_cast<size_t>(upperOrder - 1)].process(filterProcessBufferB, targetChannels);
+                orderFilters[1].process(filterProcessBufferB, targetChannels);
 
             for (int channel = 0; channel < targetChannels; ++channel)
             {
@@ -244,14 +235,14 @@ void EqlModuleProcessor::processFilterSection(juce::AudioBuffer<float>& targetBu
 
             if (lowerOrder == upperOrder || blend < 1.0e-6)
             {
-                orderFilters[static_cast<size_t>(lowerOrder - 1)].process(targetBufferToProcess, targetChannels);
+                orderFilters[0].process(targetBufferToProcess, targetChannels);
                 return;
             }
 
             filterProcessBufferA.makeCopyOf(targetBufferToProcess, true);
             filterProcessBufferB.makeCopyOf(targetBufferToProcess, true);
-            orderFilters[static_cast<size_t>(lowerOrder - 1)].process(filterProcessBufferA, targetChannels);
-            orderFilters[static_cast<size_t>(upperOrder - 1)].process(filterProcessBufferB, targetChannels);
+            orderFilters[0].process(filterProcessBufferA, targetChannels);
+            orderFilters[1].process(filterProcessBufferB, targetChannels);
 
             for (int channel = 0; channel < targetChannels; ++channel)
             {
@@ -279,21 +270,40 @@ void EqlModuleProcessor::processFilterSection(juce::AudioBuffer<float>& targetBu
     }
 }
 
+bool EqlModuleProcessor::syncParameters() noexcept
+{
+    if (!processingModelUpdatesEnabled) return false;
+    const auto version = modelVersion.load(std::memory_order_acquire);
+    if ((version & 1u) != 0) return false;
+    BlockSettings next;
+    next.count = juce::jmin(processingFilterLimit, getActiveFilterCount());
+    for (size_t i = 0; i < next.filters.size(); ++i) {
+        auto& f = next.filters[i];
+        f.type = getFilterTypeForSection(i);
+        f.phase = filterPhaseParams[i]->load(std::memory_order_relaxed) >= 0.5f;
+        f.bypass = filterBypassParams[i]->load(std::memory_order_relaxed) >= 0.5f;
+        f.frequency = filterFrequencyParams[i]->load(std::memory_order_relaxed);
+        f.bandwidth = filterBandwidthParams[i]->load(std::memory_order_relaxed);
+        f.order = filterOrderParams[i]->getIndex();
+        const auto view = gainPresentation(f.phase && getFilterControlAvailability(f.type, f.order).phase);
+        f.gain = float(view.toPlain(view.toDisplay(filterGainParams[i]->load(std::memory_order_relaxed))));
+        f.frequency = float(frequencyPresentation(f.type).limits.clipValue(f.frequency));
+    }
+    if (modelVersion.load(std::memory_order_acquire) != version) return false;
+    blockSettings = next;
+    int latency = 0;
+    for (int i = 0; i < next.count; ++i) {
+        const auto& f = next.filters[size_t(i)];
+        if (f.phase && !f.bypass && !isCutFilterType(f.type) && !isVolumeFilterType(f.type)
+            && !(f.type == FilterType::bell && f.order == 0)) latency += phaseFirLatencySamples;
+    }
+    processingLatency.store(latency, std::memory_order_release);
+    return true;
+}
+
 int EqlModuleProcessor::getLatencySamples() const noexcept
 {
-    const auto filterCount = getActiveFilterCount();
-
-    for (int filterIndex = 0; filterIndex < filterCount; ++filterIndex)
-    {
-        const auto filterArrayIndex = static_cast<size_t>(filterIndex);
-        const auto type = getFilterTypeForSection(filterArrayIndex);
-        if (filterPhaseParams[filterArrayIndex] != nullptr && filterPhaseParams[filterArrayIndex]->load() >= 0.5f
-            && !isCutFilterType(type) && !isVolumeFilterType(type)
-            && filterBypassParams[filterArrayIndex]->load() < 0.5f && phaseFirFilters[filterArrayIndex].active)
-            return phaseFirLatencySamples;
-    }
-
-    return 0;
+    return processingLatency.load(std::memory_order_acquire);
 }
 
 EqlModuleProcessor::FilterType EqlModuleProcessor::getFilterTypeForSection(const size_t filterIndex) const noexcept
@@ -317,8 +327,7 @@ bool EqlModuleProcessor::filterDesignMatches(const size_t filterIndex,
     if (! cachedState.valid)
         return false;
 
-    const auto phase = filterPhaseParams[filterIndex] != nullptr
-        && filterPhaseParams[filterIndex]->load(std::memory_order_relaxed) >= 0.5f;
+    const auto phase = blockSettings.filters[filterIndex].phase;
     if (cachedState.phase != phase || cachedState.active != active
         || cachedState.type != type
         || std::abs(cachedState.sampleRate - currentSampleRate) > 1.0e-9)
@@ -343,8 +352,7 @@ void EqlModuleProcessor::storeFilterDesignState(const size_t filterIndex,
 {
     auto& cachedState = cachedFilterStates[filterIndex];
     cachedState.valid = true;
-    cachedState.phase = filterPhaseParams[filterIndex] != nullptr
-        && filterPhaseParams[filterIndex]->load(std::memory_order_relaxed) >= 0.5f;
+    cachedState.phase = blockSettings.filters[filterIndex].phase;
     cachedState.active = active;
     cachedState.type = type;
     cachedState.frequency = frequency;
@@ -368,6 +376,7 @@ EqlModuleProcessor::EqlModuleProcessor()
         filterBypassParams[static_cast<size_t>(filterIndex)] = parameters.getRawParameterValue(getFilterBypassParamId(filterIndex));
     }
 
+    setActiveFilterCount(1);
     setParameterListenersEnabled(true);
 }
 

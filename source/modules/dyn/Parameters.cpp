@@ -1,3 +1,4 @@
+#include "../shared/TimeUnits.h"
 #include "Parameters.h"
 
 #include "../../crossover/ParameterIds.h"
@@ -11,6 +12,7 @@
 
 namespace dyn::parameters
 {
+using ava::modules::parameters::ValueText;
 using ava::crossover::parameters::makeRangeGroupId;
 using ava::crossover::parameters::makeRangeGroupName;
 using ava::crossover::parameters::makeRangeParameterId;
@@ -32,23 +34,24 @@ inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
     { ParameterSlot::corrKnee, "CORR / COMP-KNEE" },
     { ParameterSlot::corrSlope, "CORR / SLOPE" },
     { ParameterSlot::corrOffset, "CORR / ADAP-OFFSET" },
-    { ParameterSlot::corrSmoothing, "CORR / SMOOTHING" },
+    { ParameterSlot::corrSmoothing, "CORR / SMOOTH" },
     { ParameterSlot::corrImpact, "CORR / IMPACT" },
     { ParameterSlot::corrTensionFloor, "CORR / TENSION-FLOOR" },
-    { ParameterSlot::transientGain, "TRANS/SUST / TRANS-GAIN" },
-    { ParameterSlot::sustainGain, "TRANS/SUST / SUST-GAIN" },
-    { ParameterSlot::transientMute, "TRANS/SUST / TRANS-MUTE" },
-    { ParameterSlot::sustainMute, "TRANS/SUST / SUST-MUTE" },
-    { ParameterSlot::retrigger, "TRANS/SUST / RETRIGGER" },
-    { ParameterSlot::oneShot, "TRANS/SUST / ONE-SHOT" },
+    { ParameterSlot::transientGain, "TRANS SUST / TRANS-GAIN" },
+    { ParameterSlot::sustainGain, "TRANS SUST / SUST-GAIN" },
+    { ParameterSlot::transientMute, "TRANS SUST / TRANS-MUTE" },
+    { ParameterSlot::sustainMute, "TRANS SUST / SUST-MUTE" },
+    { ParameterSlot::retrigger, "TRANS SUST / RETRIG" },
+    { ParameterSlot::oneShot, "TRANS SUST / ONE" },
     { ParameterSlot::fftSize, "SPECTRAL / WIN-SIZE" },
     { ParameterSlot::fftOverlap, "SPECTRAL / OVERLAP" },
     { ParameterSlot::spectralSlope, "SPECTRAL / SLOPE" },
     { ParameterSlot::morph, "PROCESSOR / MORPH" },
     { ParameterSlot::ratio, "PROCESSOR / RATIO" },
-    { ParameterSlot::progression, "PROCESSOR / PROGRESSION" },
-    { ParameterSlot::progressionSpan, "PROCESSOR / PROG-SPAN" },
-    { ParameterSlot::corrProgressionSpan, "CORR / PROG-SPAN" },
+    // Host-index placeholders; no DYN controls or DSP functions use these.
+    { ParameterSlot::legacyProgression, "LEGACY / UNUSED 1" },
+    { ParameterSlot::legacyProgressionSpan, "LEGACY / UNUSED 2" },
+    { ParameterSlot::legacyCorrProgressionSpan, "LEGACY / UNUSED 3" },
     { ParameterSlot::compKnee, "PROCESSOR / COMP-KNEE" },
     { ParameterSlot::lookahead, "PROCESSOR / LOOKAHEAD" },
     { ParameterSlot::tensionFloor, "PROCESSOR / TENSION-FLOOR" },
@@ -65,14 +68,10 @@ inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
     { ParameterSlot::processorReleaseRms, "PROCESSOR / RELEASE-RMS" },
     { ParameterSlot::makeUp, "PROCESSOR / MAKE-UP" },
     { ParameterSlot::adaptiveOffset, "ADAPTIVE / ADAP-OFFSET" },
-    { ParameterSlot::adaptiveAttack, "ADAPTIVE / ADAP-ATTACK" },
-    { ParameterSlot::adaptiveHold, "ADAPTIVE / ADAP-HOLD" },
-    { ParameterSlot::adaptiveRelease, "ADAPTIVE / ADAP-RELEASE" },
     { ParameterSlot::delta, "PROCESSOR / DELTA" },
     { ParameterSlot::processorHold, "PROCESSOR / HOLD" },
     { ParameterSlot::processorAttack, "PROCESSOR / ATTACK" },
     { ParameterSlot::attackCurve, "PROCESSOR / ATTACK-CURVE" },
-    { ParameterSlot::processorDelay, "PROCESSOR / DELAY" },
     { ParameterSlot::inputGain, "PROCESSOR / INPUT" },
     { ParameterSlot::adaptiveTime, "ADAPTIVE / ADAP-TIME" },
     { ParameterSlot::mix, "PROCESSOR / MIX" },
@@ -83,7 +82,6 @@ inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
     { ParameterSlot::peakRms, "PROCESSOR / PEAK/RMS" },
     { ParameterSlot::peakCrest, "PROCESSOR / PEAK-CREST" },
     { ParameterSlot::rmsTime, "PROCESSOR / RMS-TIME" },
-    { ParameterSlot::releaseType, "PROCESSOR / RELEASE-TYPE" },
     { ParameterSlot::rangeCurve, "PROCESSOR / RANGE-CURVE" },
     { ParameterSlot::attackMode, "PROCESSOR / ATTACK MODE" },
     { ParameterSlot::attackNote, "PROCESSOR / ATTACK NOTE" },
@@ -95,6 +93,9 @@ inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
     { ParameterSlot::releaseRmsNote, "PROCESSOR / RELEASE-RMS NOTE" },
     { ParameterSlot::feedback, "PROCESSOR / FWD/FB" },
     { ParameterSlot::clipKnee, "PROCESSOR / CLIP-KNEE" },
+    // Append new host automation parameters, never shift existing indices.
+    { ParameterSlot::lookaheadCurve, "PROCESSOR / LOOKAHEAD-CURVE" },
+    { ParameterSlot::clipEql, "PROCESSOR / CLIP-EQL" },
 });
 
 static_assert(parameterOrder.size() == numParameterSlots);
@@ -131,6 +132,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 
         for (const auto& entry : parameterOrder)
         {
+            // The embedded EQL switch is appended after the bypass groups.
+            if (entry.slot == ParameterSlot::clipEql) continue;
             const auto& spec = parameterSpecs[toIndex(entry.slot)];
             const auto parameterId = makeRangeParameterId(rangeIndex, spec.suffix);
             const auto parameterName = makeRangeHostName(rangeIndex, entry.label);
@@ -139,67 +142,187 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                 group->addChild(makeBoolParameter(parameterId, parameterName, spec.defaultValue >= 0.5f));
             else if (spec.type == ParameterType::choice)
                 group->addChild(makeChoiceParameter(parameterId, parameterName,
-                                                     entry.slot == ParameterSlot::mode ? juce::StringArray { "COMP/CLIP / FREQ", "TRANS/SUST / CORR" }
+                                                     entry.slot == ParameterSlot::mode ? juce::StringArray { "COMP CLIP / FREQ", "TRANS SUST / CORR" }
                                                          : entry.slot == ParameterSlot::sidechainChannel ? ava::channels::choices()
                                                          : entry.slot == ParameterSlot::domain ? juce::StringArray { "TIME", "SPECTRAL" }
                                                          : entry.slot == ParameterSlot::fftSize ? juce::StringArray { "1024", "2048", "4096", "8192", "16384" }
                                                          : entry.slot == ParameterSlot::fftOverlap ? juce::StringArray { "8", "16", "32" }
                                                          : juce::String(spec.suffix).endsWith("-mode") ? juce::StringArray { "MS", "NOTE" }
-                                                         : getTimeNoteChoices(),
+                                                         : ava::modules::parameters::getTimeNoteChoices(),
                                                      juce::roundToInt(spec.defaultValue)));
             else
                 group->addChild(makeFloatParameter(
                     parameterId, parameterName,
                     { spec.min, spec.max, spec.step }, spec.defaultValue,
-                    [isMorph = entry.slot == ParameterSlot::morph,
+                    [isTransustGain = entry.slot == ParameterSlot::transientGain || entry.slot == ParameterSlot::sustainGain,
+                     isMorph = entry.slot == ParameterSlot::morph,
                      isImpact = entry.slot == ParameterSlot::corrImpact,
                      isCorrSlope = entry.slot == ParameterSlot::corrSlope,
                      isMix = entry.slot == ParameterSlot::mix,
                      isPeakRms = entry.slot == ParameterSlot::peakRms,
                      isRangeCurve = entry.slot == ParameterSlot::rangeCurve,
                      isKnee = entry.slot == ParameterSlot::compKnee || entry.slot == ParameterSlot::clipKnee || entry.slot == ParameterSlot::corrKnee,
-                     isReleaseType = entry.slot == ParameterSlot::releaseType,
                      isFeedback = entry.slot == ParameterSlot::feedback,
                      isRatio = entry.slot == ParameterSlot::ratio,
-                     isCurve = entry.slot == ParameterSlot::releaseCurve || entry.slot == ParameterSlot::attackCurve] (float value, int)
+                     isAttackCurve = entry.slot == ParameterSlot::attackCurve,
+                     isCurve = entry.slot == ParameterSlot::releaseCurve || entry.slot == ParameterSlot::attackCurve || entry.slot == ParameterSlot::lookaheadCurve] (float value) -> ValueText
                     {
-                        if (isPeakRms && value <= 0.0f) return juce::String("PEAK");
-                        if (isPeakRms && value >= 100.0f) return juce::String("RMS");
+                        if (isTransustGain && ava::modules::dsp::isGainMuted(value)) return ValueText::named("MUTED", true);
+                        if (isPeakRms && value <= 0.0f) return ValueText::named("PEAK");
+                        if (isPeakRms && value >= 100.0f) return ValueText::named("RMS");
                         if (isCorrSlope) return ava::modules::parameters::formatFixedDecimalValue(value, 2);
-                        if (isImpact && value <= -99.995f) return juce::String("LEFT");
-                        if (isImpact && std::abs(value) < 0.005f) return juce::String("BOTH");
-                        if (isImpact && value >= 99.995f) return juce::String("RIGHT");
-                        if (isRangeCurve && value == 0.0f) return juce::String("HARD");
-                        if (isRangeCurve && value == 100.0f) return juce::String("SOFT");
+                        if (isImpact && value <= -99.995f) return ValueText::named("LEFT");
+                        if (isImpact && std::abs(value) < 0.005f) return ValueText::named("BOTH");
+                        if (isImpact && value >= 99.995f) return ValueText::named("RIGHT");
+                        if (isRangeCurve && value == 0.0f) return ValueText::named("HARD");
+                        if (isRangeCurve && value == 100.0f) return ValueText::named("SOFT");
 
-                        if (isKnee && value == 0.0f) return juce::String("HARD");
+                        if (isKnee && value == 0.0f) return ValueText::named("HARD");
 
                         if (isMorph && value == 0.0f)
-                            return juce::String("CLIPPER");
+                            return ValueText::named("CLIPPER");
                         if (isMorph && value == 100.0f)
-                            return juce::String("COMPRESSOR");
+                            return ValueText::named("COMPRESS");
 
-                        if (isFeedback && value == 0.0f) return juce::String("FWD");
-                        if (isFeedback && value == 100.0f) return juce::String("FB");
+                        if (isFeedback && value == 0.0f) return ValueText::named("FWD");
+                        if (isFeedback && value == 100.0f) return ValueText::named("FB");
 
-                        if (isReleaseType && value == 0.0f) return juce::String("TO-ZERO");
-                        if (isReleaseType && value == 100.0f) return juce::String("TO-SIGNAL");
 
                         if (isMix && value == 0.0f)
-                            return juce::String("DRY");
+                            return ValueText::named("DRY");
                         if (isMix && value == 100.0f)
-                            return juce::String("WET");
+                            return ValueText::named("WET");
 
                         if (isCurve && std::abs(value) < 0.005f)
-                            return juce::String("LIN");
+                            return ValueText::named("LIN");
 
+                        if (isAttackCurve) return ava::modules::parameters::formatFixedDecimalValue(value * 0.001f, 5);
                         return isRatio ? formatParameterValue(value) + ":1" : formatParameterValue(value);
-                    }, spec.label));
+                    }, spec.label, false,
+                    juce::AudioParameterFloatAttributes().withAutomatable(false),
+                    entry.slot == ParameterSlot::attackCurve ? 0.001 : 1.0));
         }
 
         layout.add(std::move(group));
     }
 
+    // Append new parameters after the existing layout to preserve its indices.
+    for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
+    {
+        auto group = std::make_unique<juce::AudioProcessorParameterGroup>(
+            makeRangeGroupId(rangeIndex) + "-bypasses", makeRangeGroupName(rangeIndex) + " / BYPASS", " | ");
+        for (const auto& entry : parameterOrder)
+        {
+            const auto& spec = parameterSpecs[toIndex(entry.slot)];
+            if (hasBypass(spec))
+                group->addChild(makeBoolParameter(makeRangeParameterId(rangeIndex, bypassSuffix(spec).toRawUTF8()),
+                    makeRangeHostName(rangeIndex, juce::String(entry.label) + " / BYPASS"), false));
+        }
+        layout.add(std::move(group));
+    }
+
+    // The additional internal control has its own persisted parameter, but is
+    // not a separate tile on the DYN page. Add it after the existing parameter
+    // and bypass layouts so old automation parameter indices stay stable.
+    for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
+    {
+        auto group = std::make_unique<juce::AudioProcessorParameterGroup>(
+            makeRangeGroupId(rangeIndex) + "-internal",
+            makeRangeGroupName(rangeIndex) + " / INTERNAL", " | ");
+        // Keep the v27 ID for saved sessions and host automation.
+        group->addChild(makeBoolParameter(
+            makeRangeParameterId(rangeIndex, "clip-qual"),
+            makeRangeHostName(rangeIndex, "PROCESSOR / CLIP-EQL"), false));
+        layout.add(std::move(group));
+    }
+
     return layout;
+}
+}
+
+namespace dyn::parameters
+{
+ControlPolicy getControlPolicy(const juce::AudioProcessorValueTreeState& state, const size_t range,
+                               const juce::String& suffix)
+{
+    ControlPolicy result;
+    for (const auto& spec : parameterSpecs) if (suffix == spec.suffix) result.metadata = spec.control;
+    if (suffix == "attack-curve") result.presentation.scale = 0.001;
+    const auto& metadata = result.metadata;
+    const auto read = [&] (const char* name)
+    {
+        const auto* value = state.getRawParameterValue(makeRangeParameterId(range, name));
+        const auto raw = value != nullptr ? value->load() : 0.0f;
+        static const juce::StringArray rounded { "morph", "tension", "adaptive", "peak-rms", "range", "processor-release-peak", "processor-release-rms", "processor-attack" };
+        if (rounded.contains(name))
+            return float(ava::modules::dsp::roundToParameterStep(raw));
+        return raw;
+    };
+    static const char* const dependencies[] { "domain", "mode", "morph", "tension", "adaptive", "peak-rms", "range", "auto-rel", "lookahead",
+        "processor-attack-mode", "processor-attack", "processor-release-peak-mode", "processor-release-peak", "processor-release-rms-mode", "processor-release-rms" };
+    result.dependencies = dependencies;
+    const auto spectral = read("domain") >= 0.5f;
+    const auto transust = !spectral && read("mode") >= 0.5f;
+    const auto correlation = spectral && read("mode") >= 0.5f;
+    const auto spectralOnly = suffix == "fft-size" || suffix == "fft-overlap" || suffix == "spectral-slope";
+    const auto timeOnly = suffix == "morph" || suffix == "clip-knee" || suffix == "feedback";
+    const auto transustOnly = suffix == "trans-gain" || suffix == "sust-gain" || suffix == "retrigger";
+    const auto legacy = suffix == "progression" || suffix == "prog-span" || suffix == "corr-prog-span";
+    result.visible = !legacy && (!spectralOnly || spectral) && (!timeOnly || (!spectral && !transust))
+        && (!transustOnly || transust);
+    static const juce::StringArray compClipParameters { "morph", "clip-knee", "ratio", "feedback", "range", "range-curve", "tension", "tension-floor", "tension-hyst" };
+    const auto compClipOnly = compClipParameters.contains(suffix);
+    result.enabled = !legacy && (!spectralOnly || spectral) && (!timeOnly || !spectral)
+        && (!transustOnly || transust) && (!transust || !compClipOnly)
+        && (!suffix.startsWith("corr-") || correlation);
+    if (suffix == "mode")
+    {
+        // MODE keeps one normal-sized cell. The selected mode appears only
+        // on hover, through ChoiceControl's existing value presentation.
+        result.cellSpan = 1;
+        result.title = "MODE";
+        result.choices = spectral ? juce::StringArray { "FREQ", "CORR" }
+                                  : juce::StringArray { "COMP CLIP", "TRANS SUST" };
+    }
+    const auto finish = [&] (bool enabled) { result.enabled = result.enabled && enabled; return result; };
+    {
+        const auto pureClip = read("domain") < 0.5f && read("mode") < 0.5f && read("morph") == 0.0f;
+        if (suffix == "tension-floor" || suffix == "corr-tension-floor" || suffix == "tension-hyst")
+            return finish(std::abs(read("tension")) > 0.0f);
+        if (suffix == "lookahead-curve")
+            return finish((spectral || transust || !pureClip) && read("lookahead") > 0.0f);
+        if (pureClip && suffix == "lookahead")
+            return finish(read("adaptive") > 0.0f);
+        const auto envelopeActive = !pureClip;
+        const auto detectorActive = envelopeActive || std::abs(read("tension")) > 0.0f;
+        const auto peakActive = read("peak-rms") < 100.0f;
+        const auto rmsActive = read("peak-rms") > 0.0f;
+        if (suffix == "thresh-hyst" || suffix == "corr-thresh-hyst") return finish(detectorActive);
+        if (suffix == "peak-rms") return finish(detectorActive);
+        if (suffix == "peak-crest" || suffix == "corr-peak-crest") return finish(detectorActive && peakActive && rmsActive);
+        if (suffix == "rms-time") return finish(detectorActive && rmsActive);
+        if (suffix == "processor-release-peak") return finish(detectorActive && peakActive);
+        if (suffix == "processor-release-rms") return finish(detectorActive && rmsActive);
+        if (suffix == "attack-curve")
+            return finish(envelopeActive
+                && (read("processor-attack-mode") >= 0.5f || read("processor-attack") > 0.0f));
+        if (suffix == "release-curve" || suffix == "auto-rel" || suffix == "rel-memory" || suffix == "rel-depth")
+            return finish(((suffix != "rel-memory" && suffix != "rel-depth") || read("auto-rel") >= 0.005f)
+                && (envelopeActive || std::abs(read("tension")) > 0.0f)
+                && ((peakActive && (read("processor-release-peak-mode") >= 0.5f || read("processor-release-peak") > 0.0f))
+                    || (rmsActive && (read("processor-release-rms-mode") >= 0.5f || read("processor-release-rms") > 0.0f))));
+    }
+    if (metadata.modeSuffix[0] != '\0')
+    {
+        const auto compressor = read("domain") >= 0.5f || read("morph") > 0.0f;
+        return finish(transust || compressor || (suffix != "processor-attack" && std::abs(read("tension")) > 0.0f));
+    }
+    static const juce::StringArray morphDependencies { "feedback", "clip-knee", "ratio", "comp-knee", "corr-knee", "attack-curve" };
+    const auto morphDependent = morphDependencies.contains(suffix);
+    if (morphDependent && !spectral && !transust) return finish(suffix == "clip-knee" ? read("morph") < 100.0f : read("morph") > 0.0f);
+    if (suffix == "threshold" || suffix == "corr-threshold") return finish(read("adaptive") < 100.0f);
+    if (suffix == "range-curve") return finish(read("range") > 0.0f);
+    if (suffix == "adap-time" || suffix == "offset" || suffix == "corr-offset") return finish(read("adaptive") > 0.0f);
+    return result;
 }
 }

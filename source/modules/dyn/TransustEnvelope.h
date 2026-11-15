@@ -13,7 +13,6 @@ class Envelope
 public:
     struct Parameters
     {
-        float delayMs = 0.0f;
         float attackMs = 0.0f;
         float attackCurve = 0.0f;
         float holdMs = 0.0f;
@@ -29,13 +28,13 @@ public:
     void reset();
     void setParameters(const Parameters& newParameters);
     float processAmount(float detectorLevel, float thresholdDb, float kneeDb, float triggerLevel = -1.0f) noexcept;
+    bool isAttacking() const noexcept { return detector.attackActive; }
 
 private:
     struct DerivedParameters
     {
         float fastReleaseCoefficient = 0.0f;
         float normalizedReleaseCurve = 0.0f;
-        int delaySamples = 0;
         int attackSamples = 0;
         float normalizedAttackCurve = 0.0f;
         int holdSamples = 0;
@@ -52,7 +51,6 @@ private:
         float heldTransientAmount = 0.0f;
         float releaseStartAmount = 0.0f;
         float attackStartAmount = 0.0f;
-        int delaySamplesRemaining = 0;
         int attackSamplesElapsed = 0;
         int attackSamplesTotal = 0;
         bool attackActive = false;

@@ -214,9 +214,7 @@ void EqlModuleProcessor::BiquadCascade::process(juce::AudioBuffer<float>& buffer
 
 void EqlModuleProcessor::PhaseFirFilter::reset() noexcept
 {
-    for (auto& channelState : state)
-        channelState.fill(0.0f);
-
+    historySamples = 0;
     writeIndex = 0;
     if (transitionRemaining > 0) taps = targetTaps;
     transitionRemaining = transitionLength = 0;
@@ -260,6 +258,7 @@ void EqlModuleProcessor::PhaseFirFilter::process(juce::AudioBuffer<float>& buffe
 
     for (int sampleIndex = 0; sampleIndex < buffer.getNumSamples(); ++sampleIndex)
     {
+        historySamples = juce::jmin(phaseFirSize, historySamples + 1);
         if (--writeIndex < 0)
             writeIndex = phaseFirSize - 1;
 
@@ -278,9 +277,9 @@ void EqlModuleProcessor::PhaseFirFilter::process(juce::AudioBuffer<float>& buffe
                         history,
                         1,
                         &output,
-                        static_cast<vDSP_Length>(phaseFirSize));
+                        static_cast<vDSP_Length>(historySamples));
            #else
-            for (int tapIndex = 0; tapIndex < phaseFirSize; ++tapIndex)
+            for (int tapIndex = 0; tapIndex < historySamples; ++tapIndex)
                 output += taps[static_cast<size_t>(tapIndex)] * history[tapIndex];
            #endif
 
@@ -288,9 +287,9 @@ void EqlModuleProcessor::PhaseFirFilter::process(juce::AudioBuffer<float>& buffe
             {
                 auto nextOutput = 0.0f;
                #if JUCE_MAC
-                vDSP_dotpr(targetTaps.data(), 1, history, 1, &nextOutput, static_cast<vDSP_Length>(phaseFirSize));
+                vDSP_dotpr(targetTaps.data(), 1, history, 1, &nextOutput, static_cast<vDSP_Length>(historySamples));
                #else
-                for (int tapIndex = 0; tapIndex < phaseFirSize; ++tapIndex)
+                for (int tapIndex = 0; tapIndex < historySamples; ++tapIndex)
                     nextOutput += targetTaps[static_cast<size_t>(tapIndex)] * history[tapIndex];
                #endif
                 const auto progress = 1.0f - static_cast<float>(transitionRemaining - 1) / static_cast<float>(transitionLength);

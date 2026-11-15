@@ -1,19 +1,24 @@
 #include "Editor.h"
 #include "FilterSection.h"
 #include "EditorPreferences.h"
+#include "../modules/eql/RangeBank.h"
 
-void AvaAudioProcessorEditor::scheduleHistorySnapshot()
+void AvaAudioProcessorEditor::scheduleHistorySnapshot(const bool notifyHost)
 {
     if (suppressHistorySnapshots)
         return;
 
-    audioProcessor.notifyHostOfStateChange();
+    // Keep AVA's own Undo snapshots for automation, but don't tell the DAW
+    // that the host-driven parameter change is also a chunk-state edit.
+    if (notifyHost && !audioProcessor.isApplyingHostSlotValue())
+        audioProcessor.notifyHostOfStateChange();
     pendingHistorySnapshot.store(true, std::memory_order_relaxed);
     lastHistoryChangeTimeMs.store(juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
 }
 
 void AvaAudioProcessorEditor::commitPendingHistorySnapshot(const bool force)
 {
+    if (audioProcessor.isRoutingInstance()) return;
     if (! pendingHistorySnapshot.load(std::memory_order_relaxed) || suppressHistorySnapshots)
         return;
 
@@ -28,8 +33,10 @@ void AvaAudioProcessorEditor::commitPendingHistorySnapshot(const bool force)
     audioProcessor.getStateInformationForABCompareSnapshot(snapshot);
     pendingHistorySnapshot.store(false, std::memory_order_relaxed);
 
-    if (snapshot == committedHistorySnapshot)
+    if (historySnapshotsMatchIgnoringViews(snapshot, committedHistorySnapshot))
     {
+        committedHistorySnapshot = snapshot;
+        audioProcessor.getHistoryState().committedRevision = audioProcessor.getStateRevision();
         updateUndoRedoButtons();
         return;
     }
@@ -38,14 +45,116 @@ void AvaAudioProcessorEditor::commitPendingHistorySnapshot(const bool force)
     {
         undoHistory.push_back(committedHistorySnapshot);
 
-        constexpr size_t maximumHistoryDepth = 128;
-        if (undoHistory.size() > maximumHistoryDepth)
+        constexpr size_t maximumHistoryDepth = 128, maximumHistoryBytes = 64 * 1024 * 1024;
+        size_t bytes = 0;
+        for (const auto& item : undoHistory) bytes += item.getSize();
+        while (undoHistory.size() > maximumHistoryDepth || (bytes > maximumHistoryBytes && undoHistory.size() > 1)) {
+            bytes -= undoHistory.front().getSize();
             undoHistory.erase(undoHistory.begin());
+        }
     }
 
     committedHistorySnapshot = snapshot;
+    audioProcessor.getHistoryState().committedRevision = audioProcessor.getStateRevision();
     redoHistory.clear();
     updateUndoRedoButtons();
+}
+
+void AvaAudioProcessorEditor::recordPresetHistoryChange(const juce::MemoryBlock& before,
+                                                        const juce::MemoryBlock& after,
+                                                        const int instanceId,
+                                                        const juce::MemoryBlock& eqlBefore,
+                                                        const juce::MemoryBlock& eqlAfter)
+{
+    if (audioProcessor.isRoutingInstance())
+    {
+        if (auto* ownerEditor = audioProcessor.getRoutingOwner().getContentEditor())
+            ownerEditor->recordPresetHistoryChange(before, after, instanceId, eqlBefore, eqlAfter);
+        return;
+    }
+
+    if (before.isEmpty() || after.isEmpty() || eqlBefore.isEmpty() || eqlAfter.isEmpty()
+        || instanceId <= 0 || eqlBefore == eqlAfter)
+        return;
+
+    pendingHistorySnapshot.store(false, std::memory_order_relaxed);
+
+    // A preceding unrelated edit may still need its own history step.
+    if (! committedHistorySnapshot.isEmpty()
+        && ! historySnapshotsMatchIgnoringViews(committedHistorySnapshot, before))
+        undoHistory.emplace_back(committedHistorySnapshot);
+
+    // Preset switching is an EQL-bank operation. Save its exact state rather
+    // than restoring every routing processor just to undo one selection.
+    undoHistory.emplace_back(before, instanceId, eqlBefore);
+
+    constexpr size_t maximumHistoryDepth = 128;
+    constexpr size_t maximumHistoryBytes = 64 * 1024 * 1024;
+    size_t bytes = 0;
+    for (const auto& item : undoHistory) bytes += item.getSize();
+    while (undoHistory.size() > maximumHistoryDepth
+           || (bytes > maximumHistoryBytes && undoHistory.size() > 1))
+    {
+        bytes -= undoHistory.front().getSize();
+        undoHistory.erase(undoHistory.begin());
+    }
+
+    committedHistorySnapshot = after;
+    audioProcessor.getHistoryState().committedRevision = audioProcessor.getStateRevision();
+    redoHistory.clear();
+    observedStateRevision = audioProcessor.getStateRevision();
+    updateUndoRedoButtons();
+}
+
+bool AvaAudioProcessorEditor::applyEqlPresetHistoryState(const int instanceId,
+                                                          const juce::MemoryBlock& bankState,
+                                                          juce::MemoryBlock& previousBank)
+{
+    if (instanceId <= 0 || bankState.isEmpty())
+        return false;
+
+    auto& owner = audioProcessor.getRoutingOwner();
+    std::shared_ptr<AvaAudioProcessor> instanceHandle;
+    AvaAudioProcessor* target = &owner;
+    if (instanceId != owner.getRoutingInstanceId())
+    {
+        instanceHandle = owner.getRoutingInstanceHandle(instanceId);
+        target = instanceHandle.get();
+    }
+    if (target == nullptr)
+        return false;
+
+    auto* eqlBank = target->getEqlProcessorBank();
+    if (eqlBank == nullptr)
+        return false;
+
+    eqlBank->getStateInformation(previousBank);
+    if (previousBank.isEmpty())
+        return false;
+
+    const ScopedAtomicFlag suppressHistory(suppressHistorySnapshots, true);
+    if (! eqlBank->setStateInformation(bankState.getData(), static_cast<int>(bankState.getSize())))
+        return false;
+
+    // The processor and its attachments stay alive; only the EQL bank changes.
+    // Refresh the open editor's filter layout and preset name immediately.
+    auto* targetEditor = instanceId == owner.getRoutingInstanceId() ? this
+        : (activeInstanceId == instanceId ? activeInstanceEditor.get() : nullptr);
+    if (targetEditor != nullptr)
+    {
+        targetEditor->refreshModuleStateListeners();
+        targetEditor->reloadFilterPresetFromProcessor();
+        targetEditor->refreshFilterPresetList();
+        targetEditor->updateSectionStates();
+        targetEditor->resized();
+    }
+
+    target->notifyHostOfStateChange();
+    owner.getStateInformationForABCompareSnapshot(committedHistorySnapshot);
+    audioProcessor.getHistoryState().committedRevision = owner.getStateRevision();
+    observedStateRevision = owner.getStateRevision();
+    pendingHistorySnapshot.store(false, std::memory_order_relaxed);
+    return true;
 }
 
 bool AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snapshot)
@@ -58,30 +167,32 @@ bool AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snap
     if (mergedStateXml == nullptr || ! mergedStateXml->hasTagName(valueTreeState.state.getType().toString()))
         return false;
 
+    juce::MemoryBlock currentState;
+    audioProcessor.getStateInformationForABCompareSnapshot(currentState);
+    if (auto currentXml = AvaAudioProcessor::getXmlFromBinary(currentState.getData(), static_cast<int>(currentState.getSize())))
+        preserveEditorViewState(*mergedStateXml, *currentXml);
     preserveEditorWindowState(*mergedStateXml, valueTreeState.state);
 
     juce::MemoryBlock mergedSnapshot;
     AvaAudioProcessor::copyXmlToBinary(*mergedStateXml, mergedSnapshot);
 
-    struct PreservedUiState
-    {
-        bool hostParameters = false;
-        bool routing = false;
-        int filterScrollY = 0;
-    };
-
-    const PreservedUiState preservedUiState
-    {
-        hostParametersExpanded,
-        routingExpanded,
-        filterViewport.getViewPositionY()
-    };
+    const auto preservedFilterScrollY = filterViewport.getViewPositionY();
     auto* bypassParameter = valueTreeState.getParameter(AvaAudioProcessor::paramGlobalBypassId);
     const auto preservedBypassValue = bypassParameter != nullptr ? bypassParameter->getValue() : 0.0f;
 
-    const juce::ScopedValueSetter<bool> suppressHistory(suppressHistorySnapshots, true);
-    const juce::ScopedValueSetter<bool> suppressHostSlotSync(suppressHostSlotAutomationSync, true);
+    const ScopedAtomicFlag suppressHistory(suppressHistorySnapshots, true);
     pendingHistorySnapshot.store(false, std::memory_order_relaxed);
+
+    // Restoring the owner's state reconstructs its routing processors. A child
+    // editor must be destroyed *before* that happens, otherwise its parameter
+    // attachments and references point to the old processor after Undo/Redo.
+    const auto previouslyOpenInstance = activeInstanceId;
+    if (activeInstanceEditor != nullptr)
+    {
+        activeInstanceEditor.reset();
+        activeInstanceProcessor.reset();
+        activeInstanceId = 0;
+    }
 
     {
         // State replacement sends synchronous ValueTree callbacks before the old
@@ -94,9 +205,10 @@ bool AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snap
                                                            static_cast<int>(mergedSnapshot.getSize())))
         {
             restoreEditorStateFromValueTree();
-            ensureModuleTitle();
             updateSectionStates();
             resized();
+            if (previouslyOpenInstance != 0)
+                openRoutingInstance(previouslyOpenInstance);
             return false;
         }
     }
@@ -105,25 +217,26 @@ bool AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snap
         bypassParameter->setValueNotifyingHost(preservedBypassValue);
 
     restoreEditorStateFromValueTree();
-    ensureModuleTitle();
-    if (auto* eqlProcessor = getActiveEqlProcessor())
-        refreshFilterPresetList(eqlProcessor->getSelectedFilterPresetName());
-    else
-        refreshFilterPresetList({});
+    refreshFilterPresetList();
     refreshEqlFilterSectionsFromProcessor();
 
-    hostParametersExpanded = preservedUiState.hostParameters;
-    routingExpanded = preservedUiState.routing;
 
     storeEditorStateToValueTree();
-    syncEditorWidthToBounds();
+    updateEditorResizeLimits();
     updateSectionStates();
     resized();
 
     const auto filterMaxOffset = juce::jmax(0, getActiveFilterContentHeight() - filterViewport.getHeight());
-    filterViewport.setViewPosition(0, juce::jlimit(0, filterMaxOffset, preservedUiState.filterScrollY));
+    filterViewport.setViewPosition(0, juce::jlimit(0, filterMaxOffset, preservedFilterScrollY));
+
+    if (previouslyOpenInstance != 0)
+        openRoutingInstance(previouslyOpenInstance);
 
     audioProcessor.getStateInformationForABCompareSnapshot(committedHistorySnapshot);
+    audioProcessor.notifyHostOfStateChange();
+    audioProcessor.getHistoryState().committedRevision = audioProcessor.getStateRevision();
+    observedStateRevision = audioProcessor.getStateRevision();
+    pendingHistorySnapshot.store(false, std::memory_order_relaxed);
     return true;
 }
 
@@ -145,15 +258,13 @@ void AvaAudioProcessorEditor::updateUndoRedoButtons()
     if (undoButton != nullptr)
     {
         const auto canUndo = ! undoHistory.empty();
-        undoButton->setEnabled(canUndo);
-        undoButton->setAlpha(1.0f);
+        undoButton->setInteractionEnabled(canUndo);
     }
 
     if (redoButton != nullptr)
     {
         const auto canRedo = ! redoHistory.empty();
-        redoButton->setEnabled(canRedo);
-        redoButton->setAlpha(1.0f);
+        redoButton->setInteractionEnabled(canRedo);
     }
 
     refreshABCompareButton();
@@ -166,50 +277,4 @@ void AvaAudioProcessorEditor::resetFilterSectionUiState(const int filterIndex)
 
     if (auto* section = filterSections[static_cast<size_t>(filterIndex)].get())
         section->expanded = false;
-}
-
-void AvaAudioProcessorEditor::removeFilterSectionUiState(const int removedIndex, const int previousCount)
-{
-    if (previousCount <= 0)
-        return;
-
-    if (previousCount == 1)
-    {
-        resetFilterSectionUiState(0);
-        return;
-    }
-
-    for (int sourceIndex = removedIndex + 1; sourceIndex < previousCount; ++sourceIndex)
-    {
-        auto* target = filterSections[static_cast<size_t>(sourceIndex - 1)].get();
-        const auto* source = filterSections[static_cast<size_t>(sourceIndex)].get();
-
-        if (target != nullptr && source != nullptr)
-            target->expanded = source->expanded;
-    }
-
-    std::vector<int> reorderedOrder;
-    reorderedOrder.reserve(static_cast<size_t>(previousCount - 1));
-
-    for (int orderIndex = 0; orderIndex < previousCount; ++orderIndex)
-    {
-        const auto filterIndex = filterDisplayOrder[static_cast<size_t>(orderIndex)];
-
-        if (filterIndex == removedIndex)
-            continue;
-
-        reorderedOrder.push_back(filterIndex > removedIndex ? filterIndex - 1 : filterIndex);
-    }
-
-    for (size_t orderIndex = 0; orderIndex < reorderedOrder.size(); ++orderIndex)
-        filterDisplayOrder[orderIndex] = reorderedOrder[orderIndex];
-
-    for (int orderIndex = static_cast<int>(reorderedOrder.size()); orderIndex < previousCount; ++orderIndex)
-    {
-        const auto filterIndex = filterDisplayOrder[static_cast<size_t>(orderIndex)];
-        filterDisplayOrder[static_cast<size_t>(orderIndex)] = filterIndex > removedIndex ? filterIndex - 1 : filterIndex;
-    }
-
-    resetFilterSectionUiState(previousCount - 1);
-    storeEditorStateToValueTree();
 }

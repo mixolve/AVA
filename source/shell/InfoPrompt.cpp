@@ -1,14 +1,11 @@
 #include "Prompt.h"
 #include "Controls.h"
-#include "Editor.h"
 #include "AboutLinks.h"
 
 #include <utility>
 
 namespace
 {
-constexpr int promptPanelPadding = uiGap;
-constexpr int promptItemGap = uiGap;
 
 class AboutTextRow final : public juce::Component,
                                public juce::SettableTooltipClient
@@ -17,6 +14,7 @@ public:
     explicit AboutTextRow(juce::String textIn) : text(std::move(textIn))
     {
         setOpaque(false);
+        setPaintingIsUnclipped(true);
         setWantsKeyboardFocus(false);
         setMouseClickGrabsKeyboardFocus(false);
     }
@@ -37,8 +35,7 @@ public:
     void paint(juce::Graphics& graphics) override
     {
         updateLayout(getWidth());
-        graphics.setColour(uiWhite);
-        layout.draw(graphics, getLocalBounds().toFloat());
+        paintAboutText(graphics, *this, layout, text);
     }
 
     void mouseUp(const juce::MouseEvent&) override
@@ -52,14 +49,17 @@ public:
 private:
     void updateLayout(const int width) const
     {
-        const auto contentWidth = juce::jmax(1, width - uiGap * 2);
+        // The parent document already provides horizontal padding.  Do not
+        // subtract a second one: long email / language labels were wrapping
+        // to fragments even with unused space to their sides.
+        const auto contentWidth = juce::jmax(1, width);
 
         if (cachedWidth == contentWidth)
             return;
 
         juce::AttributedString attributed(text);
         attributed.setFont(makeUiFont());
-        attributed.setColour(uiWhite);
+        attributed.setColour(juce::Colour(0xff222222));
         attributed.setJustification(juce::Justification::centred);
         attributed.setWordWrap(juce::AttributedString::byWord);
 
@@ -72,14 +72,11 @@ private:
     mutable int cachedWidth = -1;
 };
 
-class FloatingInfoPrompt final : public PromptComponent
+class AboutDocument final : public juce::Component
 {
 public:
-    using CloseCallback = std::function<void()>;
-
-    FloatingInfoPrompt(juce::String markdownText,
-                       CloseCallback closeCallback)
-        : onClose(std::move(closeCallback))
+    explicit AboutDocument(juce::String markdownText, std::function<void()> blankClick)
+        : onBackgroundClick(std::move(blankClick))
     {
         setOpaque(true);
         setWantsKeyboardFocus(true);
@@ -153,115 +150,88 @@ public:
         for (auto* row : contentRows)
             addAndMakeVisible(row);
 
-        okButton.setButtonText("OK");
-        okButton.setTextJustification(juce::Justification::centred);
-        okButton.onClick = [safeThis = juce::Component::SafePointer<FloatingInfoPrompt>(this)]
+    }
+
+    int getPreferredHeight(int width) const
+    {
+        int height = getUiGap(*this) * 2;
+        const auto contentWidth = juce::jmax(1, width - getUiGap(*this) * 2);
+        for (auto* row : contentRows)
         {
-            if (safeThis != nullptr)
-                safeThis->requestClose();
-        };
-        addAndMakeVisible(okButton);
+            const auto* text = dynamic_cast<AboutTextRow*>(row);
+            height += (text != nullptr ? text->getPreferredHeight(contentWidth) : rowHeight) + getUiGap(*this);
+        }
+        return height - (contentRows.empty() ? 0 : getUiGap(*this));
     }
 
     void paint(juce::Graphics& graphics) override
     {
-        graphics.setColour(uiBackground);
-        graphics.fillAll();
+        paintPluginBackground(graphics);
+    }
+
+    // Text and link rows continue receiving their own clicks. Only the
+    // document's empty background returns from ABOUT to the main viewport.
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        if (onBackgroundClick) onBackgroundClick();
     }
 
     void resized() override
     {
-        const auto visibleBounds = getLocalBounds();
-        auto anchorBounds = juce::Rectangle<int>();
-        auto panelVisibleBounds = visibleBounds;
-
-        if (auto* owner = findParentComponentOfClass<AvaAudioProcessorEditor>())
+        auto bounds = getLocalBounds().reduced(getUiGap(*this));
+        for (auto* row : contentRows)
         {
-            const auto ownerVisibleBounds = owner->getInfoPromptVisibleBounds().getIntersection(visibleBounds);
-            const auto ownerAnchorBounds = owner->getInfoPromptAnchorBounds().getIntersection(visibleBounds);
-
-            if (! ownerVisibleBounds.isEmpty())
-                panelVisibleBounds = ownerVisibleBounds;
-
-            if (! ownerAnchorBounds.isEmpty())
-                anchorBounds = ownerAnchorBounds;
+            const auto* text = dynamic_cast<AboutTextRow*>(row);
+            row->setBounds(bounds.removeFromTop(text != nullptr ? text->getPreferredHeight(bounds.getWidth()) : rowHeight));
+            bounds.removeFromTop(getUiGap(*this));
         }
-
-        if (panelVisibleBounds.isEmpty())
-            panelVisibleBounds = visibleBounds.reduced(promptPanelPadding);
-
-        if (anchorBounds.isEmpty())
-            anchorBounds = panelVisibleBounds;
-
-        const auto desiredWidth = juce::jmax(1, panelVisibleBounds.getWidth());
-        const auto desiredHeight = juce::jmax(1, panelVisibleBounds.getHeight());
-
-        panelBounds = juce::Rectangle<int>(desiredWidth, desiredHeight);
-        panelBounds.setX(panelVisibleBounds.getX());
-        panelBounds.setY(panelVisibleBounds.getY());
-        panelBounds = panelBounds.constrainedWithin(panelVisibleBounds);
-
-        auto contentBounds = panelBounds.reduced(promptPanelPadding);
-        auto okBounds = contentBounds.removeFromBottom(rowHeight);
-
-        for (size_t index = 0; index < contentRows.size(); ++index)
-        {
-            const auto* textRow = dynamic_cast<AboutTextRow*>(contentRows[index]);
-            const auto rowHeightForRow = textRow != nullptr
-                ? textRow->getPreferredHeight(contentBounds.getWidth())
-                : rowHeight;
-            contentRows[index]->setBounds(contentBounds.removeFromTop(rowHeightForRow));
-
-            if (index + 1 < contentRows.size() && ! contentBounds.isEmpty())
-                contentBounds.removeFromTop(promptItemGap);
-        }
-
-        if (! contentBounds.isEmpty())
-            contentBounds.removeFromBottom(promptPanelPadding);
-
-        okButton.setBounds(okBounds);
-    }
-
-    void mouseDown(const juce::MouseEvent& event) override
-    {
-        if (! panelBounds.contains(event.getPosition()))
-            cancel();
-    }
-
-    bool keyPressed(const juce::KeyPress& key) override
-    {
-        if (key == juce::KeyPress::escapeKey)
-        {
-            cancel();
-            return true;
-        }
-
-        return false;
     }
 
 private:
-    void requestClose()
-    {
-        requestPromptClose(*this, closePending, onClose);
-    }
-
-    void cancel()
-    {
-        requestClose();
-    }
-
-    juce::Rectangle<int> panelBounds;
+    std::function<void()> onBackgroundClick;
     std::vector<std::unique_ptr<AboutTextRow>> textRows;
     std::vector<std::unique_ptr<MarkdownLinkRow>> linkRows;
     std::vector<juce::Component*> contentRows;
-    BoxTextButton okButton { uiAccent };
-    CloseCallback onClose;
-    bool closePending = false;
+};
+
+class AboutPanel final : public juce::Component
+{
+public:
+    explicit AboutPanel(juce::String text, std::function<void()> blankClick)
+        : document(std::move(text), blankClick), onBackgroundClick(std::move(blankClick))
+    {
+        viewport.setName("about-viewport");
+        viewport.setViewedComponent(&document, false);
+        viewport.setScrollBarsShown(false, false, true, false);
+        viewport.setScrollBarThickness(getUiGap(*this));
+        viewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
+        viewport.setWantsKeyboardFocus(false);
+        addAndMakeVisible(viewport);
+    }
+    ~AboutPanel() override { viewport.setViewedComponent(nullptr, false); }
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        if (onBackgroundClick) onBackgroundClick();
+    }
+    void resized() override
+    {
+        // INF is now text-only; no footer is reserved for COPY/PASTE/ZOOM.
+        viewport.setBounds(getLocalBounds().reduced(getUiGap(*this), 0));
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            const auto width = juce::jmax(1, viewport.getMaximumVisibleWidth());
+            document.setSize(width, juce::jmax(viewport.getHeight(), document.getPreferredHeight(width)));
+        }
+    }
+private:
+    AboutDocument document;
+    std::function<void()> onBackgroundClick;
+    juce::Viewport viewport;
 };
 }
 
-std::unique_ptr<PromptComponent> makeInfoPrompt(juce::String markdownText,
-                                                std::function<void()> onClose)
+std::unique_ptr<juce::Component> makeAboutPanel(juce::String markdownText,
+                                                std::function<void()> onBackgroundClick)
 {
-    return std::make_unique<FloatingInfoPrompt>(std::move(markdownText), std::move(onClose));
+    return std::make_unique<AboutPanel>(std::move(markdownText), std::move(onBackgroundClick));
 }

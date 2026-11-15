@@ -1,4 +1,5 @@
 #include "SampleProcessor.h"
+#include "Parameters.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,7 +18,6 @@ void DspCore::resizeLookaheadBuffers()
     for (size_t branchIndex = 0; branchIndex < branchCount; ++branchIndex)
         dmBase[branchIndex].assign(static_cast<size_t>(maxBuf), 0.0);
 
-    lookaheadGain.queue.resize(static_cast<size_t>(maxBuf));
     dryL.assign(static_cast<size_t>(maxBuf), 0.0);
     dryR.assign(static_cast<size_t>(maxBuf), 0.0);
     sidechainListenL.assign(static_cast<size_t>(maxBuf), 0.0);
@@ -35,43 +35,29 @@ void DspCore::clearState()
     std::fill(sidechainListenR.begin(), sidechainListenR.end(), 0.0);
 
     for (auto& core : transustCores) core.reset();
+    for (auto& window : compressorHoldWindows) window.reset();
+    lookaheadGain.reset();
+    attackSourceGate.reset();
+    attackSourceQuiet = false;
     envBase = {};
-    baseGainState = { 1.0, 1.0, 1.0, 1.0 };
-    smoothedTensions = { 0.0, 0.0, 0.0, 0.0 };
-    tensionSmoothingInitialised = false;
-    feedbackInitialised = false;
-    smoothedFeedback = 0.0;
-    for (auto* peak : { &baseSignalPeak, &cleanSignalPeak })
-    {
-        peak->head = peak->count = 0;
-        peak->window = std::max<size_t>(1, static_cast<size_t>(std::round(currentSampleRate * 0.001)));
-        peak->sample = peak->lastCrossing = 0;
-        peak->positive = true;
-        peak->hasCrossing = false;
-    }
-    lookaheadGain.head = lookaheadGain.count = 0;
-    lookaheadGain.sample = 0;
     cleanEnvPeak = { 0.0, 0.0 };
     cleanGainState = { 1.0, 1.0 };
     cleanGainTarget = { 1.0, 1.0 };
     cleanAttackStates = {};
-    cleanHalfPeak = { 0.0, 0.0 };
-    cleanInputPositive = { true, true };
     baseReleaseStates = {};
     cleanReleaseStates = {};
     releaseMemories.fill({});
     cleanThresholdHysteresis = {};
     tensionThresholdHysteresis = {};
     adaptiveReferenceDb = { -96.0, -96.0, -96.0, -96.0 };
-    adaptiveHoldSamplesRemaining = { 0, 0, 0, 0 };
-    for (auto& channelPower : adaptiveRmsPower)
-        std::fill(channelPower.begin(), channelPower.end(), 0.0);
+    // The cumulative ring is logically empty once the counter is reset.
+    // Avoid clearing a 10-second buffer inside the audio callback.
     for (auto& channelPower : detectorRmsPower) std::fill(channelPower.begin(), channelPower.end(), 0.0);
     baseRmsPowerSum = {};
     for (auto& history : baseRmsPower) std::fill(history.begin(), history.end(), 0.0);
     detectorRmsPowerSum = {};
     detectorRmsPosition = detectorRmsSampleCount = 0;
-    adaptiveRmsPowerSum = { 0.0, 0.0 };
+    adaptiveRmsCumulativePower = { 0.0, 0.0 };
     adaptiveRmsPosition = 0;
     adaptiveRmsSampleCount = 0;
     bufPos = 0;
@@ -94,7 +80,6 @@ void DspCore::updateDerivedParameters()
     derived.releaseMemoryCoefficient = std::exp(-1.0 / (sampleRate * juce::jlimit(10.0, 2000.0, static_cast<double>(parameters.releaseMemoryMs)) * 0.001));
     derived.releaseSamples = { toReleaseSamples(roundToParameterStep(parameters.releasePeakMs)),
                                toReleaseSamples(roundToParameterStep(parameters.releaseRmsMs)) };
-    derived.delaySamples = toReleaseSamples(roundToParameterStep(parameters.delayMs));
     derived.attackSamples = toReleaseSamples(roundToParameterStep(parameters.attackMs));
     derived.attackCurve = roundToParameterStep(parameters.attackCurve) * 0.01;
     derived.holdSamples = toReleaseSamples(roundToParameterStep(parameters.holdMs));
@@ -105,41 +90,31 @@ void DspCore::updateDerivedParameters()
     derived.rangeDb = juce::jlimit(0.0, 96.0, roundToParameterStep(parameters.range));
     derived.minimumGain = dbToAmp(-derived.rangeDb);
     derived.rangeCurve = juce::jlimit(0.0, 1.0, roundToParameterStep(parameters.rangeCurve) * 0.01);
-    derived.releaseType = juce::jlimit(0.0, 1.0, roundToParameterStep(parameters.releaseType) * 0.01);
 
     derived.morph = roundToParameterStep(parameters.morph) * 0.01;
-    derived.progression = juce::jlimit(-1.0, 1.0, roundToParameterStep(parameters.progression) * 0.01);
-    derived.progressionSpan = juce::jlimit(0.1, 96.0, roundToParameterStep(parameters.progressionSpan));
     derived.ratio = juce::jlimit(1.0, 100.0, roundToParameterStep(parameters.ratio));
     derived.releaseGainExponent = derived.ratio >= 99.995 ? 1.0 : 1.0 - 1.0 / derived.ratio;
     derived.compKneeDb = juce::jlimit(0.0, 96.0, roundToParameterStep(parameters.compKnee));
     derived.clipKneeDb = juce::jlimit(0.0, 96.0, roundToParameterStep(parameters.clipKnee));
     derived.clipLower = dbToAmp(-derived.clipKneeDb * 0.5);
     derived.clipUpper = dbToAmp(derived.clipKneeDb * 0.5);
+    // EQL anchors the soft-knee transfer at the existing clip ceiling.
+    // There is no post-clipping makeup gain to overshoot the threshold.
+    derived.clipEql = parameters.clipEql;
 
     const auto lookaheadSamples = static_cast<int>(std::round(
         std::max(0.0, roundToParameterStep(parameters.lookaheadMs)) * 0.001 * sampleRate));
 
     derived.tensionFloor = dbToAmp(roundToParameterStep(parameters.tensionFloor));
     derived.tensionHysteresis = roundToParameterStep(parameters.tensionHysteresis) * 0.01;
-    derived.tensionSmoothingCoefficient = std::exp(-1.0 / (sampleRate * 0.005));
     derived.releaseCurve = roundToParameterStep(parameters.releaseCurve) * 0.01;
-    const auto rmsCapacity = adaptiveRmsPower[0].size();
+    const auto rmsCapacity = adaptiveRmsCumulativePowerHistory[0].size();
     const auto requestedRmsSamples = static_cast<size_t>(std::max(1.0, std::round(
-        sampleRate * juce::jlimit(1.0, 1000.0, static_cast<double>(parameters.adaptiveTime)) * 0.001)));
-    const auto rmsWindowSamples = std::min(requestedRmsSamples, std::max<size_t>(1, rmsCapacity));
-    if (rmsWindowSamples != adaptiveRmsWindowSamples)
-    {
-        adaptiveRmsWindowSamples = rmsWindowSamples;
-        adaptiveRmsPowerSum = { 0.0, 0.0 };
-        const auto historySamples = std::min(adaptiveRmsSampleCount, rmsWindowSamples);
-        for (size_t channelIndex = 0; channelIndex < channelCount; ++channelIndex)
-            for (size_t sample = 0; sample < historySamples; ++sample)
-                adaptiveRmsPowerSum[channelIndex] += adaptiveRmsPower[channelIndex][
-                    (adaptiveRmsPosition + rmsCapacity - historySamples + sample) % rmsCapacity];
-    }
+        sampleRate * juce::jlimit(50.0, 10000.0, static_cast<double>(parameters.adaptiveTime)) * 0.001)));
+    // Cumulative energies allow instant window changes without rescanning
+    // up to 10 seconds of samples on the realtime audio thread.
+    adaptiveRmsWindowSamples = std::min(requestedRmsSamples, std::max<size_t>(1, rmsCapacity));
     derived.feedback = juce::jlimit(0.0, 1.0, static_cast<double>(parameters.feedback) * 0.01);
-    derived.feedbackSmoothingCoefficient = std::exp(-1.0 / (sampleRate * 0.005));
     derived.thresholdHysteresisDb = std::max(0.0, roundToParameterStep(parameters.thresholdHysteresisDb));
     derived.rmsMix = juce::jlimit(0.0, 1.0, roundToParameterStep(parameters.peakRms) * 0.01);
     derived.peakCrestDb = detector::effectiveCrest(static_cast<double>(parameters.peakCrestDb), derived.rmsMix);
@@ -163,34 +138,18 @@ void DspCore::updateDerivedParameters()
             }
     }
     derived.adaptiveOffsetDb = roundToParameterStep(parameters.adaptiveOffset);
-    const auto smoothingCoefficient = [&toReleaseSamples] (const double milliseconds)
-    {
-        const auto samples = toReleaseSamples(milliseconds);
-        return samples <= 0 ? 0.0 : std::exp(-1.0 / static_cast<double>(samples));
-    };
-    derived.adaptiveAttackCoefficient = smoothingCoefficient(roundToParameterStep(parameters.adaptiveAttack));
-    derived.adaptiveReleaseCoefficient = smoothingCoefficient(roundToParameterStep(parameters.adaptiveRelease));
-    derived.adaptiveHoldSamples = toReleaseSamples(roundToParameterStep(parameters.adaptiveHold));
     derived.delta = parameters.delta;
 
-    const auto previousLookahead = derived.lookaheadSamples;
-    derived.lookaheadSamples = juce::jlimit(
-        0,
-        std::max(0, maxBuf - 2),
-        lookaheadSamples);
-    if (previousLookahead != derived.lookaheadSamples)
-    {
-        lookaheadGain.head = lookaheadGain.count = 0;
-        lookaheadGain.sample = 0;
-    }
-    derived.bufferSize = derived.lookaheadSamples + 1;
-    derived.dryBufferSize = derived.lookaheadSamples + 1;
+    derived.lookaheadSamples = juce::jlimit(0, std::max(0, maxBuf - 2), lookaheadSamples);
+    derived.lookaheadCurve = juce::jlimit(-1.0, 1.0, roundToParameterStep(parameters.lookaheadCurve) * 0.01);
+    // These are physical storage capacities, not the user's delay setting.
+    derived.bufferSize = maxBuf;
+    derived.dryBufferSize = maxBuf;
     derived.latencySamples = derived.lookaheadSamples;
 
-    derived.transientGain = parameters.transientMute ? 0.0 : dbToAmp(parameters.transientGain);
-    derived.sustainGain = parameters.sustainMute ? 0.0 : dbToAmp(parameters.sustainGain);
+    derived.transientGain = ava::modules::dsp::mutedGainToAmp(parameters.transientGain, parameters.transientMute);
+    derived.sustainGain = ava::modules::dsp::mutedGainToAmp(parameters.sustainGain, parameters.sustainMute);
     dyn::transust::Envelope::Parameters transustParameters;
-    transustParameters.delayMs = parameters.delayMs;
     transustParameters.attackMs = parameters.attackMs;
     transustParameters.attackCurve = parameters.attackCurve;
     transustParameters.holdMs = parameters.holdMs;
@@ -209,8 +168,8 @@ void DspCore::updateDerivedParameters()
         transustCores[path].setParameters(transustParameters);
     }
 
-    bufPos = wrapIndex(bufPos, derived.bufferSize);
-    bufPosDry = wrapIndex(bufPosDry, derived.dryBufferSize);
+    bufPos = wrapIndex(bufPos, maxBuf);
+    bufPosDry = wrapIndex(bufPosDry, maxBuf);
 }
 
 }
