@@ -114,7 +114,7 @@ ava::crossover::BufferRouter::RangeLatencies AvaAudioProcessor::getModuleChainRa
     const auto& copies = renderingOwner == this && renderingGraph != nullptr ? renderingGraph->moduleCopies : moduleCopies;
     for(size_t band=0;band<stacks.size();++band)
         for(const auto& slot:stacks[band]) {
-            if(!slot.enabled)continue;
+            if(!ava::module_stack::processingActive(slot))continue;
             const auto id=slot.type;
             const bool original=slot.uid<ava::module_stack::originalCount;
             if(module_order::isChain(id) && (bypassMask & 1u)==0) {
@@ -167,7 +167,6 @@ void AvaAudioProcessor::requestLatencySamples(const int latencySamples) noexcept
 
 void AvaAudioProcessor::updateShellLatency() noexcept
 {
-    // Prepared model changes are accepted by render at its zero-level switch.
     if (processingPrepared.load(std::memory_order_acquire) && renderingOwner != this) return;
     auto totalLatencySamples = getRenderRouting() != nullptr && getRenderRouting()->hasMultipleInstances()
         ? getRenderRouting()->getLatencySamples() : getModuleChainLatencySamples();
@@ -240,40 +239,68 @@ void AvaAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         if (!scope) return;
         const auto samples = juce::jmin(audioBuffers().blockSize, buffer.getNumSamples() - offset);
         auto& channels = audioBuffers().routingChannels;
-        channels.setSize(routingChannelCount, samples, false, false, true);
+        channels.setSize(2 * routingChannelCount, samples, false, false, true);
         channels.clear();
         for (int bus = 0; bus < getBusCount(true); ++bus) {
             auto input = getBusBuffer(buffer, true, bus);
             for (int channel = 0; channel < input.getNumChannels(); ++channel)
                 channels.copyFrom(bus * 2 + channel, 0, input, channel, offset, samples);
         }
-        processChannelBlock(channels, midi);
+        juce::AudioBuffer<float> routing(channels.getArrayOfWritePointers(), routingChannelCount, samples);
+        auto outputMask = processChannelBlock(routing, midi, &channels);
+        applyRenderTransition(channels);
+        auto sourceOffset = routingChannelCount;
         auto* runtime = getRenderRouting();
         auto* monitor = runtime != nullptr ? runtime->getSoloProcessor(true)
             : soloChannelParam != nullptr && soloChannelParam->load() >= 0.5f ? this : nullptr;
-        if (isGlobalBypassed()) monitor = nullptr;
-        const auto selected = monitor != nullptr ? monitor->getProcessingInputChannels() : std::array<int, 2> {0, 1};
-        const auto right = selected[1] >= 0 && getChannelCountOfBus(true, selected[1] / 2) > selected[1] % 2 ? selected[1] : selected[0];
-        for (int channel = 0; channel < output.getNumChannels(); ++channel)
-            output.copyFrom(channel, offset, channels, channel == 0 ? selected[0] : right, 0, samples);
-        if (monitor != nullptr && output.getNumChannels() == 1 && right != selected[0]) {
-            output.applyGain(0, offset, samples, 0.5f);
-            output.addFrom(0, offset, channels, right, 0, samples, 0.5f);
+        if (monitor != nullptr && !isGlobalBypassed())
+        {
+            const auto selected = monitor->getProcessingInputChannels();
+            outputMask = (1u << selected[0]) | (selected[1] >= 0 ? 1u << selected[1] : 0u);
+            sourceOffset = 0;
+        }
+
+        // Keep buses separate inside the graph, then mix each routed pair once
+        // into the host's main output. A lone channel is heard on both sides.
+        output.clear(offset, samples);
+        for (int bus = 0; bus < getBusCount(true); ++bus)
+        {
+            const auto left = bus * 2;
+            const auto right = left + 1;
+            const auto inputChannels = getChannelCountOfBus(true, bus);
+            const auto hasLeft = inputChannels > 0 && (outputMask & (1u << left)) != 0;
+            const auto hasRight = inputChannels > 1 && (outputMask & (1u << right)) != 0;
+            if (hasLeft && hasRight)
+            {
+                if (output.getNumChannels() == 1)
+                {
+                    output.addFrom(0, offset, channels, sourceOffset + left, 0, samples, 0.5f);
+                    output.addFrom(0, offset, channels, sourceOffset + right, 0, samples, 0.5f);
+                }
+                else
+                {
+                    output.addFrom(0, offset, channels, sourceOffset + left, 0, samples);
+                    output.addFrom(1, offset, channels, sourceOffset + right, 0, samples);
+                }
+            }
+            else if (hasLeft || hasRight)
+            {
+                for (int channel = 0; channel < output.getNumChannels(); ++channel)
+                    output.addFrom(channel, offset, channels, sourceOffset + (hasLeft ? left : right), 0, samples);
+            }
         }
     }
 
 }
 
-void AvaAudioProcessor::processChannelBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+unsigned AvaAudioProcessor::processChannelBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi,
+                                                juce::AudioBuffer<float>* routingAndOutput)
 {
     juce::ScopedNoDenormals noDenormals;
     const RenderingScope scope(*this);
-    if (!scope) return;
+    if (!scope) return 0;
 
-    if (! processingPrepared.load(std::memory_order_acquire)) return;
-    const juce::ScopeGuard transition {[this, &buffer] {
-        if (!routingInstance) applyRenderTransition(buffer);
-    }};
+    if (! processingPrepared.load(std::memory_order_acquire)) return 0;
     if (isGlobalBypassed()) {
         requestLatencySamples(0);
         // Global bypass keeps the input dry. Compensate its level only here,
@@ -289,22 +316,58 @@ void AvaAudioProcessor::processChannelBlock(juce::AudioBuffer<float>& buffer, ju
                     buffer.applyGain(channel, 0, buffer.getNumSamples(), gain);
             }
         }
-        if (routingInstance && audioBuffers().instanceMuted)
-            for (const auto channel : getProcessingInputChannels())
-                if (juce::isPositiveAndBelow(channel, buffer.getNumChannels())) buffer.clear(channel, 0, buffer.getNumSamples());
-        return;
+        if (routingInstance) {
+            const auto selected = getProcessingInputChannels();
+            const auto mask = (1u << selected[0]) | (selected[1] >= 0 ? 1u << selected[1] : 0u);
+            applyInstanceMute(buffer, mask);
+            return mask;
+        }
+        if (routingAndOutput != nullptr) writeOutputChannels(*routingAndOutput, 0b11u, false);
+        return 0b11u;
     }
 
-    if (getRenderRouting() != nullptr && getRenderRouting()->hasMultipleInstances())
+    if (routingAndOutput != nullptr && getRenderRouting() != nullptr && getRenderRouting()->hasMultipleInstances())
     {
-        getRenderRouting()->process(buffer, midi);
-        recordClippedBlock(buffer);
+        const auto mask = getRenderRouting()->process(*routingAndOutput, midi);
+        juce::AudioBuffer<float> audible(routingAndOutput->getArrayOfWritePointers() + routingChannelCount,
+                                         routingChannelCount, buffer.getNumSamples());
+        recordClippedBlock(audible);
 
         updateShellLatency();
-        return;
+        return mask;
     }
 
-    processOwnChannels(buffer);
+    const auto mask = processOwnChannels(buffer);
+    if (routingAndOutput != nullptr) writeOutputChannels(*routingAndOutput, mask, audioBuffers().outputMuted);
+    return mask;
+}
+
+void AvaAudioProcessor::writeOutputChannels(juce::AudioBuffer<float>& channels, const unsigned mask, const bool muted)
+{
+    const auto samples = channels.getNumSamples();
+    for (int channel = 0; channel < routingChannelCount; ++channel)
+        if ((mask & (1u << channel)) != 0)
+        {
+            const auto output = channel + routingChannelCount;
+            if (muted) channels.clear(output, 0, samples);
+            else channels.copyFrom(output, 0, channels, channel, 0, samples);
+        }
+}
+
+void AvaAudioProcessor::applyInstanceMute(juce::AudioBuffer<float>& buffer, const unsigned channelMask)
+{
+    auto& gain = audioBuffers().instanceMuteGain;
+    const auto target = audioBuffers().instanceMuted ? 0.0f : 1.0f;
+    if (gain < 0.0f) gain = target;
+    if (gain == 1.0f && target == 1.0f) return;
+    const auto step = 1.0f / float(juce::jmax(1, juce::roundToInt(currentSampleRate * 0.0025)));
+    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+    {
+        gain = target > gain ? juce::jmin(target, gain + step) : juce::jmax(target, gain - step);
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            if ((channelMask & (1u << channel)) != 0)
+                buffer.setSample(channel, sample, buffer.getSample(channel, sample) * gain);
+    }
 }
 
 unsigned AvaAudioProcessor::processOwnChannels(juce::AudioBuffer<float>& channels)
@@ -334,13 +397,12 @@ unsigned AvaAudioProcessor::processOwnChannels(juce::AudioBuffer<float>& channel
     }
     audioBuffers().lastProcessingMask = mask;
     processOwnBlock(audioBuffers().selectedInputBuffer, &audioBuffers().routingInputSnapshot);
-    if (audioBuffers().instanceMuted) audioBuffers().selectedInputBuffer.clear();
+    applyInstanceMute(audioBuffers().selectedInputBuffer, ~0u);
     channels.copyFrom(selected[0], 0, audioBuffers().selectedInputBuffer, 0, 0, samples);
     if (selected[1] >= 0 && secondAvailable)
         channels.copyFrom(selected[1], 0, audioBuffers().selectedInputBuffer, preparedNumChannels > 1 ? 1 : 0, 0, samples);
     else if (selected[1] < 0 && preparedNumChannels > 1)
     {
-        // A mono destination receives the mono fold of the module's stereo output.
         channels.applyGain(selected[0], 0, samples, 0.5f);
         channels.addFrom(selected[0], 0, audioBuffers().selectedInputBuffer, 1, 0, samples, 0.5f);
     }
@@ -424,7 +486,7 @@ void AvaAudioProcessor::processOwnBlock(juce::AudioBuffer<float>& buffer,
         const auto& stacks = renderingGraph->moduleStacks;
         for (const auto& slot : stacks[rangeIndex])
         {
-            if (!slot.enabled) continue;
+            if (!ava::module_stack::processingActive(slot)) continue;
             const auto id = slot.type;
             if (slot.uid < ava::module_stack::originalCount)
             {

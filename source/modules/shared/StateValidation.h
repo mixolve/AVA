@@ -110,46 +110,8 @@ inline std::optional<float> readParameterPlainValue(const juce::ValueTree& state
     return std::nullopt;
 }
 
-// Read registered IDs without interpreting unknown IDs. Missing current values
-// get their declared defaults before APVTS::replaceState, so they cannot inherit
-// the previous live value. No ID aliases or value conversion are applied.
-inline juce::ValueTree completeMissingParameterDefaults(
-    const juce::ValueTree& candidate,
-    juce::AudioProcessorValueTreeState& parameters)
-{
-    if (!candidate.isValid() || candidate.getType() != parameters.state.getType())
-        return {};
-
-    auto complete = candidate.createCopy();
-    juce::HashMap<juce::String, bool> present;
-    for (int index = complete.getNumChildren(); --index >= 0;)
-    {
-        const auto child = complete.getChild(index);
-        if (!child.hasType("PARAM")) continue;
-        const auto id = child.getProperty("id").toString();
-        if (parameters.getParameter(id) != nullptr) present.set(id, true);
-        else complete.removeChild(index, nullptr);
-    }
-    // A state with no recognised parameters must not become an all-default save.
-    if (present.size() == 0) return complete;
-
-    for (const auto expected : parameters.copyState())
-    {
-        if (!expected.hasType("PARAM")) continue;
-        const auto id = expected.getProperty("id").toString();
-        auto* parameter = parameters.getParameter(id);
-        if (parameter == nullptr) continue;
-        if (present.contains(id)) continue;
-        juce::ValueTree item("PARAM");
-        item.setProperty("id", id, nullptr);
-        item.setProperty("value", parameter->convertFrom0to1(parameter->getDefaultValue()), nullptr);
-        complete.addChild(item, -1, nullptr);
-    }
-    return complete;
-}
-
-// Unknown IDs carry no settings. Validate current values and reject duplicates,
-// malformed current values or a state with no complete current parameter set.
+// Validate the current set of parameter IDs exactly. Old IDs and incomplete
+// layouts are not converted or silently substituted with current defaults.
 inline bool hasValidParameterState(const juce::ValueTree& candidate,
                                    juce::AudioProcessorValueTreeState& parameters,
                                    const juce::Identifier& allowedExtraChildType = {})
@@ -176,10 +138,15 @@ inline bool hasValidParameterState(const juce::ValueTree& candidate,
             continue;
         }
         const auto id = child.getProperty("id").toString();
-        if (!expected.contains(id)) continue;
-        if (child.getNumChildren() != 0 || id.isEmpty()
-            || received.contains(id)
-            || !parseExactFiniteNumber(child.getProperty("value")).has_value()) return false;
+        if (!expected.contains(id)) return false;
+        const auto value = parseExactFiniteNumber(child.getProperty("value"));
+        const auto* parameter = parameters.getParameter(id);
+        if (child.getNumChildren() != 0 || id.isEmpty() || received.contains(id)
+            || parameter == nullptr || !value.has_value()) return false;
+        const auto range = parameter->getNormalisableRange();
+        if (*value < static_cast<double>(range.start) - 1.0e-5
+            || *value > static_cast<double>(range.end) + 1.0e-5)
+            return false;
         received.set(id, true);
     }
     if (received.size() != expected.size()) return false;

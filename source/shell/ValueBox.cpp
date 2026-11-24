@@ -7,103 +7,15 @@
 
 namespace
 {
-constexpr double valueTransitionDelayMs = 50.0;
-
-// ParameterField owns the value box and its embedded bottom-row buttons.
-// Each embedded button owns its hover; overlays are repainted on the editor.
-}
-
-void repaintValueOverlay(juce::Component& component)
+// MODULES embeds value controls inside a scrolling page. Drawing its moving
+// thumb in the outer editor overlay introduces an extra buffered repaint.
+bool paintsRangeLocally(const juce::Component& component)
 {
-    // The editor owns a buffered image. Repainting its outer zoom/host window
-    // reuses that image, so invalidate the editor that paints the indicators.
-    component.repaint();
-    auto* field = component.findParentComponentOfClass<ParameterField>();
-    // Manual Ctrl+selection is stored on ParameterField, but both its value
-    // frame and its range marker live in ValueBoxComponent. Repaint both
-    // even when the click was not on an embedded button.
-    if (auto* owner = dynamic_cast<ParameterField*>(&component); owner != nullptr)
-    {
-        for (auto* child : owner->getChildren())
-            if (auto* value = dynamic_cast<ValueBoxComponent*>(child))
-                value->repaint();
-    }
-    else if (field != nullptr && bool(component.getProperties().getWithDefault("embeddedControlButton", false)))
-    {
-        for (auto* child : field->getChildren())
-            if (auto* value = dynamic_cast<ValueBoxComponent*>(child))
-                value->repaint();
-    }
-    if (auto* editor = component.findParentComponentOfClass<AvaAudioProcessorEditor>())
-    {
-        auto* repaintSource = field != nullptr && bool(component.getProperties().getWithDefault("embeddedControlButton", false))
-            ? static_cast<juce::Component*>(field) : &component;
-        editor->repaint(editor->getLocalArea(repaintSource, repaintSource->getLocalBounds().expanded(4)));
-    }
+    for (auto* parent = component.getParentComponent(); parent != nullptr; parent = parent->getParentComponent())
+        if (bool(parent->getProperties().getWithDefault("paintRangeLocally", false)))
+            return true;
+    return false;
 }
-
-bool scrollViewportWithWheel(juce::Viewport& viewport,
-                             const int contentHeight,
-                             const juce::MouseWheelDetails& wheel,
-                             const bool fineControl)
-{
-    // This helper scrolls vertical pages only. A horizontal trackpad gesture
-    // must never be converted into a Y movement, even when the nested page
-    // cannot scroll: consume it rather than forwarding it to a parent.
-    if (std::abs(wheel.deltaX) > std::abs(wheel.deltaY)) return true;
-
-    if (const auto* editor = viewport.findParentComponentOfClass<AvaAudioProcessorEditor>();
-        editor != nullptr && !editor->allowsViewportScroll(viewport)) return true;
-    auto* content = viewport.getViewedComponent();
-    if (content == nullptr) return false;
-    const auto maxScrollY = juce::jmax(0, contentHeight - viewport.getHeight());
-    if (maxScrollY <= 0)
-    {
-        if (auto* parent = viewport.findParentComponentOfClass<juce::Viewport>())
-            return scrollViewportWithWheel(*parent, parent->getViewedComponent() != nullptr ? parent->getViewedComponent()->getHeight() : 0, wheel, fineControl);
-        return false;
-    }
-    const auto delta = wheel.deltaY;
-    if (std::abs(delta) < 1.0e-6f) return false;
-
-    struct WheelPosition final : juce::DynamicObject
-    {
-        juce::Component::SafePointer<juce::Component> content;
-        double y = 0.0;
-        juce::Point<int> applied;
-    };
-    auto& properties = viewport.getProperties();
-    auto* position = dynamic_cast<WheelPosition*>(properties["wheelPosition"].getDynamicObject());
-    if (position == nullptr)
-    {
-        position = new WheelPosition();
-        properties.set("wheelPosition", juce::var(position));
-    }
-    const auto current = viewport.getViewPosition();
-    // Reconcile navigation, page replacement and external scroll restoration.
-    // Fractional wheel movement survives only while we own the current position.
-    if (position->content.getComponent() != content || position->applied != current || !wheel.isSmooth)
-    {
-        position->content = content;
-        position->y = current.y;
-    }
-    const auto sensitivity = (wheel.isSmooth ? 140.0 : 48.0) * (fineControl ? 0.1 : 1.0);
-    auto movement = -double(delta) * sensitivity;
-    if (!wheel.isSmooth && juce::roundToInt(movement) == 0)
-        movement = movement < 0.0 ? -48.0 : 48.0;
-    position->y = juce::jlimit(0.0, double(maxScrollY), position->y + movement);
-    const auto next = juce::Point<int>(0, juce::roundToInt(position->y));
-    if (next != current)
-    {
-        viewport.setViewPosition(next);
-        // Indicators are painted on the editor surface above scrolling children.
-        if (auto* editor = viewport.findParentComponentOfClass<AvaAudioProcessorEditor>())
-            editor->repaint(editor->getLocalArea(&viewport, viewport.getLocalBounds()));
-        else
-            viewport.repaint();
-    }
-    position->applied = viewport.getViewPosition();
-    return true;
 }
 
 ValueBoxComponent::ValueBoxComponent(juce::Slider& sliderToControl)
@@ -166,8 +78,7 @@ void ValueBoxComponent::enablementChanged()
     if (!isEnabled())
     {
         directIndicator->end();
-        pointerDown = pressHighlight = false;
-        togglePreviewActive = false;
+        pointerDown = false;
         cancelMomentaryPress();
         setTextInputActive(false);
         valueVisible = false;
@@ -203,7 +114,6 @@ void ValueBoxComponent::setInteractionEnabled(const bool shouldEnable)
     if (!interactionEnabled)
     {
         cancelMomentaryPress();
-        togglePreviewActive = false;
         directIndicator->end();
         valueVisible = false;
         valueTransitionAt = 0.0;
@@ -227,9 +137,7 @@ void ValueBoxComponent::setTextInputActive(const bool shouldBeActive)
 
     if (! shouldBeActive)
     {
-        pressHighlight = false;
         pointerDown = false;
-        togglePreviewActive = false;
         valueVisible = interactionEnabled && isEnabled() && pointerOnValue();
         valueTransitionAt = 0.0;
         if (valueVisible) startTimer(10);
@@ -287,7 +195,7 @@ void ValueBoxComponent::timerCallback()
 {
     const auto now = juce::Time::getMillisecondCounterHiRes();
     const auto showValue = interactionEnabled && isEnabled()
-        && (pointerOnValue() || momentaryPressed || directIndicator->isActive() || textInputActive);
+        && (pointerOnValue() || momentaryPressed || directIndicator->isDragging() || textInputActive);
     if (showValue)
     {
         if (valueVisible) { valueTransitionAt = 0.0; return; }
@@ -335,9 +243,10 @@ bool ValueBoxComponent::canAdjustValue() const noexcept
 
 void ValueBoxComponent::finishIndicatorDrag()
 {
+    const bool moved = directIndicator->wasDragged();
     directIndicator->end(true);
     if (valueVisible && !pointerOnValue()) valueTransitionAt = juce::Time::getMillisecondCounterHiRes() + valueTransitionDelayMs;
-    repaintValueOverlay(*this);
+    if (moved) repaintValueOverlay(*this);
 }
 
 void ValueBoxComponent::paint(juce::Graphics& g)
@@ -358,7 +267,40 @@ void ValueBoxComponent::paintValueFrame(juce::Graphics& g, juce::Rectangle<int> 
 void ValueBoxComponent::paintOverChildren(juce::Graphics& g)
 {
     paintValueFrame(g,getValueBounds());
-    // Some text fields fit their content instead of scrolling it.
+    if (paintsRangeLocally(*this) && areRangeIndicatorsVisible()
+        && (numericControlEnabled || choiceCount() > 0) && !textInputActive)
+    {
+        const auto rail = RangeIndicator::potentiometerBounds(*this, getValueBounds());
+        const auto visual = directIndicator->visualPosition();
+        const auto position = visual >= 0.0 ? visual : RangeIndicator::rangePosition(slider);
+        const auto marker = RangeIndicator::continuousMarker(rail, position);
+        const bool enabled = interactionEnabled && isEnabled();
+        const bool selected = isManualControlSelected(*this);
+        RangeIndicator::paint(g, rail, slider, enabled ? uiIndicatorActive : uiIndicatorDisabled, visual, this);
+        const bool interacting = directIndicator->isDragging();
+        const bool hovered = enabled && (interacting ? directIndicator->startedDragOnMarker()
+            : isMouseHovering(*this, marker.getSmallestIntegerContainer()));
+        if (selected)
+        {
+            if (isHoverInversionReady(*this, hovered, "value.top"))
+            {
+                g.setColour(juce::Colour(0xff666666));
+                g.fillRect(marker);
+                g.setColour(uiWhite);
+                g.drawRect(marker, 1.0f);
+            }
+        }
+        else if (interacting)
+        {
+            if (isHoverInversionReady(*this, hovered, "value.top"))
+            {
+                g.setColour(juce::Colour(0xff666666));
+                g.fillRect(marker);
+            }
+        }
+        else
+            RangeIndicator::paintHover(g, *this, *this, marker, enabled, false, "value.top");
+    }
     const auto fittedText = bool(getProperties().getWithDefault("fittedText", false));
     const auto textBounds = getControlTextBounds(*this, getValueBounds());
     const auto base = getParentComponent() != nullptr
@@ -370,7 +312,7 @@ void ValueBoxComponent::paintOverChildren(juce::Graphics& g)
         && (selectionHighlighted || (choiceCount() == 2 && getDisplayedValue() >= 0.5));
     const auto arrangementDragging = getParentComponent() != nullptr
         && bool(getParentComponent()->getProperties().getWithDefault("arrangementDragging", false));
-    paintControlTextButton(g, textBounds, interactionEnabled && isEnabled() && (valueVisible || dragTargetHighlighted), textInputActive || (interactionEnabled && isEnabled() && compactOn), arrangementDragging || (interactionEnabled && isEnabled() && (momentaryPressed || pressHighlight || directIndicator->hasInteractionHighlight())), interactionEnabled && isEnabled() ? juce::Colour(juce::uint32(juce::int64(base))) : uiIndicatorDisabled);
+    paintControlTextButton(g, textBounds, interactionEnabled && isEnabled() && (valueVisible || dragTargetHighlighted), textInputActive || (interactionEnabled && isEnabled() && compactOn), arrangementDragging || (interactionEnabled && isEnabled() && momentaryPressed && momentaryPressFeedbackEnabled), interactionEnabled && isEnabled() ? juce::Colour(juce::uint32(juce::int64(base))) : uiIndicatorDisabled);
     if (textInputActive && choiceCount() == 0) return;
     const auto valueText = valueVisible || idleTextProvider == nullptr
         ? displayTextProvider ? displayTextProvider() : slider.getTextFromValue(slider.getValue()) : juce::String();
@@ -406,7 +348,6 @@ void ValueBoxComponent::paintOverChildren(juce::Graphics& g)
 
 int ValueBoxComponent::bottomIndicatorAt(juce::Point<int> point) const
 {
-    // A dock source number is a read-only badge, never a host-slot action.
     const auto* field = findParentComponentOfClass<ParameterField>();
     const auto numbered = field != nullptr
         && field->getProperties()["dockInstanceNumber"].toString().isNotEmpty();
@@ -419,421 +360,6 @@ int ValueBoxComponent::bottomIndicatorAt(juce::Point<int> point) const
     return -1;
 }
 
-void ValueBoxComponent::mouseDown(const juce::MouseEvent& event)
-{
-    if (selectionGesture.begin(*this, event))
-    {
-        pointerDown = pressHighlight = false;
-        return;
-    }
-    if (const auto* field = findParentComponentOfClass<ParameterField>(); field != nullptr)
-    {
-        if (field->getProperties()["dockInstanceNumber"].toString().isNotEmpty()
-            && getBottomIndicatorBounds(RangeIndicator::boundsInside(*this, getValueBounds()), 0)
-                   .contains(event.getPosition()))
-            return; // Number badge: neither slot assignment nor value editing.
-    }
-
-    const auto bottom = bottomIndicatorAt(event.getEventRelativeTo(this).getPosition());
-    if (bottom == 0 && canUseBottomIndicator(0) && event.mods.isLeftButtonDown())
-    {
-        pressedBottomIndicator = bottom;
-        repaintValueOverlay(*this);
-        return;
-    }
-    if (const auto* field = findParentComponentOfClass<ParameterField>(); field != nullptr
-        && bool(field->getProperties().getWithDefault("readOnlyControl", false))) return;
-    if (bottom >= 0 && canUseBottomIndicator(bottom) && event.mods.isLeftButtonDown())
-    {
-        pressedBottomIndicator = bottom;
-        repaintValueOverlay(*this);
-        return;
-    }
-    auto* clickedComponent = event.originalComponent;
-    const auto clickIsInsideThisValueBox = clickedComponent != nullptr
-        && (clickedComponent == this || isParentOf(clickedComponent));
-
-    // A Shift-click on a discrete control always means "previous", even
-    // when the pointer happens to land on the range indicator itself.
-    const auto reverseChoiceClick = choiceCount() > 1 && event.mods.isShiftDown()
-        && !event.mods.isCtrlDown() && !event.mods.isAltDown();
-    if (!reverseChoiceClick && areRangeIndicatorsVisible() && clickIsInsideThisValueBox
-        && canAdjustValue() && momentaryAction == nullptr && choiceCount() != 2)
-        if (directIndicator->begin(event.getEventRelativeTo(this), RangeIndicator::potentiometerBounds(*this, getValueBounds()), slider,
-                                   choiceCount())) { repaint(); return; }
-
-    if (clickIsInsideThisValueBox && event.mods.isLeftButtonDown() && event.mods.isCtrlDown()
-        && event.mods.isShiftDown() && !event.mods.isAltDown() && onResetRequested != nullptr
-        && !textInputActive)
-    {
-        onResetRequested();
-        return;
-    }
-
-    if (! event.mods.isLeftButtonDown())
-        return;
-
-    if (clickedComponent != this) return;
-
-    if (momentaryAction != nullptr)
-    {
-        const auto point = event.getEventRelativeTo(this).getPosition();
-        const auto onControl = getValueBounds().contains(point);
-        if (canAdjustValue() && !event.mods.isPopupMenu() && onControl)
-        {
-            momentaryPressed = pointerDown = pressHighlight = true;
-            auto& source = slider;
-            source.setValue(source.getMaximum(), juce::sendNotificationSync);
-            revealValue();
-            repaintValueOverlay(*this);
-        }
-        return;
-    }
-
-    const auto valueCanOpenPrompt = interactionEnabled && isEnabled();
-
-    pointerDown = true;
-    pressHighlight = valueCanOpenPrompt;
-    if (choiceCount() == 2 && canAdjustValue()
-        && getValueBounds().contains(event.getEventRelativeTo(this).getPosition())
-        && momentaryAction == nullptr && !event.mods.isPopupMenu())
-    {
-        // Treat every binary choice as the same push-feedback toggle: show
-        // the *next* thumb position immediately, but do not touch the slider
-        // or APVTS until the normal mouseUp commit path runs.
-        togglePreviewActive = true;
-        togglePreviewPosition = RangeIndicator::rangePosition(slider) < 0.5 ? 1.0 : 0.0;
-        repaintValueOverlay(*this);
-    }
-    if (canAdjustValue() && choiceCount() != 2
-        && getValueBounds().contains(event.getEventRelativeTo(this).getPosition()))
-        directIndicator->beginFromValue(event.getEventRelativeTo(this), RangeIndicator::potentiometerBounds(*this, getValueBounds()), slider, choiceCount());
-    repaint();
-}
-
-void ValueBoxComponent::setMomentaryRestingState(bool active)
-{
-    momentaryRestingState = active;
-    if (!momentaryPressed)
-    {
-        auto& source = slider;
-        source.setValue(active ? source.getMaximum() : source.getMinimum(), juce::sendNotificationSync);
-    }
-    repaintValueOverlay(*this);
-}
-
-void ValueBoxComponent::cancelMomentaryPress()
-{
-    if (std::exchange(momentaryDragging, false)) {
-        juce::Component::beginDragAutoRepeat(0);
-        setMouseCursor(momentaryDragCursor);
-        const auto cancelled = onMomentaryDragCancelled;
-        if (cancelled) cancelled();
-    }
-    if (!momentaryPressed) return;
-    momentaryPressed = pointerDown = pressHighlight = false;
-    auto& source = slider;
-    source.setValue(momentaryRestingState ? source.getMaximum() : source.getMinimum(), juce::sendNotificationSync);
-    if (!pointerOnValue()) valueTransitionAt = juce::Time::getMillisecondCounterHiRes() + valueTransitionDelayMs;
-    repaintValueOverlay(*this);
-}
-
-void ValueBoxComponent::mouseDrag(const juce::MouseEvent& event)
-{
-    if (selectionGesture.isActive()) return;
-    if (onMomentaryDrag && momentaryPressed && (momentaryDragging || event.getDistanceFromDragStart() >= 4)) {
-        if (!momentaryDragging) {
-            momentaryDragging = true;
-            momentaryDragCursor = getMouseCursor();
-            setMouseCursor(juce::MouseCursor::DraggingHandCursor);
-            juce::Component::beginDragAutoRepeat(40);
-        }
-        const auto action = onMomentaryDrag;
-        action(event, false);
-        return;
-    }
-    if (directIndicator->isActive())
-    {
-        directIndicator->drag(event);
-        if (directIndicator->wasDragged()) revealValue();
-        repaintValueOverlay(*this);
-        return;
-    }
-
-}
-
-void ValueBoxComponent::mouseUp(const juce::MouseEvent& event)
-{
-    if (selectionGesture.finish(event)) return;
-    if (std::exchange(momentaryDragging, false)) {
-        juce::Component::beginDragAutoRepeat(0);
-        setMouseCursor(momentaryDragCursor);
-        const auto action = onMomentaryDrag;
-        cancelMomentaryPress();
-        if (action) action(event, true);
-        return;
-    }
-    if (momentaryPressed)
-    {
-        const auto clicked = getValueBounds().contains(event.getEventRelativeTo(this).getPosition())
-            && !event.mouseWasDraggedSinceMouseDown() && !event.mods.isPopupMenu()
-            && interactionEnabled && isEnabled();
-        const auto action = momentaryAction;
-        cancelMomentaryPress();
-        if (clicked && action != nullptr) action();
-        return;
-    }
-    if (pressedBottomIndicator >= 0)
-    {
-        const auto index = std::exchange(pressedBottomIndicator, -1);
-        repaint();
-        if (bottomIndicatorAt(event.getEventRelativeTo(this).getPosition()) == index
-            && !event.mouseWasDraggedSinceMouseDown() && canUseBottomIndicator(index))
-        {
-            auto& action = bottomIndicators[static_cast<size_t>(index)];
-            action.toggle();
-            repaintValueOverlay(*this);
-        }
-        return;
-    }
-
-    if (directIndicator->isActive())
-    {
-        const auto dragged = directIndicator->wasDragged();
-        finishIndicatorDrag();
-        if (dragged || !pointerDown)
-        {
-            pointerDown = false;
-            pressHighlight = false;
-            // In the fixed dock the rail covers much of the small tile.
-            // A click without dragging must still open the native numeric
-            // editor; dragging keeps the ordinary potentiometer behaviour.
-            if (!dragged && !event.mouseWasDraggedSinceMouseDown()
-                && !event.mods.isPopupMenu() && !event.mods.isCtrlDown()
-                && !event.mods.isAltDown() && canAdjustValue()
-                && choiceCount() == 0 && textInputEnabled)
-                if (const auto* field = findParentComponentOfClass<ParameterField>();
-                    field != nullptr && field->getProperties().contains("quickAccessSelectionKey"))
-                    showEditor();
-            return;
-        }
-    }
-    if (! pointerDown)
-        return;
-
-    const auto clicked = getValueBounds().contains(event.getEventRelativeTo(this).getPosition())
-        && ! event.mouseWasDraggedSinceMouseDown()
-        && ! event.mods.isPopupMenu();
-
-    pointerDown = false;
-    pressHighlight = false;
-    togglePreviewActive = false;
-    repaintValueOverlay(*this);
-
-    if (clicked)
-    {
-        if (canAdjustValue() && choiceCount() > 1)
-        {
-            auto& source = slider;
-            const auto count = choiceCount();
-            const auto selected = juce::roundToInt(RangeIndicator::rangePosition(source) * (count - 1));
-            const auto direction = event.mods.isShiftDown() && !event.mods.isCtrlDown()
-                && !event.mods.isAltDown() ? -1 : 1;
-            auto next = selected;
-            for (int attempt = 0; attempt < count; ++attempt)
-            {
-                next = (next + direction + count) % count;
-                if (isDiscreteChoiceEnabled == nullptr || isDiscreteChoiceEnabled(next))
-                    break;
-            }
-            if (next != selected && (isDiscreteChoiceEnabled == nullptr || isDiscreteChoiceEnabled(next)))
-            {
-                juce::Slider::ScopedDragNotification gesture(source);
-                source.setValue(source.proportionOfLengthToValue(double(next) / double(count - 1)), juce::sendNotificationSync);
-            }
-        }
-        else if (interactionEnabled && choiceCount() == 0)
-            showEditor();
-    }
-}
-
-void ValueBoxComponent::updateDockInstanceHover(juce::Point<int> position)
-{
-    // The routing INSTANCE name replaces the badge and BP in place, but only
-    // after 50 ms over the number. Moving away cancels the pending reveal.
-    const auto* field = findParentComponentOfClass<ParameterField>();
-    const bool isDockControl = field != nullptr
-        && field->getProperties()["dockInstanceNumber"].toString().isNotEmpty();
-    const auto badge = getBottomIndicatorBounds(
-        RangeIndicator::boundsInside(*this, getValueBounds()), 0);
-    const bool hovered = isDockControl && badge.contains(position);
-    if (dockInstanceBadgeUnderPointer == hovered) return;
-    dockInstanceBadgeUnderPointer = hovered;
-    const auto generation = ++dockInstanceHoverGeneration;
-    if (!hovered)
-    {
-        if (dockInstanceNameHovered)
-        {
-            dockInstanceNameHovered = false;
-            repaintValueOverlay(*this);
-        }
-        return;
-    }
-    juce::Timer::callAfterDelay(50,
-        [safe = juce::Component::SafePointer<ValueBoxComponent>(this), generation]
-        {
-            if (safe == nullptr || !safe->dockInstanceBadgeUnderPointer
-                || safe->dockInstanceHoverGeneration != generation) return;
-            safe->dockInstanceNameHovered = true;
-            repaintValueOverlay(*safe);
-        });
-}
-
-void ValueBoxComponent::mouseExit(const juce::MouseEvent&)
-{
-    updateDockInstanceHover({ -1, -1 });
-    if (pointerDown)
-        pressHighlight = false;
-    if (valueVisible && !directIndicator->isActive())
-        valueTransitionAt = juce::Time::getMillisecondCounterHiRes() + valueTransitionDelayMs;
-    else if (!valueVisible && !directIndicator->isActive() && !textInputActive)
-    {
-        valueTransitionAt = 0.0;
-        stopTimer();
-    }
-    if (isManualControlSelected(*this)) repaintValueOverlay(*this);
-    else repaint();
-
-    if (auto* parent = getParentComponent()) parent->repaint();
-}
-
-void ValueBoxComponent::modifierKeysChanged(const juce::ModifierKeys& modifiers)
-{
-    repaint();
-    juce::Component::modifierKeysChanged(modifiers);
-}
-
-void ValueBoxComponent::mouseMove(const juce::MouseEvent& event)
-{
-    updateDockInstanceHover(event.getPosition());
-    if (interactionEnabled && isEnabled() && !isTimerRunning()) startTimer(10);
-    // The thumb is drawn in the editor's overlay, not in this component.
-    // Refresh that overlay while hovering a manually marked control, even
-    // when the cursor moves within the same ValueBox.
-    if (isManualControlSelected(*this)) repaintValueOverlay(*this);
-    else repaint();
-}
-
-void ValueBoxComponent::mouseEnter(const juce::MouseEvent& event)
-{
-    updateDockInstanceHover(event.getPosition());
-    if (interactionEnabled && isEnabled()
-        && (numericControlEnabled || choiceCount() > 0 || momentaryAction != nullptr || textInputEnabled))
-    {
-        valueTransitionAt = valueVisible ? 0.0 : juce::Time::getMillisecondCounterHiRes() + valueTransitionDelayMs;
-        if (!isTimerRunning()) startTimer(10);
-    }
-    if (isManualControlSelected(*this)) repaintValueOverlay(*this);
-    else repaint();
-    if (auto* parent = getParentComponent()) parent->repaint();
-}
-
-void ValueBoxComponent::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
-{
-    if (auto* viewport = findParentComponentOfClass<juce::Viewport>())
-    {
-        // The dock is a horizontal (or rotated vertical) strip, not a page.
-        // Route its wheel gestures through its own axis-aware handler.
-        if (auto* dock = viewport->findParentComponentOfClass<QuickAccessStrip>())
-        {
-            dock->mouseWheelMove(event.getEventRelativeTo(dock), wheel);
-            return;
-        }
-        const auto viewedHeight = viewport->getViewedComponent() != nullptr
-            ? viewport->getViewedComponent()->getHeight()
-            : 0;
-        scrollViewportWithWheel(*viewport, viewedHeight, wheel, event.mods.isShiftDown());
-    }
-    else
-        juce::Component::mouseWheelMove(event, wheel);
-}
-
-void ValueBoxComponent::showEditor()
-{
-    if (!textInputEnabled || textInputActive || choiceCount() > 0) return;
-    auto* owner = findParentComponentOfClass<AvaAudioProcessorEditor>();
-    if (owner == nullptr) return;
-    const auto editorText = editorTextProvider != nullptr ? editorTextProvider()
-                                                          : slider.getTextFromValue(slider.getValue());
-    auto safeThis = juce::Component::SafePointer<ValueBoxComponent>(this);
-    const auto anchorBounds = owner->getLocalArea(this, getValueBounds());
-
-    setTextInputActive(true);
-    pressHighlight = false;
-    repaint();
-
-    owner->showTextPrompt(editorText,
-                          [safeThis] (const juce::String& enteredText)
-                          {
-                              if (safeThis == nullptr)
-                                  return false;
-
-                              return safeThis->applyEnteredText(enteredText);
-                          },
-                          anchorBounds,
-                          [safeThis]
-                          {
-                              if (safeThis != nullptr)
-                                  safeThis->setTextInputActive(false);
-                          },
-                          [safeThis]
-                          {
-                              if (safeThis != nullptr)
-                                  safeThis->setTextInputActive(false);
-                          }, true, numericControlEnabled ? &slider : nullptr, textToValueParser, editorTextProvider,
-                          [safeThis]
-                          {
-                              if (safeThis != nullptr && safeThis->onResetRequested != nullptr) safeThis->onResetRequested();
-                          }, this);
-}
-
-bool ValueBoxComponent::applyEnteredText(const juce::String& enteredText)
-{
-    if (textCommit != nullptr)
-    {
-        if (!textCommit(enteredText)) return false;
-        revealValue();
-        repaint();
-        return true;
-    }
-    const auto enteredValue = textToValueParser != nullptr
-        ? textToValueParser(enteredText)
-        : slider.getValueFromText(enteredText);
-    if (!std::isfinite(enteredValue)) return false;
-    const auto clampedValue = juce::jlimit(static_cast<double>(slider.getMinimum()),
-                                           static_cast<double>(slider.getMaximum()),
-                                           enteredValue);
-
-    applyValue(clampedValue);
-
-    if (auto* parent = getParentComponent())
-        parent->repaint();
-
-    repaint();
-    return true;
-}
-
-void ValueBoxComponent::applyValue(const double value)
-{
-    slider.setValue(value, juce::sendNotificationSync);
-}
-
-void ValueBoxComponent::sliderValueChanged(juce::Slider*)
-{
-    if (pointerOnValue() || directIndicator->isActive() || textInputActive) revealValue();
-    repaintValueOverlay(*this);
-}
-
 void ValueBoxComponent::paintRangeIndicators(juce::Graphics& g, juce::Component& root,
     const std::function<bool(const juce::Component&)>& include)
 {
@@ -843,21 +369,26 @@ void ValueBoxComponent::paintRangeIndicators(juce::Graphics& g, juce::Component&
     ValueBoxComponent* hoveredControl = nullptr;
     juce::Point<float> pointerPosition;
     const auto& desktop = juce::Desktop::getInstance();
-    if (desktop.getNumDraggingMouseSources() == 0)
-        for (const auto& source : desktop.getMouseSources())
-        {
-            if (!source.isMouse()) continue;
-            const auto point = root.getLocalPoint(nullptr, source.getScreenPosition());
-            auto* target = root.getComponentAt(point.roundToInt());
-            for (; target != nullptr && target != &root; target = target->getParentComponent())
-                if (auto* value = dynamic_cast<ValueBoxComponent*>(target))
-                {
-                    hoveredControl = value;
-                    pointerPosition = point;
-                    break;
-                }
-            if (hoveredControl != nullptr) break;
-        }
+    for (const auto& source : desktop.getMouseSources())
+    {
+        if (!source.isMouse()) continue;
+        const auto point = root.getLocalPoint(nullptr, source.getScreenPosition());
+        // Preserve the pressed control's hover across a gesture, rather than
+        // dropping it while JUCE reports a dragging mouse source.
+        // JUCE reports isDragging() as soon as a mouse button goes down,
+        // even if the pointer has not moved. Keep normal hit-testing on a click.
+        auto* target = source.isDragging() && source.hasMovedSignificantlySincePressed()
+            ? source.getComponentUnderMouse() : root.getComponentAt(point.roundToInt());
+        if (target == nullptr || (target != &root && !root.isParentOf(target))) continue;
+        for (; target != nullptr && target != &root; target = target->getParentComponent())
+            if (auto* value = dynamic_cast<ValueBoxComponent*>(target))
+            {
+                hoveredControl = value;
+                pointerPosition = point;
+                break;
+            }
+        if (hoveredControl != nullptr) break;
+    }
     const auto paintHover = [&](ValueBoxComponent& value, const char* region,
                                 const auto marker, bool enabled, bool held = false)
     {
@@ -919,9 +450,12 @@ void ValueBoxComponent::paintRangeIndicators(juce::Graphics& g, juce::Component&
             const auto manuallySelected = isManualControlSelected(*value);
             const auto count = value->choiceCount();
             const auto directVisual = value->directIndicator->visualPosition();
-            const auto visual = value->togglePreviewActive
-                ? value->togglePreviewPosition : directVisual;
+            const auto visual = directVisual;
             const auto position = visual >= 0.0 ? visual : RangeIndicator::rangePosition(value->slider);
+            // The marker is pixel-aligned. Reusing its cached image until that
+            // pixel changes avoids reallocating an image for every tiny drag step.
+            const auto markerPixel = RangeIndicator::continuousMarker(
+                RangeIndicator::potentiometerBounds(*value, value->getValueBounds()), position).getX();
             const auto scale = juce::jmax(0.01f, g.getInternalContext().getPhysicalPixelScaleFactor());
             const auto* field = value->findParentComponentOfClass<ParameterField>();
             const auto dockNumber = field != nullptr
@@ -943,16 +477,14 @@ void ValueBoxComponent::paintRangeIndicators(juce::Graphics& g, juce::Component&
                 layer = new IndicatorLayer();
                 properties.set("indicatorLayer", juce::var(layer));
             }
-            // Cache the indicator geometry in local control coordinates.
             const auto key = juce::String(value->getWidth()) + ":" + juce::String(value->getHeight())
                 + ":" + juce::String(scale, 6) + ":" + juce::String(defaultUiCornerRadius)
                 + ":" + juce::String(enabled ? 1 : 0) + ":" + juce::String(count)
-                + ":" + juce::String(position, 17)
+                + ":" + juce::String(markerPixel)
                 + ":" + juce::String((value->numericControlEnabled || count > 0) && !value->textInputActive ? 1 : 0)
                 + ":" + juce::String(bottomStates[0]) + ":" + juce::String(bottomStates[1])
                 + ":" + dockNumber
                 + ":" + juce::String(rangeVisible ? 1 : 0)
-                + ":" + juce::String(value->directIndicator->hasInteractionHighlight() || value->pressHighlight ? 1 : 0)
                 + ":" + juce::String(manuallySelected ? 1 : 0)
                 + ":" + juce::String(value->getBottomIndicatorBounds(indicatorBounds, 0).getWidth())
                 + ":" + juce::String(value->getBottomIndicatorBounds(indicatorBounds, 0).getHeight());
@@ -980,11 +512,10 @@ void ValueBoxComponent::paintRangeIndicators(juce::Graphics& g, juce::Component&
                             index == 0 && dockNumber.isNotEmpty() ? dockNumber
                                 : juce::String(index == 0 ? "SL" : "BP"), marker);
                     }
-                // All top control indicators use the same potentiometer rail,
-                // including BAND/SETT, module selectors, choices and toggles.
-                if (rangeVisible && (value->numericControlEnabled || count > 0) && !value->textInputActive)
+                if (!paintsRangeLocally(*value) && rangeVisible
+                    && (value->numericControlEnabled || count > 0) && !value->textInputActive)
                     RangeIndicator::paint(ink, RangeIndicator::potentiometerBounds(*value, value->getValueBounds()), value->slider,
-                        enabled ? (value->directIndicator->hasInteractionHighlight() || value->pressHighlight ? uiWhite : uiIndicatorActive) : disabledColour, visual, value);
+                        enabled ? uiIndicatorActive : disabledColour, visual, value);
                 layer->key = key;
             }
             g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
@@ -1000,21 +531,26 @@ void ValueBoxComponent::paintRangeIndicators(juce::Graphics& g, juce::Component&
                     value->pressedBottomIndicator == index))
                     drawEmbeddedButtonText(g, index == 0 ? "SL" : "BP", marker, value->pressedBottomIndicator == index ? juce::Colour(0xff222222) : uiWhite);
             }
-            if (rangeVisible && (value->numericControlEnabled || count > 0) && !value->textInputActive)
+            if (!paintsRangeLocally(*value) && rangeVisible
+                && (value->numericControlEnabled || count > 0) && !value->textInputActive)
             {
                 const auto marker = RangeIndicator::continuousMarker(
                     RangeIndicator::potentiometerBounds(*value, bounds),
                     visual >= 0.0 ? visual : RangeIndicator::rangePosition(value->slider));
-                const bool interacting = value->directIndicator->hasInteractionHighlight();
+                const bool interacting = value->directIndicator->isDragging();
                 const bool enabledHover = value->interactionEnabled && value->isEnabled();
+                // The pointer is hidden while dragging. Keep the thumb's
+                // existing hover instead of clearing it and restarting the
+                // delayed hover after mouseUp.
+                const bool markerHovered = enabledHover && (interacting
+                    ? value->directIndicator->startedDragOnMarker()
+                    : value == hoveredControl && marker.contains(pointerPosition));
                 if (manuallySelected)
                 {
                     // Selection is white at rest, but must still respond to
                     // hovering the thumb.  Use a dark centre with a WHITE
                     // outline, so the control remains visibly Ctrl-marked.
-                    if (isHoverInversionReady(*value,
-                        enabledHover && !interacting && value == hoveredControl
-                            && marker.contains(pointerPosition), "value.top"))
+                    if (isHoverInversionReady(*value, markerHovered, "value.top"))
                     {
                         g.setColour(juce::Colour(0xff666666));
                         g.fillRect(marker);
@@ -1022,9 +558,17 @@ void ValueBoxComponent::paintRangeIndicators(juce::Graphics& g, juce::Component&
                         g.drawRect(marker, 1.0f);
                     }
                 }
+                else if (interacting)
+                {
+                    if (isHoverInversionReady(*value, markerHovered, "value.top"))
+                    {
+                        g.setColour(juce::Colour(0xff666666));
+                        g.fillRect(marker);
+                    }
+                }
                 else
                 {
-                    paintHover(*value, "value.top", marker, enabledHover, interacting);
+                    paintHover(*value, "value.top", marker, enabledHover);
                 }
             }
             // The badge hover occupies the *existing* bottom indicator row.

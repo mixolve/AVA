@@ -160,7 +160,7 @@ void DynSpectralProcessor::DynamicProcessor::processLinkedSpectrum(
             if (std::abs(settings.tension) >= 0.005f && level < threshold)
             {
                 const auto floor = juce::jmin(settings.tensionFloorDb, threshold);
-                const auto shapedLevel = dyn_spectral_tension::shape(level, threshold, floor, settings.tension);
+                const auto shapedLevel = dyn_tension::shape(level, threshold, floor, settings.tension);
                 targetGainDb = shapedLevel - level;
                 if (level <= floor)
                     targetGainDb += juce::Decibels::gainToDecibels(settings.tensionHysteresis, -240.0f);
@@ -248,7 +248,6 @@ void DynSpectralProcessor::DynamicProcessor::processLinkedSpectrum(
             }
             else
             {
-                // A sustained signal reloads HOLD, so its timer starts when the detector falls.
                 envelope.holdMs = settings.holdMs;
                 envelope.holdConfiguredMs = settings.holdMs;
                 envelope.attacking = false;
@@ -362,7 +361,7 @@ void DynSpectralProcessor::DynamicProcessor::processCorrelationSpectrum(
                                                  settings.attackMs, settings.holdMs, releaseMs,
                                                  settings.attackCurve, settings.releaseCurve, settings.autoRelease, memoryCoefficient, settings.releaseDepth, std::abs(desiredCorrelationChange));
             const auto response = juce::jlimit(0.0f, 1.0f, 2.0f * amount / juce::jmax(1.0e-7f, referenceDistance));
-            const auto shapedKey = dyn_spectral_tension::correlation(
+            const auto shapedKey = dyn_tension::correlation(
                 keyCorrelation, threshold, settings.correlationTensionFloor, settings.tension, settings.tensionHysteresis);
             auto& tensionEnvelope = tensionEnvelopes[path][static_cast<size_t>(bin)];
             auto& direction = tensionDirections[path][static_cast<size_t>(bin)];

@@ -33,64 +33,29 @@ bool decodeTopology(const juce::String& encoded, State& state)
 {
     state.nodes.clear();
     const auto separator = encoded.indexOfChar(';');
-    if (separator >= 0)
+    if (separator <= 0 || !parseNumber(encoded.substring(0, separator), state.entryInstanceId, true))
+        return false;
+    const auto recordsText = encoded.substring(separator + 1);
+    const auto records = juce::StringArray::fromTokens(recordsText, ",", "");
+    if (records.isEmpty() || records.joinIntoString(",") != recordsText)
+        return false;
+    for (const auto& record : records)
     {
-        if (! parseNumber(encoded.substring(0, separator), state.entryInstanceId, true))
+        const auto fields = juce::StringArray::fromTokens(record, ":", "");
+        if ((fields.size() != 4 && fields.size() != 5 && fields.size() != 6)
+            || fields.joinIntoString(":") != record)
             return false;
-        const auto recordsText = encoded.substring(separator + 1);
-        const auto records = juce::StringArray::fromTokens(recordsText, ",", "");
-        if (records.isEmpty() || records.joinIntoString(",") != recordsText)
+        State::Node node;
+        if (!parseNumber(fields[0], node.id, true)
+            || !parseNumber(fields[1], node.serialNext, false)
+            || !parseNumber(fields[2], node.parallelNext, false)
+            || !parseNumber(fields[3], node.groupNext, false)
+            || (fields.size() == 5 && fields[4] != "1")
+            || (fields.size() == 6 && ((fields[4] != "0" && fields[4] != "1") || fields[5] != "1")))
             return false;
-        for (const auto& record : records)
-        {
-            const auto fields = juce::StringArray::fromTokens(record, ":", "");
-            if ((fields.size() != 3 && fields.size() != 4 && fields.size() != 5 && fields.size() != 6) || fields.joinIntoString(":") != record)
-                return false;
-            State::Node node;
-            if (! parseNumber(fields[0], node.id, true)
-                || ! parseNumber(fields[1], node.serialNext, false)
-                || ! parseNumber(fields[2], node.parallelNext, false)
-                || (fields.size() >= 4 && ! parseNumber(fields[3], node.groupNext, false))
-                || (fields.size() == 5 && fields[4] != "1")
-                || (fields.size() == 6 && ((fields[4] != "0" && fields[4] != "1") || fields[5] != "1")))
-                return false;
-            node.container = fields.size() >= 5 && fields[4] == "1";
-            node.compensated = fields.size() == 6;
-            state.nodes.push_back(node);
-        }
-    }
-    else
-    {
-
-        const auto stages = juce::StringArray::fromTokens(encoded, ",", "");
-        if (stages.isEmpty() || stages.joinIntoString(",") != encoded)
-            return false;
-        int previousStageStart = 0;
-        for (const auto& stage : stages)
-        {
-            const auto lanes = juce::StringArray::fromTokens(stage, "|", "");
-            if (lanes.isEmpty() || lanes.joinIntoString("|") != stage)
-                return false;
-            int firstId = 0;
-            int previousId = 0;
-            for (const auto& lane : lanes)
-            {
-                int id = 0;
-                if (! parseNumber(lane, id, true))
-                    return false;
-                state.nodes.push_back({ id, 0, 0 });
-                if (firstId == 0)
-                    firstId = id;
-                if (auto* previous = findNode(state, previousId))
-                    previous->parallelNext = id;
-                previousId = id;
-            }
-            if (auto* previous = findNode(state, previousStageStart))
-                previous->serialNext = firstId;
-            else
-                state.entryInstanceId = firstId;
-            previousStageStart = firstId;
-        }
+        node.container = fields.size() >= 5 && fields[4] == "1";
+        node.compensated = fields.size() == 6;
+        state.nodes.push_back(node);
     }
 
     if (state.nodes.empty() || getInstanceCount(state) > maximumInstanceCount || state.nodes.size() > 2 * maximumInstanceCount)
@@ -155,8 +120,8 @@ bool decode(const juce::ValueTree& tree, State& result)
     for (const auto& node : decoded.nodes)
         if (! node.container && decoded.nextInstanceId <= node.id)
             return false;
-    if (tree.hasProperty(rootInstanceIdStateKey)
-        && ! parseNumber(tree.getProperty(rootInstanceIdStateKey).toString(), decoded.rootInstanceId, true))
+    if (!tree.hasProperty(rootInstanceIdStateKey)
+        || !parseNumber(tree.getProperty(rootInstanceIdStateKey).toString(), decoded.rootInstanceId, true))
         return false;
     if (findNode(decoded, decoded.rootInstanceId) == nullptr
         || findNode(decoded, decoded.rootInstanceId)->container)

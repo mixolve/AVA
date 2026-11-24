@@ -16,7 +16,6 @@
 #include "../crossover/Page.h"
 #include "../modules/shared/BlockChainProcessor.h"
 
-
 void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& viewportBounds)
 {
     const auto bandScope = "eql.band-" + juce::String(int(audioProcessor.getSelectedCrossoverRange() + 1));
@@ -38,7 +37,7 @@ void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& view
         const auto searchHeight = bool(getRootWindowState().getProperty(shell_editor_ui::key("search_visible"), true))
             ? controlSearchPanel->getDisplayedHeight() + gap : 0;
         const auto pinnedHeight = bool(getRootWindowState().getProperty(shell_editor_ui::key("pin_routing"), true))
-            ? standardControlTextZoneHeight + 2 * controlEdgeInset + gap : 0;
+            ? getPinnedRoutingTileHeight(*this) + gap : 0;
         const auto top = searchTop + searchHeight + pinnedHeight;
         const auto bottom = quickAccessStrip.getY();
         viewportBounds = {viewportBounds.getX(), top, viewportBounds.getWidth(),
@@ -80,12 +79,6 @@ void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& view
         return;
     }
 
-    // Fixed six-column EQL rows. The growing filter list starts AFTER the
-    // fourth row's ONE COPY / PASTE / DELETE / ADD buttons.
-    // 1: PRESET SELECT, PRESET ADD, SAVE, RENAME, DEFAULT, DELETE
-    // 2: ALL COPY, ALL PASTE, ALL SORT
-    // 3: FILTER TYPE, ORDER, FREQ, BW, GAIN
-    // 4+: ONE COPY, ONE PASTE, ONE DELETE, ONE ADD, filter headers...
     std::array<std::vector<ControlGridCell>, 4> rows;
     if (presetsSection != nullptr)
     {
@@ -108,7 +101,6 @@ void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& view
         rows[1].push_back({sortFiltersButton.get()});
     }
 
-    // Filter settings stay in row 3 even when the list spans several rows.
     FilterSection* selectedFilter = nullptr;
     for (auto& section : filterSections)
         if (section != nullptr && section->expanded
@@ -197,8 +189,6 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
     const auto scroll = filterViewport.getViewPositionY();
     layoutEqlModuleSections(bounds);
     const auto width = filterViewport.getWidth();
-    // The outer white frame spans the expanded viewport. All nested dark
-    // frames fit six standard controls, positioned 8px inside.
     const auto instanceInset = getUiGap(*this) + controlBlockFrameThickness;
     // The white frame keeps its existing 560px width; only its inner inset
     // grows by the border thickness to expose exactly 8px of background.
@@ -211,8 +201,6 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         : std::array<juce::Component*, 2>{};
     const auto settings = crossover != nullptr ? crossover->getInstanceMainRows() : InstanceMainRows{};
 
-    // UNIT is a top-level sibling above INSTANCE. Reuse all existing
-    // controls inside UNIT MAIN, ROUTING, OSC, SYNC and SLOTS.
     const auto unitCollapsed = unitContent.isBlockCollapsed("UNIT");
     const auto paddingUnit = controlBlockPadding + controlBlockFrameThickness;
     const auto unitGap = getUiGap(*this);
@@ -272,8 +260,6 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         }
         blockY += unitMainHeight + unitGap;
         const auto routingCollapsed = unitRoutingContent.isBlockCollapsed("ROUTING");
-        // ROUTING has the same width as before but half the previous canvas
-        // height. The header and frame padding are not included in the half.
         const auto graphSize = innerBlockWidth - 2 * paddingUnit;
         const auto graphHeight = graphSize / 2;
         const auto routingHeight = routingCollapsed ? controlBlockHeaderHeight
@@ -287,8 +273,6 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
                                     graphSize, graphHeight);
         else
             routingPanel->setBounds({});
-        // Anchor CN inside the frame body, below its header, independently
-        // of the graph viewport's larger content padding.
         routingPanel->placeContainersButton(unitContent,
             unitRoutingContent.getBounds().withTrimmedTop(controlBlockHeaderHeight)
                 .withTrimmedLeft(controlBlockFrameThickness)
@@ -356,26 +340,23 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
     unitContent.setVisible(true);
     const auto instanceY = unitHeight + unitGap;
 
-
-    // MAIN contains four fixed rows, with COPY/PASTE in columns 5 and 6.
-    // MODULES is its own sibling block immediately below MAIN.
     std::array<std::vector<ControlGridCell>, 4> rows;
     const auto append = [&rows](size_t row, juce::Component* control)
     {
         if (control != nullptr) rows[row].push_back({control});
     };
     append(0, linkInstanceControl.get());
-    append(0, settings.secondary[0]);  // INSTANCE SOLO
-    append(0, sync[0]);                // NOTE SYNC
-    append(0, sync[1]);                // MANUAL BPM
-    append(0, settings.secondary[1]);  // CHANNEL INPUT
-    append(0, settings.secondary[2]);  // CHANNEL SOLO
-    for (auto* control : settings.splits) append(1, control); // XOVERS, SPLIT 1..5
-    for (auto* band : bands) append(2, band);                 // BAND 1..6
-    append(3, settings.actions[0]); // AUTO SOLO
-    append(3, settings.actions[1]); // SOLO MODE
-    append(3, settings.actions[2]); // COPY ALL (fixed column 5)
-    append(3, settings.actions[3]); // PASTE ALL (fixed column 6)
+    append(0, settings.secondary[0]);
+    append(0, settings.secondary[1]);
+    append(0, sync[0]);
+    append(0, sync[1]);
+    append(0, settings.secondary[2]);
+    for (auto* control : settings.splits) append(1, control);
+    for (auto* band : bands) append(2, band);
+    append(3, settings.actions[0]);
+    append(3, settings.actions[1]);
+    append(3, settings.actions[2]);
+    append(3, settings.actions[3]);
 
     const auto mainCollapsed = mainContent.isBlockCollapsed("MAIN");
     for (const auto& row : rows)
@@ -400,7 +381,6 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
                 {padding, rowTop, gridWidth, 0}, row);
             if (&row == &rows[3] && row.size() == 4)
             {
-                // Keep the first two in columns 1/2; actions 3/4 go to 5/6.
                 const auto step = getSquareControlSize(*this) + getUiGap(*this);
                 row[2].component->setTopLeftPosition(padding + 4 * step, rowTop);
                 row[3].component->setTopLeftPosition(padding + 5 * step, rowTop);
@@ -430,8 +410,6 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         moduleList->setBounds(0, controlBlockHeaderHeight,
                                       innerBlockWidth, modulePanelHeight);
     }
-    // ALL follows the real per-band instance stack. The old 14-entry array
-    // silently dropped every copy, even though DSP processed those copies.
     const auto activeBand = audioProcessor.getSelectedCrossoverRange();
     const auto slots = audioProcessor.getModuleStackForRange(activeBand);
     std::array<juce::Component*, ava::module_stack::typeCount> originals {};
@@ -564,11 +542,9 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         else ++it;
     }
 
-    const auto eqlHidden = audioProcessor.isModuleHiddenForRange(activeBand,module_order::eql);
-    const auto dynHidden = audioProcessor.isModuleHiddenForRange(activeBand,module_order::dyn);
-    eqlContent.setVisible(!eqlHidden);
+    eqlContent.setVisible(false);
     if (auto* editor = originals[size_t(module_order::dyn)])
-        editor->setVisible(!dynHidden);
+        editor->setVisible(false);
 
     const auto instanceCollapsed = instanceContent.isBlockCollapsed("INSTANCE");
     mainContent.setVisible(!instanceCollapsed);
@@ -585,8 +561,6 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         if (slot.uid < ava::module_stack::originalCount)
         {
             block = originals[size_t(slot.type)];
-            if (slot.type == module_order::eql && eqlHidden) block = nullptr;
-            if (slot.type == module_order::dyn && dynHidden) block = nullptr;
         }
         else if (const auto found = copies.find(slot.uid); found != copies.end())
             block = found->second;
@@ -597,15 +571,32 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         block->getProperties().set("moduleSlotUid", slot.uid);
         block->getProperties().set("moduleSlotBand", int(activeBand));
         block->getProperties().set("moduleSlotCreated", slot.created);
-        // Original EQL/DYN may additionally have a per-band HIDDEN
-        // flag; their editor was already hidden above. Copies are controlled
-        // by slot.enabled only, independently from their original module.
-        if (!slot.enabled)
+        if (!slot.shown)
         {
             block->setVisible(false);
             block->setBounds({});
             continue;
         }
+        const auto ownerBand = activeBand;
+        const auto ownerUid = slot.uid;
+        auto readBypass = [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this),
+                           ownerBand, ownerUid] {
+            return safe == nullptr || safe->audioProcessor.isModuleSlotBypassed(ownerBand, ownerUid);
+        };
+        auto toggleBypass = [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this),
+                             ownerBand, ownerUid] {
+            if (safe == nullptr) return;
+            const bool bypassed = safe->audioProcessor.isModuleSlotBypassed(ownerBand, ownerUid);
+            if (safe->audioProcessor.setModuleSlotEnabled(ownerBand, ownerUid, bypassed))
+            {
+                safe->scheduleHistorySnapshot();
+                safe->resized();
+            }
+        };
+        if (auto* page = dynamic_cast<ControlBlockComponent*>(block))
+            page->setModuleNameplateBypass(readBypass, toggleBypass);
+        else if (auto* dyn = dynamic_cast<CrossoverModuleComponent*>(block))
+            dyn->setModuleNameplateBypass(readBypass, toggleBypass);
         const auto caption = juce::String(module_order::descriptions[size_t(slot.type)].name).toUpperCase()
             + " (" + juce::String(ava::module_stack::displayOrdinal(slots, slot.uid)).paddedLeft('0', 2) + ")";
         if (slot.type == module_order::dyn)
@@ -615,8 +606,6 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         }
         else if (auto* blockFrame = dynamic_cast<ControlBlockComponent*>(block))
         {
-            // Update the displayed copy number without changing the stable
-            // module title used as its independent collapse-state key.
             for (auto& frame : blockFrame->controlBlockFrames)
                 if (frame.title != "INSTANCE" && frame.title != "MAIN")
                     frame.displayTitle = caption;
@@ -666,8 +655,6 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
     // reserve the same height, but do not paint a second strip.
     const bool routingEnabled = showingEditor
         && bool(getRootWindowState().getProperty(shell_editor_ui::key("pin_routing"), true));
-    // PIN ROUTING belongs to UNIT and must stay visible even when SEARCH is off.
-    // SEARCH controls only the search field, not the routing tiles.
     const bool reserveRouting = routingEnabled;
     const bool showRootRouting = reserveRouting && routingInstanceId == 0;
     if (!showRootRouting) pinnedRoutingViewport.setVisible(false);
@@ -701,7 +688,7 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
     if (showRootRouting)
     {
         pinnedRoutingViewport.setBounds(x, routingTop, juce::jmax(0, width - gap),
-                                        standardControlTextZoneHeight + 2 * controlEdgeInset);
+                                        getPinnedRoutingTileHeight(*this));
         // Never expose a previously hidden ribbon at stale coordinates.
         pinnedRoutingViewport.setVisible(true);
         pinnedRoutingViewport.toFront(false);
@@ -709,7 +696,7 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
     else pinnedRoutingViewport.setBounds({});
 
     if (!showSearch) return;
-    const auto top = routingTop + (reserveRouting ? standardControlTextZoneHeight + 2 * controlEdgeInset + gap : 0);
+    const auto top = routingTop + (reserveRouting ? getPinnedRoutingTileHeight(*this) + gap : 0);
     const auto bottom = quickAccessStrip.getY();
     const juce::Rectangle<int> visibleBounds{x, top, width, juce::jmax(0, bottom - top)};
     if (filterViewport.getBounds() != visibleBounds)

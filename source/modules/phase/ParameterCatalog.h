@@ -1,7 +1,5 @@
 #pragma once
 
-// Owns the parameter definitions for this block. Slot indices and identifiers
-// are intentionally stable for existing host automation and saved sessions.
 #include "../shared/BlockParameterTypes.h"
 
 namespace ava::modules::phase
@@ -15,6 +13,6 @@ inline constexpr auto parameterCatalog = std::to_array<SlotDefinition>({
     { ParameterSlot::leftPhase, { "left.phase", ParameterType::floating, -180.0f, 180.0f, 0.01f, 0.0f, "deg", 2, "phase.bypass" } , {"PHASE", "LEFT"} },
     { ParameterSlot::rightPhase, { "right.phase", ParameterType::floating, -180.0f, 180.0f, 0.01f, 0.0f, "deg", 2, "phase.bypass" } , {"PHASE", "RIGHT"} },
     { ParameterSlot::phaseBypass, { "phase.bypass", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"PHASE", "BYPASS"} },
-    { ParameterSlot::phaseHidden, { "phase.hidden", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 1.0f, "" } , {"PHASE", "HIDDEN"} },
+    { ParameterSlot::phaseHidden, { "phase.hidden", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"PHASE", "HIDDEN"} },
 });
-} // namespace ava::modules::phase
+}

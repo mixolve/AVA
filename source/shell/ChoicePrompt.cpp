@@ -111,8 +111,6 @@ public:
         const auto itemCount = static_cast<int>(choices.size());
         if (compactButtons)
         {
-            // Text COPY/PASTE uses the same 36 px square controls and 8 px gaps
-            // as the global navigation, rather than the full-size choice list.
             const auto size = getCompactControlSize(*this);
             const auto gap = getUiGap(*this);
             panelBounds = juce::Rectangle<int>(juce::jmin(visibleBounds.getWidth(),
@@ -254,7 +252,6 @@ private:
 
     void layoutReveal()
     {
-        // All choice lists fade in place: keep rows, text and frame stationary.
         revealClip.setBounds(panelBounds);
         revealClip.setAlpha(static_cast<float>(reveal.value()));
         choiceViewport.setBounds(compactButtons ? panelBounds.withPosition(0, 0)

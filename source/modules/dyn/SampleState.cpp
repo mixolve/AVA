@@ -1,4 +1,6 @@
 #include "SampleProcessor.h"
+#include "TensionTransfer.h"
+#include "ClipKneeScale.h"
 #include "Parameters.h"
 
 #include <algorithm>
@@ -34,9 +36,11 @@ void DspCore::clearState()
     std::fill(sidechainListenL.begin(), sidechainListenL.end(), 0.0);
     std::fill(sidechainListenR.begin(), sidechainListenR.end(), 0.0);
 
-    for (auto& core : transustCores) core.reset();
+    for (auto& core : transientSustainCores) core.reset();
     for (auto& window : compressorHoldWindows) window.reset();
     lookaheadGain.reset();
+    tensionPreviewWindow.reset();
+    for (auto& shaper : lookaheadTension) shaper.reset();
     attackSourceGate.reset();
     attackSourceQuiet = false;
     envBase = {};
@@ -95,7 +99,10 @@ void DspCore::updateDerivedParameters()
     derived.ratio = juce::jlimit(1.0, 100.0, roundToParameterStep(parameters.ratio));
     derived.releaseGainExponent = derived.ratio >= 99.995 ? 1.0 : 1.0 - 1.0 / derived.ratio;
     derived.compKneeDb = juce::jlimit(0.0, 96.0, roundToParameterStep(parameters.compKnee));
-    derived.clipKneeDb = juce::jlimit(0.0, 96.0, roundToParameterStep(parameters.clipKnee));
+    const auto clipKneeControlDb = juce::jlimit(0.0, 96.0, roundToParameterStep(parameters.clipKnee));
+    derived.clipKneeDb = parameters.clipEql
+        ? dyn_clip_knee::scaleEqualizedKneeDb(clipKneeControlDb)
+        : clipKneeControlDb;
     derived.clipLower = dbToAmp(-derived.clipKneeDb * 0.5);
     derived.clipUpper = dbToAmp(derived.clipKneeDb * 0.5);
     // EQL anchors the soft-knee transfer at the existing clip ceiling.
@@ -106,7 +113,8 @@ void DspCore::updateDerivedParameters()
         std::max(0.0, roundToParameterStep(parameters.lookaheadMs)) * 0.001 * sampleRate));
 
     derived.tensionFloor = dbToAmp(roundToParameterStep(parameters.tensionFloor));
-    derived.tensionHysteresis = roundToParameterStep(parameters.tensionHysteresis) * 0.01;
+    derived.tensionHysteresis = dyn_tension::scaleHysteresis(
+        roundToParameterStep(parameters.tensionHysteresis) * 0.01);
     derived.releaseCurve = roundToParameterStep(parameters.releaseCurve) * 0.01;
     const auto rmsCapacity = adaptiveRmsCumulativePowerHistory[0].size();
     const auto requestedRmsSamples = static_cast<size_t>(std::max(1.0, std::round(
@@ -149,23 +157,23 @@ void DspCore::updateDerivedParameters()
 
     derived.transientGain = ava::modules::dsp::mutedGainToAmp(parameters.transientGain, parameters.transientMute);
     derived.sustainGain = ava::modules::dsp::mutedGainToAmp(parameters.sustainGain, parameters.sustainMute);
-    dyn::transust::Envelope::Parameters transustParameters;
-    transustParameters.attackMs = parameters.attackMs;
-    transustParameters.attackCurve = parameters.attackCurve;
-    transustParameters.holdMs = parameters.holdMs;
-    transustParameters.releaseCurve = parameters.releaseCurve;
-    transustParameters.autoRelease = parameters.autoRelease;
-    transustParameters.releaseMemoryMs = parameters.releaseMemoryMs;
-    transustParameters.releaseDepth = parameters.releaseDepth;
-    transustParameters.releaseDepthDb = static_cast<float>(std::abs(20.0 * std::log10(std::max(epsilon, derived.transientGain))
+    dyn::transientSustain::Envelope::Parameters transientSustainParameters;
+    transientSustainParameters.attackMs = parameters.attackMs;
+    transientSustainParameters.attackCurve = parameters.attackCurve;
+    transientSustainParameters.holdMs = parameters.holdMs;
+    transientSustainParameters.releaseCurve = parameters.releaseCurve;
+    transientSustainParameters.autoRelease = parameters.autoRelease;
+    transientSustainParameters.releaseMemoryMs = parameters.releaseMemoryMs;
+    transientSustainParameters.releaseDepth = parameters.releaseDepth;
+    transientSustainParameters.releaseDepthDb = static_cast<float>(std::abs(20.0 * std::log10(std::max(epsilon, derived.transientGain))
         - 20.0 * std::log10(std::max(epsilon, derived.sustainGain))));
-    transustParameters.retriggerMs = parameters.retriggerMs;
-    transustParameters.thresholdHysteresisDb = static_cast<float>(derived.thresholdHysteresisDb);
-    transustParameters.oneShot = parameters.oneShot;
+    transientSustainParameters.retriggerMs = parameters.retriggerMs;
+    transientSustainParameters.thresholdHysteresisDb = static_cast<float>(derived.thresholdHysteresisDb);
+    transientSustainParameters.oneShot = parameters.oneShot;
     for (size_t path = 0; path < detector::count; ++path)
     {
-        transustParameters.releaseMs = path == detector::peak ? parameters.releasePeakMs : parameters.releaseRmsMs;
-        transustCores[path].setParameters(transustParameters);
+        transientSustainParameters.releaseMs = path == detector::peak ? parameters.releasePeakMs : parameters.releaseRmsMs;
+        transientSustainCores[path].setParameters(transientSustainParameters);
     }
 
     bufPos = wrapIndex(bufPos, maxBuf);

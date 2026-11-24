@@ -19,7 +19,6 @@ PresetCatalogTransaction::~PresetCatalogTransaction()
     if (acquired && --catalogLockDepth == 0) catalogProcessLock().exit();
 }
 
-
 static bool writeXmlToFile(const juce::XmlElement& element, const juce::File& file);
 
 static juce::File getFilterPresetsDirectory()

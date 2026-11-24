@@ -1,4 +1,4 @@
-#include "Link.h"
+#include "Synchronization.h"
 #include "../../shell/Processor.h"
 #include "../../shell/ChoiceControl.h"
 #include "../shared/BlockChainProcessor.h"
@@ -10,7 +10,7 @@
 #include <numeric>
 
 namespace {
-constexpr std::array<const char*,10> suffixes {"sibil.level","sibil.brightness","sibil.noise","sibil.window","sibil.fade","sibil.range","sibil.min","sibil.max","sibil.pre","sibil.post"};
+constexpr std::array<const char*,5> suffixes {"sibil.level","sibil.brightness","sibil.noise","sibil.fade","sibil.edge-detect"};
 using Values=std::array<float,suffixes.size()>;
 struct Endpoint {
     int node=0,uid=-1;size_t band=0;
@@ -53,7 +53,7 @@ static std::vector<Endpoint> endpoints(AvaAudioProcessor& root) {
         for(size_t band=0;band<count&&band<instance->moduleStacks.size();++band) {
             const auto& stack=instance->moduleStacks[band];
             for(const auto& slot:stack) {
-                if(slot.type!=module_order::sibil||!slot.enabled)continue;
+                if(slot.type!=module_order::sibil||!ava::module_stack::processingActive(slot))continue;
                 std::shared_ptr<BlockChainProcessor> chain;
                 if(slot.uid<ava::module_stack::originalCount)chain=instance->blockChainModuleProcessor;
                 else if(auto it=instance->moduleCopies.find(slot.uid);it!=instance->moduleCopies.end())chain=it->second->blocks;

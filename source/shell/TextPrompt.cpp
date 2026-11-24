@@ -165,7 +165,6 @@ public:
             // would give away keyboard focus and dim its selection on return.
             editorClip.setVisible(anchorComponent == nullptr || anchorComponent->isShowing());
             editorClip.setBounds(visible);
-            // Keep the editor's full geometry; only its visible window is clipped.
             textEditor.setBounds(anchorBounds.translated(-visible.getX(), -visible.getY()));
             return;
         }
@@ -192,8 +191,6 @@ public:
             && box->bottomIndicatorAt(box->getLocalPoint(this, juce::Point<int>(x, y))) >= 0) return false;
         auto* value = dynamic_cast<ValueBoxComponent*>(target);
         if (value == nullptr && target != nullptr) value = target->findParentComponentOfClass<ValueBoxComponent>();
-        // Bottom indicators keep their normal hover/click handlers and never
-        // participate in committing or dismissing the value editor.
         if (value != nullptr && value->isEnabled()
             && value->bottomIndicatorAt(value->getLocalPoint(this, juce::Point<int>(x, y))) >= 0) return false;
         // Embedded actions are siblings of the value box. When editing, do not

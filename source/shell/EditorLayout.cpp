@@ -42,8 +42,6 @@ void AvaAudioProcessorEditor::paintOverChildren(juce::Graphics& g)
         return modulePageVisible || (&component != crossoverEditor.get() && &component != blockChainModuleEditor.get()
             && &component != dynModuleEditor.get() && &component != &filterViewport);
     });
-    // A brief pulse at a selected search result, matching the contrast of hover.
-    // Block titles use the shared inverse-header paint path instead.
     if (searchFlashOn && searchFlashBlockTitle.isEmpty())
         if (auto* target = searchFlashTarget.getComponent(); target != nullptr && target->isShowing())
         {
@@ -103,14 +101,12 @@ void AvaAudioProcessorEditor::finalizeLayout() noexcept
     dockVerticalToggle.toFront(false);
     dockClipIndicator.toFront(false);
     dockSortOverlay.toFront(false);
-    // Keep the fixed search overlay in sync with ALL/page/prompt visibility.
     updatePinnedSearchPosition();
     // Clear the previous positions when controls move or pages change.
     repaint();
     if (crossoverEditor != nullptr && !aboutExpanded)
         crossoverEditor->toFront(false);
     if (pinnedRoutingViewport.isVisible()) pinnedRoutingViewport.toFront(false);
-    // The handle intercepts only the top margin, not the search field.
     if (windowDragHandle != nullptr) windowDragHandle->toFront(false);
     for (auto& prompt : suspendedPromptOverlays)
     {
@@ -123,13 +119,11 @@ void AvaAudioProcessorEditor::finalizeLayout() noexcept
         textPromptOverlay->toFront(false);
     }
 
-
     if (activeInstanceEditor != nullptr)
     {
         activeInstanceEditor->setBounds(getLocalBounds());
         activeInstanceEditor->toFront(false);
     }
-    // The root UNIT strip must remain above the active nested INSTANCE editor.
     if (routingInstanceId == 0 && pinnedRoutingViewport.isVisible())
         pinnedRoutingViewport.toFront(false);
 
@@ -164,8 +158,6 @@ void AvaAudioProcessorEditor::resized()
     const juce::ScopedValueSetter<bool> layoutGuard(layingOutEditor, true);
     auto bounds = getLocalBounds();
 
-
-
     const auto editorInsetTop = 2 * getUiGap(*this);
     const auto editorInsetBottom = getEditorContentInset(*this);
 
@@ -187,7 +179,6 @@ void AvaAudioProcessorEditor::resized()
         return;
     }
     if (aboutPanel != nullptr) aboutPanel->setBounds({});
-    // Use one standard gap at both horizontal edges; no former ALL-column space.
     bounds.setRight(canvas.getRight() - editorScrollBarArea);
     layoutCrossoverSection(bounds);
 

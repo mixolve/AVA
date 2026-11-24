@@ -1,5 +1,5 @@
 #include "../modules/shared/TimeUnits.h"
-#include "../modules/sibil/Link.h"
+#include "../modules/sibil/Synchronization.h"
 #include "ModuleBindings.h"
 #include "../shell/EditorSetup.h"
 #include "ParameterIds.h"
@@ -122,7 +122,7 @@ CrossoverModuleComponent::Config makeCrossoverConfig(AvaAudioProcessor& processo
         return juce::String(AvaAudioProcessor::paramCrossoverActiveSplitCountId);
     };
     config.processingInputParameterId = AvaAudioProcessor::paramProcessingInputId;
-    config.soloInstanceParameterId = AvaAudioProcessor::paramSoloInstanceId;
+    config.outputMuteParameterId = AvaAudioProcessor::paramOutputMuteId;
     config.soloChannelParameterId = AvaAudioProcessor::paramSoloChannelId;
     config.isProcessingInputAvailable = [&processor] (int choice) { return processor.isProcessingInputAvailable(choice); };
     config.crossoverDecimals = 2;
@@ -132,15 +132,10 @@ CrossoverModuleComponent::Config makeCrossoverConfig(AvaAudioProcessor& processo
 std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeBlockRangeControls()
 {
     return {
-        // LISTEN has two rows in a six-column layout. Controls 3-4 of each
-        // row are positioned in columns 5-6 by ParameterGroup::resized.
-        // Parameter suffixes remain unchanged for host automation and DSP.
-        // Row 1: LEFT CENTER, RIGHT CENTER, [empty], [empty], LEFT LEFT, RIGHT RIGHT.
         toggleControl("lc", "LEFT\nCENTER", false, 4),
         toggleControl("rc", "RIGHT\nCENTER"),
         toggleControl("ll", "LEFT\nLEFT"),
         toggleControl("rr", "RIGHT\nRIGHT"),
-        // Row 2: MID CENTER, SIDE CENTER, [empty], [empty], MS+3, SIDE SIDE.
         toggleControl("mc", "MID\nCENTER", true, 4),
         toggleControl("sc", "SIDE\nCENTER"),
         toggleControl("ms+3", "MS+3"),
@@ -181,7 +176,6 @@ std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeBlockRangeContro
             spec.hasTopGap = true;
             return spec;
         }(),
-        // FLIP RIGHT has its own control, independent SL assignment and BP.
         toggleControl("flip-right", "FLIP\nRIGHT", false),
         readoutControl("degree", "POSITION", "flip-right", false),
 
@@ -201,12 +195,10 @@ std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeBlockRangeContro
             return spec;
         }(),
         parameterControl("comb.mix", "MIX", 2),
-        // SHIFT row 1: PITCH, FREQ, ORDER, Q.
         parameterControl("shift.pitch", "PITCH", 2, -1, true),
         parameterControl("shift.freq", "FREQ", 2),
         choiceControl("shift.order", "ORDER"),
         parameterControl("shift.q", "Q", 2),
-        // SHIFT row 2: both gains (with their own BP), and independent solos.
         [] {
             auto spec = parameterControl("shift.gain-orig", "GAIN\nORIG", 2);
             spec.startNewControlRow = true;
@@ -215,7 +207,6 @@ std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeBlockRangeContro
         parameterControl("shift.gain-pitched", "GAIN\nPITCHED", 2),
         toggleControl("shift.solo-orig", "SOLO\nORIG"),
         toggleControl("shift.solo-pitched", "SOLO\nPITCHED"),
-        // SHIFT row 3: WINDOW, MODE, DETECT, TRANS, INDEP PHASE.
         [] {
             auto spec = choiceControl("shift.window", "WINDOW");
             spec.startNewControlRow = true;
@@ -236,16 +227,11 @@ std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeBlockRangeContro
         toggleControl("sibil.solo-s", "SOLO\nS"),
         parameterControl("sibil.gain-s", "GAIN\nS", 2),
         []{CrossoverControlSpec spec;spec.kind=ControlKind::custom;spec.suffix="sibil.sync";spec.label="SYNC";return spec;}(),
-        startControlRow(parameterControl("sibil.level", "THRESH", 2)),
-        parameterControl("sibil.brightness", "BRIGHT", 2),
-        parameterControl("sibil.noise", "NOISE", 2),
-        parameterControl("sibil.window", "WINDOW", 2),
+        startControlRow(parameterControl("sibil.level", "LEVEL\nDETECT", 2)),
+        parameterControl("sibil.brightness", "BRIGHT\nDETECT", 2),
+        parameterControl("sibil.noise", "NOISINS\nDETECT", 2),
         parameterControl("sibil.fade", "CROSS\nFADE", 2),
-        startControlRow(parameterControl("sibil.pre", "S\nPRE", 2)),
-        parameterControl("sibil.post", "S\nPOST", 2),
-        toggleControl("sibil.range", "S\nRANGE"),
-        parameterControl("sibil.min", "S-MIN", 2),
-        parameterControl("sibil.max", "S-MAX", 2),
+        parameterControl("sibil.edge-detect", "EDGE\nDETECT", 2),
     };
 }
 
@@ -282,14 +268,6 @@ std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeDynRangeControls
         parameterControl(correlationMode ? "corr-knee" : "comp-knee", "COMP-KNEE", 2, 0, true),
         choiceControl("sc-channel", "SC-CHANNEL", -1, false),
 
-        // Domain/mode-specific controls share a single logical row:
-        // COMP CLIP: MORPH, FWD/FB, CLIP-KNEE.
-        // SPECTRAL FREQ: WIN-SIZE, OVERLAP, SLOPE.
-        // SPECTRAL CORR: WIN-SIZE, OVERLAP, SLOPE.
-        // TRANS SUST: TRANS-GAIN, SUST-GAIN, RETRIG.
-        // SMOOTH and IMPACT stay visible at the end of this row in every mode;
-        // the existing control policy disables them except in SPECTRAL CORR.
-        // The first visible mode-specific control starts this row.
         startControlRow(parameterControl("morph", "MORPH", 2, 0, true)),
         parameterControl("feedback", "FWD/FB", 2, 0, true),
         parameterControl("clip-knee", "CLIP-KNEE", 2, 0, true),
@@ -302,7 +280,6 @@ std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeDynRangeControls
         parameterControl("corr-smoothing", "SMOOTH", 0),
         parameterControl("corr-impact", "IMPACT", 2),
 
-        // Detection and tension controls share one six-cell row.
         startControlRow(parameterControl("peak-rms", "PEAK/RMS", 2, -1, true)),
         parameterControl(correlationMode ? "corr-peak-crest" : "peak-crest", "PEAK-CREST", 2, -1, true),
         parameterControl("rms-time", "RMS-TIME", 2, -1, true),
@@ -310,9 +287,6 @@ std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeDynRangeControls
         parameterControl(correlationMode ? "corr-tension-floor" : "tension-floor", "TENSION-FLOOR", 2, 0),
         parameterControl("tension-hyst", "TENSION-HYST", 2, 0),
 
-        // Threshold and adaptive controls share one six-cell row.
-        // RANGE-CURVE is intentionally absent from the UI; preserve the
-        // underlying parameter so previously saved projects still load.
         startControlRow(parameterControl(correlationMode ? "corr-threshold" : "threshold", "THRESH", 2, -1, true)),
         parameterControl(correlationMode ? "corr-thresh-hyst" : "thresh-hyst", "THRESH-HYST", 2),
         parameterControl("range", "RANGE", 2),
@@ -320,21 +294,17 @@ std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeDynRangeControls
         parameterControl("adap-time", "ADAP-TIME", 2, 0, true),
         parameterControl(correlationMode ? "corr-offset" : "offset", "ADAP-OFFSET", 2, -1, true),
 
-        // Lookahead and attack stages.
         startControlRow(parameterControl("lookahead", "LOOK AHEAD", 2, 0, true)),
         parameterControl("lookahead-curve", "LOOK-CURVE", 2, 0, true),
         timeControl("processor-attack", "ATTACK"),
         parameterControl("attack-curve", "ATTACK-CURVE", 2, 0, true),
-        // HOLD and release stages: immediately after LOOK AHEAD row.
         startControlRow(timeControl("processor-hold", "HOLD", true)),
         timeControl("processor-release-peak", "RELEASE-PEAK"),
         timeControl("processor-release-rms", "RELEASE-RMS"),
         parameterControl("release-curve", "RELEASE-CURVE", 2, 0),
-        // Automatic release tuning: immediately after HOLD row.
         startControlRow(parameterControl("auto-rel", "AUTO RELEASE", 2, 1)),
         parameterControl("rel-memory", "REL-MEMORY", 2, 0),
         parameterControl("rel-depth", "REL-DEPTH", 2, 0),
-        // Output level controls continue the AUTO RELEASE / REL-MEMORY / REL-DEPTH row.
         parameterControl("make-up", "MAKE-UP", 2, -1, true),
         parameterControl("mix", "MIX", 2),
         parameterControl("output", "OUTPUT", 2),

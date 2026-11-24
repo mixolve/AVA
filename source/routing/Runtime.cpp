@@ -1,5 +1,6 @@
 #include "Runtime.h"
 #include "../shell/Processor.h"
+#include "../modules/dyn/Processor.h"
 
 #include <algorithm>
 #include <set>
@@ -26,8 +27,8 @@ void Runtime::prepareBuffers(Instance& instance)
 {
     if (preparedChannels <= 0 || preparedBlockSize <= 0)
         return;
-    instance.input.setSize(preparedChannels, preparedBlockSize);
-    instance.work.setSize(preparedChannels, preparedBlockSize);
+    instance.input.setSize(2 * preparedChannels, preparedBlockSize);
+    instance.work.setSize(2 * preparedChannels, preparedBlockSize);
     instance.input.clear();
     instance.work.clear();
 }
@@ -91,8 +92,8 @@ void Runtime::prepare(const double sampleRate, const int samplesPerBlock, const 
     preparedSampleRate = sampleRate;
     preparedBlockSize = juce::jmax(1, samplesPerBlock);
     preparedChannels = juce::jlimit(1, AvaAudioProcessor::routingChannelCount, channels);
-    rootInput.setSize(preparedChannels, preparedBlockSize);
-    rootWork.setSize(preparedChannels, preparedBlockSize);
+    rootInput.setSize(2 * preparedChannels, preparedBlockSize);
+    rootWork.setSize(2 * preparedChannels, preparedBlockSize);
     rootInput.clear();
     rootWork.clear();
     for (auto& [id, instance] : instances)
@@ -147,7 +148,39 @@ std::shared_ptr<AvaAudioProcessor> Runtime::getInstanceHandle(const int id) noex
     return found == instances.end() ? nullptr : found->second.processor;
 }
 
-void Runtime::process(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+bool Runtime::needsUpstreamForListen(const AvaAudioProcessor& processor) const noexcept
+{
+    const auto found = instances.find(processor.getRoutingInstanceId());
+    const auto* graph = &processor == &owner ? AvaAudioProcessor::renderingGraph
+        : found != instances.end() ? found->second.render.get() : nullptr;
+    if (graph == nullptr || graph->buffers == nullptr || graph->buffers->globalBypass
+        || graph->buffers->instanceBypass || (processor.getModuleBypassMask() & 4u) != 0)
+        return false;
+
+    const auto& buffers = *graph->buffers;
+    for (size_t band = 0; band <= buffers.settings.activeSplitCount; ++band)
+        for (const auto& slot : graph->moduleStacks[band])
+        {
+            if (slot.type != module_order::dyn || !ava::module_stack::processingActive(slot))
+                continue;
+            if (slot.uid < ava::module_stack::originalCount)
+            {
+                const auto* dyn = processor.getDynModuleProcessor();
+                if (dyn != nullptr && !processor.isModuleHiddenForRange(band, slot.type)
+                    && dyn->listensToOtherInput(band, buffers.inputChoice))
+                    return true;
+            }
+            else if (const auto copy = graph->moduleCopies.find(slot.uid); copy != graph->moduleCopies.end())
+            {
+                const auto* dyn = copy->second->dyn.get();
+                if (dyn != nullptr && dyn->listensToOtherInput(band, buffers.inputChoice))
+                    return true;
+            }
+        }
+    return false;
+}
+
+unsigned Runtime::process(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     owner.syncAudioModuleParameters();
     for (auto& [id, instance] : instances) {
@@ -158,34 +191,41 @@ void Runtime::process(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
         }
     }
     planGroupDelays(topology.entryInstanceId);
-    if (auto* solo = getSoloProcessor(false))
+    auto* solo = getSoloProcessor(false);
+    const bool soloListen = solo != nullptr && needsUpstreamForListen(*solo);
+    if (solo != nullptr && !soloListen)
     {
+        juce::AudioBuffer<float> routing(buffer.getArrayOfWritePointers(), preparedChannels, buffer.getNumSamples());
         solo->setPlayHead(owner.getPlayHead());
         solo->setNonRealtime(owner.isNonRealtime());
-        if (solo == &owner) solo->processOwnChannels(buffer);
-        else {
-            const auto found = instances.find(solo->getRoutingInstanceId());
-            AvaAudioProcessor::RenderingScope scope(*solo, found != instances.end() ? found->second.render.get() : nullptr);
-            solo->processChannelBlock(buffer, midi);
+        if (solo == &owner)
+        {
+            const auto mask = solo->processOwnChannels(routing);
+            owner.writeOutputChannels(buffer, mask, solo->audioBuffers().outputMuted);
+            return mask;
         }
-        return;
+        const auto found = instances.find(solo->getRoutingInstanceId());
+        AvaAudioProcessor::RenderingScope scope(*solo, found != instances.end() ? found->second.render.get() : nullptr);
+        if (!scope) return 0;
+        const auto mask = solo->processChannelBlock(routing, midi);
+        owner.writeOutputChannels(buffer, mask, solo->audioBuffers().outputMuted);
+        return mask;
     }
-    if (! hasMultipleInstances() || preparedBlockSize <= 0)
-    {
-        owner.processOwnChannels(buffer);
-        return;
-    }
-    const auto channels = juce::jmin(buffer.getNumChannels(), preparedChannels);
-    if (channels <= 0) return;
+    if (preparedChannels <= 0 || preparedBlockSize <= 0) return 0;
+    const auto channels = 2 * preparedChannels;
+    jassert(channels == buffer.getNumChannels());
+    unsigned processedMask = 0;
     for (int offset = 0; offset < buffer.getNumSamples(); offset += preparedBlockSize)
     {
         const auto samples = juce::jmin(preparedBlockSize, buffer.getNumSamples() - offset);
-        std::array<float*, AvaAudioProcessor::routingChannelCount> channelData {};
+        std::array<float*, 2 * AvaAudioProcessor::routingChannelCount> channelData {};
         for (int channel = 0; channel < channels; ++channel)
             channelData[static_cast<size_t>(channel)] = buffer.getWritePointer(channel, offset);
         juce::AudioBuffer<float> chunk(channelData.data(), channels, samples);
-        processGroup(topology.entryInstanceId, chunk, chunk, midi);
+        SoloListen listen {chunk, soloListen ? solo->getRoutingInstanceId() : 0};
+        processedMask |= processGroup(topology.entryInstanceId, chunk, chunk, midi, soloListen ? &listen : nullptr);
     }
+    return processedMask;
 }
 
 unsigned Runtime::branchChannels(int id) const noexcept
@@ -214,7 +254,8 @@ unsigned Runtime::groupChannels(int firstId) const noexcept
 unsigned Runtime::processGroup(const int firstId,
                                juce::AudioBuffer<float>& input,
                                juce::AudioBuffer<float>& output,
-                               juce::MidiBuffer& midi)
+                               juce::MidiBuffer& midi,
+                               SoloListen* soloListen)
 {
     const auto* first = findNode(firstId);
     const auto scratch = instances.find(firstId);
@@ -242,24 +283,43 @@ unsigned Runtime::processGroup(const int firstId,
 
         if (inputGain != 1.0f) {
             const auto mask = branchChannels(node->id);
-            for (int channel = 0; channel < channels; ++channel)
+            for (int channel = 0; channel < preparedChannels; ++channel)
                 if ((mask & (1u << channel)) != 0) work.applyGain(channel, 0, samples, inputGain);
         }
+        // The first half carries the full signal for DSP and sidechain readers.
+        // The second half tracks only what each branch contributes to the output.
+        juce::AudioBuffer<float> routing(work.getArrayOfWritePointers(), preparedChannels, samples);
         unsigned branchMask = 0;
         if (node->id == topology.rootInstanceId)
-            branchMask = owner.processOwnChannels(work);
+        {
+            branchMask = owner.processOwnChannels(routing);
+            owner.writeOutputChannels(work, branchMask, owner.audioBuffers().outputMuted);
+        }
         else if (!node->container)
         {
             auto& processor = *found->second.processor;
             processor.setPlayHead(owner.getPlayHead());
             processor.setNonRealtime(owner.isNonRealtime());
             AvaAudioProcessor::RenderingScope scope(processor, found->second.render.get());
-            processor.processChannelBlock(work, midi);
-            const auto selected = processor.getProcessingInputChannels();
-            branchMask = (1u << selected[0]) | (selected[1] >= 0 ? 1u << selected[1] : 0u);
+            if (scope)
+            {
+                branchMask = processor.processChannelBlock(routing, midi);
+                owner.writeOutputChannels(work, branchMask, processor.audioBuffers().outputMuted);
+            }
+        }
+        if (soloListen != nullptr && node->id == soloListen->instanceId)
+        {
+            for (int channel = 0; channel < channels; ++channel)
+                soloListen->output.copyFrom(channel, 0, work, channel, 0, samples);
+            soloListen->captured = true;
+            return branchMask;
         }
         if (node->serialNext != 0)
-            branchMask |= processGroup(node->serialNext, work, work, midi);
+        {
+            const auto nextMask = processGroup(node->serialNext, work, work, midi, soloListen);
+            if (soloListen != nullptr && soloListen->captured) return nextMask;
+            branchMask |= nextMask;
+        }
 
         const auto branchLatency = nodeLatency(node->id) + groupLatency(node->serialNext);
         if (maximumLatency > branchLatency) applyDelay(node->id, work);
@@ -268,7 +328,7 @@ unsigned Runtime::processGroup(const int firstId,
         // Untouched channels pass once, rather than being duplicated per branch.
         for (int channel = 0; channel < channels; ++channel)
         {
-            const auto bit = 1u << channel;
+            const auto bit = 1u << (channel % preparedChannels);
             if (node == first || ((branchMask & bit) != 0 && (processedMask & bit) == 0))
                 output.copyFrom(channel, 0, work, channel, 0, samples);
             else if ((branchMask & bit) != 0)
@@ -277,7 +337,11 @@ unsigned Runtime::processGroup(const int firstId,
         processedMask |= branchMask;
     }
     if (first->groupNext != 0)
-        processedMask |= processGroup(first->groupNext, output, output, midi);
+    {
+        const auto nextMask = processGroup(first->groupNext, output, output, midi, soloListen);
+        if (soloListen != nullptr && soloListen->captured) return nextMask;
+        processedMask |= nextMask;
+    }
     return processedMask;
 }
 
@@ -358,8 +422,8 @@ void Runtime::prepareGroupDelays(int firstId)
     const auto capacity = maximumParallelLatency(firstId);
     for (auto* node = findNode(firstId); node != nullptr; node = findNode(node->parallelNext)) {
         auto& delay = delays[node->id];
-        if (delay.samples.getNumSamples() < capacity + 1 || delay.samples.getNumChannels() != preparedChannels) {
-            delay.samples.setSize(preparedChannels, capacity + 1);
+        if (delay.samples.getNumSamples() < capacity + 1 || delay.samples.getNumChannels() != 2 * preparedChannels) {
+            delay.samples.setSize(2 * preparedChannels, capacity + 1);
             delay.writePosition = delay.delaySamples = delay.filled = 0;
         }
         if (node->serialNext != 0) prepareGroupDelays(node->serialNext);
@@ -412,6 +476,13 @@ void Runtime::applyDelay(const int id, juce::AudioBuffer<float>& buffer)
 
 AvaAudioProcessor* Runtime::getSoloProcessor(const bool channelSolo) const noexcept
 {
+    const auto selected = owner.requestedSolo[channelSolo ? 1u : 0u].load(std::memory_order_acquire);
+    if (selected == -2) return nullptr;
+    if (selected == 0) return &owner;
+    if (selected > 0) {
+        const auto found = instances.find(selected);
+        return found != instances.end() ? found->second.processor.get() : nullptr;
+    }
     const auto active = [channelSolo] (const AvaAudioProcessor& processor)
     {
         const auto* value = channelSolo ? processor.soloChannelParam : processor.soloInstanceParam;
@@ -426,31 +497,65 @@ AvaAudioProcessor* Runtime::getSoloProcessor(const bool channelSolo) const noexc
     return nullptr;
 }
 
-void Runtime::clearOtherSolo(AvaAudioProcessor& selected, const bool channelSolo)
+void Runtime::synchronizeSoloSelection()
 {
-    const auto clear = [&selected, channelSolo] (AvaAudioProcessor& processor)
+    const juce::ScopedValueSetter<AvaAudioProcessor*> guard(AvaAudioProcessor::updatingSoloOwner, &owner);
+    for (size_t mode = 0; mode < owner.requestedSolo.size(); ++mode)
     {
-        if (&processor == &selected) return;
-        auto* parameter = processor.parameters.getParameter(channelSolo
-            ? AvaAudioProcessor::paramSoloChannelId : AvaAudioProcessor::paramSoloInstanceId);
-        if (parameter != nullptr && parameter->getValue() >= 0.5f)
-            parameter->setValueNotifyingHost(0.0f);
-    };
-    clear(owner);
-    for (auto& [id, instance] : instances)
-    {
-        juce::ignoreUnused(id);
-        if (instance.processor != nullptr) clear(*instance.processor);
+        auto selected = owner.requestedSolo[mode].load(std::memory_order_acquire);
+        if (selected == -1) {
+            auto* active = getSoloProcessor(mode == 1);
+            const auto restored = active == nullptr ? -2 : active == &owner ? 0 : active->routingNodeId;
+            auto expected = -1;
+            owner.requestedSolo[mode].compare_exchange_strong(expected, restored, std::memory_order_acq_rel);
+            selected = owner.requestedSolo[mode].load(std::memory_order_acquire);
+        }
+        const auto apply = [&](AvaAudioProcessor& processor, int id)
+        {
+            if (owner.requestedSolo[mode].load(std::memory_order_acquire) != selected) return;
+            auto* parameter = processor.parameters.getParameter(mode == 1
+                ? AvaAudioProcessor::paramSoloChannelId : AvaAudioProcessor::paramSoloInstanceId);
+            const float wanted = selected == id ? 1.0f : 0.0f;
+            if (parameter != nullptr && (parameter->getValue() >= 0.5f) != (wanted >= 0.5f))
+                parameter->setValueNotifyingHost(wanted);
+        };
+        apply(owner, 0);
+        for (auto& [id, instance] : instances)
+            if (instance.processor != nullptr) apply(*instance.processor, id);
+        if (owner.requestedSolo[mode].load(std::memory_order_acquire) != selected) {
+            owner.soloStatePending.store(true, std::memory_order_release);
+            owner.triggerAsyncUpdate();
+        }
     }
 }
 
 int Runtime::getLatencySamples() const noexcept
 {
     if (auto* solo = getSoloProcessor(false))
+    {
+        if (needsUpstreamForListen(*solo))
+            if (const auto latency = latencyToInstance(topology.entryInstanceId, solo->getRoutingInstanceId()); latency >= 0)
+                return latency;
         return solo == &owner ? nodeLatency(topology.rootInstanceId)
             : solo->globalBypassParam != nullptr && solo->globalBypassParam->load() >= 0.5f
                 ? 0 : solo->getModuleChainLatencySamples();
+    }
     return groupLatency(topology.entryInstanceId);
+}
+
+int Runtime::latencyToInstance(const int firstId, const int instanceId) const noexcept
+{
+    const auto* first = findNode(firstId);
+    if (first == nullptr) return -1;
+    for (auto* node = first; node != nullptr; node = findNode(node->parallelNext))
+    {
+        if (node->id == instanceId) return nodeLatency(node->id);
+        if (const auto latency = latencyToInstance(node->serialNext, instanceId); latency >= 0)
+            return nodeLatency(node->id) + latency;
+    }
+    if (const auto latency = latencyToInstance(first->groupNext, instanceId); latency >= 0)
+        return parallelLatency(firstId) + latency;
+    return -1;
 }
 
 uint64_t Runtime::getRenderControlSignature() const noexcept

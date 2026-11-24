@@ -154,7 +154,6 @@ double DspCore::releaseTowards(ReleaseState& state,
                                         1.0,
                                         static_cast<double>(++state.elapsedSamples)
                                             / static_cast<double>(state.durationSamples));
-    // HOLD delays this phase; it must not change the selected RELEASE curve.
     const auto shapedProgress = dyn::ballistics::shapedProgress(progress, curve);
     auto released = state.start + (state.target - state.start) * shapedProgress;
 
@@ -238,7 +237,6 @@ void DspCore::updateCompressorGain(const size_t detectorIndex, const double dete
     }
     else
     {
-        // Threshold hysteresis, when explicitly enabled, may hold the gain.
         release.active = false;
     }
 
@@ -249,7 +247,7 @@ void DspCore::updateCompressorGain(const size_t detectorIndex, const double dete
     // the Attack/Sustain boundary. A detected end of sustain may still
     // release immediately, and zero Attack remains sample-exact.
     const auto canReleaseDuringAttack = attackSourceQuiet && targetGain > gain;
-    constexpr double gainPrecision = 1.0e-6; // Ignore numerical drift of a reached gain.
+    constexpr double gainPrecision = 1.0e-6;
     if (gain >= 1.0 - gainPrecision && !attack.active) attack.settled = false;
     if ((targetGain >= gain && (!attack.active || canReleaseDuringAttack))
         || derived.attackSamples <= 0)
@@ -294,7 +292,6 @@ void DspCore::updateCompressorGain(const size_t detectorIndex, const double dete
         {
             const auto progress = std::min(1.0, static_cast<double>(++attack.elapsedSamples)
                                                    / static_cast<double>(attack.durationSamples));
-            // Join the end of Attack to steady gain without a sharp corner.
             gain = attack.startGain + (attack.targetGain - attack.startGain)
                 * dyn::ballistics::shapedAttackToSustainProgress(progress, derived.attackCurve);
             if (progress >= 1.0)
@@ -314,8 +311,40 @@ void DspCore::updateCompressorGain(const size_t detectorIndex, const double dete
 
 double DspCore::delayedSample(const std::vector<double>& history, const int writeIndex) const noexcept
 {
-    // LOOKAHEAD is integer-sample aligned and never slewed internally.
     return history[static_cast<size_t>(wrapIndex(writeIndex - derived.lookaheadSamples, maxBuf))];
+}
+
+DspCore::TensionFrame DspCore::evaluateTension(const double envelope, const double adaptiveRmsDb)
+{
+    TensionFrame frame;
+    // The same TENSION transfer is used in COMP/CLIP and TRANS/SUST. Evaluate
+    // it from the current detector frame; lookahead shapes the gain before
+    // the corresponding delayed carrier reaches the output.
+    const auto previewEnvelope = tensionPreviewWindow.process(envelope, derived.lookaheadSamples);
+    for (size_t branchIndex = 0; branchIndex < branchCount; ++branchIndex)
+    {
+        // ADAP-TIME has already smoothed the level: no second detector stage.
+        adaptiveReferenceDb[branchIndex] = adaptiveRmsDb;
+        frame.thresholds[branchIndex] = getEffectiveThreshold(branchIndex);
+
+        const auto tension = derived.tensions[branchIndex];
+        const auto targetBase = tensionTarget(previewEnvelope,
+            frame.thresholds[branchIndex], derived.tensionFloor,
+            derived.tensionHysteresis, tension);
+        const auto shapedGain = previewEnvelope > epsilon ? targetBase / previewEnvelope : 1.0;
+        auto baseGainTarget = shapedGain;
+        if (derived.thresholdHysteresisDb > 0.0 && std::abs(tension) > epsilon)
+            baseGainTarget = tensionThresholdHysteresis[branchIndex].process(shapedGain,
+                levelToDb(frame.thresholds[branchIndex]) - levelToDb(previewEnvelope),
+                derived.thresholdHysteresisDb);
+        else
+            tensionThresholdHysteresis[branchIndex] = {};
+
+        frame.gainTargets[branchIndex] = baseGainTarget;
+        frame.playbackGains[branchIndex] = lookaheadTension[branchIndex].process(
+            baseGainTarget, derived.lookaheadSamples, derived.lookaheadCurve);
+    }
+    return frame;
 }
 
 DspCore::StereoSample DspCore::processSample(const double leftInput, const double rightInput,
@@ -347,7 +376,6 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
     const auto stereoAdaptiveRmsDb = std::max(adaptiveRmsDb[0], adaptiveRmsDb[1]);
     const auto stereoKeyPeak = std::max(std::abs(keyL), std::abs(keyR));
     const auto keyPositive = std::abs(keyL) >= std::abs(keyR) ? keyL >= 0.0 : keyR >= 0.0;
-    // Raw key amplitude, never a fitted/sustained carrier amplitude.
     const auto baseReleaseSignal = stereoKeyPeak;
     const auto basePeak = baseReleaseSignal;
 
@@ -395,7 +423,6 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
         if (baseLevels[path] >= envBase[path]
             || (effectiveReleaseSamples[path] <= 0 && derived.holdSamples <= 0))
         {
-            // With both HOLD and RELEASE at zero the base detector must fall immediately.
             envBase[path] = baseLevels[path];
             baseReleaseStates[path].active = false;
         }
@@ -428,8 +455,12 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
     sidechainListenL[static_cast<size_t>(bufPosDry)] = keyL;
     sidechainListenR[static_cast<size_t>(bufPosDry)] = keyR;
 
-    if (parameters.transust)
-        return processTransustSample(keyL, keyR, stereoAdaptiveRmsDb, baseReleaseSignal);
+    // Compute TENSION once for either processing mode. Both modes use the
+    // same lookahead-aligned gain and the same positive/negative branches.
+    const auto tensionFrame = evaluateTension(baseEnvelope, stereoAdaptiveRmsDb);
+    if (parameters.transientSustain)
+        return processTransientSustainSample(keyL, keyR, stereoAdaptiveRmsDb,
+                                    baseReleaseSignal, tensionFrame);
 
     const auto posL = std::max(inL, 0.0);
     const auto negL = std::min(inL, 0.0);
@@ -442,36 +473,13 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
         std::max(keyL, 0.0), std::min(keyL, 0.0), std::max(keyR, 0.0), std::min(keyR, 0.0)
     };
     std::array<double, branchCount> branchBaseDetector {};
-    std::array<double, branchCount> effectiveThresholds {};
-
+    const auto& tensionPlaybackGain = tensionFrame.playbackGains;
+    const auto& effectiveThresholds = tensionFrame.thresholds;
     for (size_t branchIndex = 0; branchIndex < branchCount; ++branchIndex)
     {
-        const auto envelopeDb = stereoAdaptiveRmsDb;
-        auto& adaptiveReference = adaptiveReferenceDb[branchIndex];
-
-        // ADAP-TIME already smooths the detector. No second attack/hold/release stage.
-        adaptiveReference = envelopeDb;
-
-        effectiveThresholds[branchIndex] = getEffectiveThreshold(branchIndex);
-
-        const auto tension = derived.tensions[branchIndex];
-        const auto targetBase = tensionTarget(baseEnvelope,
-                                              effectiveThresholds[branchIndex],
-                                              derived.tensionFloor,
-                                              derived.tensionHysteresis,
-                                              tension);
-        const auto shapedGain = baseEnvelope > epsilon ? (targetBase / baseEnvelope) : 1.0;
-        auto baseGainTarget = shapedGain;
-        if (derived.thresholdHysteresisDb > 0.0 && std::abs(tension) > epsilon)
-            baseGainTarget = tensionThresholdHysteresis[branchIndex].process(shapedGain,
-                levelToDb(effectiveThresholds[branchIndex]) - levelToDb(baseEnvelope), derived.thresholdHysteresisDb);
-        else
-            tensionThresholdHysteresis[branchIndex] = {};
-        // Apply the TENSION gain immediately to both detector and audio paths.
-        branchBaseDetector[branchIndex] = branchDetectorInput[branchIndex] * baseGainTarget;
-        const auto baseNow = branchAudioInput[branchIndex] * baseGainTarget;
-        dmBase[branchIndex][static_cast<size_t>(bufPos)] = baseNow;
-
+        branchBaseDetector[branchIndex] = branchDetectorInput[branchIndex]
+            * tensionFrame.gainTargets[branchIndex];
+        dmBase[branchIndex][static_cast<size_t>(bufPos)] = branchAudioInput[branchIndex];
     }
 
     const std::array<double, channelCount> cleanDetectorInput {
@@ -601,17 +609,23 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
         detectorRmsPosition = (detectorRmsPosition + 1) % capacity;
     }
 
-    const auto delayedBaseL = delayedSample(dmBase[branchLeftUp], bufPos)
+    // MORPH selects the processing transfer, not the input of the clipper.
+    // Apply the clipper to the unchanged, lookahead-aligned carrier. Clipping
+    // *after* TENSION could not remove a pre-threshold dip because TENSION had
+    // already reduced the sample below the clipping knee. The clipped and
+    // compressed paths must receive the SAME raw carrier; the common TENSION
+    // gain is applied after MORPH. This preserves TENSION on both endpoints
+    // without making the CLIPPER transfer depend on LOOKAHEAD smoothing.
+    const auto delayedRawL = delayedSample(dmBase[branchLeftUp], bufPos)
         + delayedSample(dmBase[branchLeftDown], bufPos);
-    const auto delayedBaseR = delayedSample(dmBase[branchRightUp], bufPos)
+    const auto delayedRawR = delayedSample(dmBase[branchRightUp], bufPos)
         + delayedSample(dmBase[branchRightDown], bufPos);
     auto clipGain = 1.0;
     if (derived.morph < 1.0)
     {
-        // One mono gain computer controls both carriers. Independent sample
-        // clipping changes L/R balance whenever only one channel hits the knee.
-        const auto strongest = std::abs(delayedBaseL) >= std::abs(delayedBaseR)
-            ? delayedBaseL : delayedBaseR;
+        // Use one gain computer for both channels to preserve their balance.
+        const auto strongest = std::abs(delayedRawL) >= std::abs(delayedRawR)
+            ? delayedRawL : delayedRawR;
         if (std::abs(strongest) > epsilon)
         {
             const auto threshold = effectiveThresholds[strongest >= 0.0 ? branchLeftUp : branchLeftDown];
@@ -621,19 +635,43 @@ DspCore::StereoSample DspCore::processSample(const double leftInput, const doubl
             clipGain = clipped / strongest;
         }
     }
-    const auto clippedL = delayedBaseL * clipGain;
-    const auto clippedR = delayedBaseR * clipGain;
     const auto detectorGain = detector::mix(cleanGainState[detector::peak],
-                                             cleanGainState[detector::rms], derived.rmsMix);
-    // A single lookahead envelope pre-ramps gain reduction and delays its
-    // recovery until the matching carrier samples have passed. LOOK-CURVE
-    // shapes the ramp, while zero lookahead preserves the raw gain exactly.
+                                           cleanGainState[detector::rms], derived.rmsMix);
     const auto alignedGain = lookaheadGain.process(detectorGain,
         derived.lookaheadSamples, derived.lookaheadCurve);
-    const auto cleanL = delayedBaseL * alignedGain;
-    const auto cleanR = delayedBaseR * alignedGain;
-    const auto processedL = derived.morph >= 1.0 ? cleanL : clippedL + (cleanL - clippedL) * derived.morph;
-    const auto processedR = derived.morph >= 1.0 ? cleanR : clippedR + (cleanR - clippedR) * derived.morph;
+
+    const auto tensionL = delayedSample(dmBase[branchLeftUp], bufPos) * tensionPlaybackGain[branchLeftUp]
+        + delayedSample(dmBase[branchLeftDown], bufPos) * tensionPlaybackGain[branchLeftDown];
+    const auto tensionR = delayedSample(dmBase[branchRightUp], bufPos) * tensionPlaybackGain[branchRightUp]
+        + delayedSample(dmBase[branchRightDown], bufPos) * tensionPlaybackGain[branchRightDown];
+    const auto compressedL = tensionL * alignedGain;
+    const auto compressedR = tensionR * alignedGain;
+
+    // CLIPPER uses the raw carrier when calculating its transfer, BEFORE
+    // TENSION. This ensures that a TENSION-induced dip cannot disable clipping.
+    // A final peak ceiling is needed only for upward TENSION expansion: it
+    // preserves the clipper ceiling without applying the soft knee twice.
+    double clippedL = tensionL * clipGain;
+    double clippedR = tensionR * clipGain;
+    if (derived.morph < 1.0)
+    {
+        const auto strongest = std::abs(clippedL) >= std::abs(clippedR) ? clippedL : clippedR;
+        const auto magnitude = std::abs(strongest);
+        if (magnitude > epsilon)
+        {
+            const auto ceiling = effectiveThresholds[strongest >= 0.0 ? branchLeftUp : branchLeftDown];
+            if (ceiling > epsilon && magnitude > ceiling)
+            {
+                const auto ceilingGain = ceiling / magnitude;
+                clippedL *= ceilingGain;
+                clippedR *= ceilingGain;
+            }
+        }
+    }
+    const auto processedL = derived.morph >= 1.0 ? compressedL
+        : clippedL + (compressedL - clippedL) * derived.morph;
+    const auto processedR = derived.morph >= 1.0 ? compressedR
+        : clippedR + (compressedR - clippedR) * derived.morph;
 
     const auto delayedDryL = delayedSample(dryL, bufPosDry);
     const auto delayedDryR = delayedSample(dryR, bufPosDry);
@@ -669,8 +707,9 @@ DspCore::StereoSample DspCore::finishSample(const double wetL, const double wetR
     return output;
 }
 
-DspCore::StereoSample DspCore::processTransustSample(const double keyL, const double keyR,
-                                                    const double adaptiveLevelDb, const double signalPeak)
+DspCore::StereoSample DspCore::processTransientSustainSample(const double keyL, const double keyR,
+                                                    const double adaptiveLevelDb, const double signalPeak,
+                                                    const TensionFrame& tension)
 {
     auto& reference = adaptiveReferenceDb[0];
     reference = adaptiveLevelDb;
@@ -691,9 +730,9 @@ DspCore::StereoSample DspCore::processTransustSample(const double keyL, const do
     detectorRmsPosition = (detectorRmsPosition + 1) % capacity;
     const auto peak = std::max(std::abs(keyL), std::abs(keyR));
     const auto thresholdDb = static_cast<float>(levelToDb(getEffectiveThreshold(0)));
-    const auto peakAmount = transustCores[detector::peak].processAmount(static_cast<float>(peak),
+    const auto peakAmount = transientSustainCores[detector::peak].processAmount(static_cast<float>(peak),
         thresholdDb + static_cast<float>(derived.peakCrestDb), static_cast<float>(derived.compKneeDb), static_cast<float>(signalPeak));
-    const auto rmsAmount = transustCores[detector::rms].processAmount(static_cast<float>(rms),
+    const auto rmsAmount = transientSustainCores[detector::rms].processAmount(static_cast<float>(rms),
         thresholdDb, static_cast<float>(derived.compKneeDb), static_cast<float>(rms));
     const auto amount = detector::mix(static_cast<double>(peakAmount), static_cast<double>(rmsAmount), derived.rmsMix);
     // Shape the transient activation ahead of the delayed carrier. Invert the
@@ -702,8 +741,16 @@ DspCore::StereoSample DspCore::processTransustSample(const double keyL, const do
     const auto shapedAmount = 1.0 - lookaheadGain.process(1.0 - amount,
         derived.lookaheadSamples, derived.lookaheadCurve);
     const auto gain = shapedAmount * derived.transientGain + (1.0 - shapedAmount) * derived.sustainGain;
-    return finishSample(delayedSample(dryL, bufPosDry) * gain,
-                        delayedSample(dryR, bufPosDry) * gain);
+    // TRANS/SUST applies its transient/sustain balance first, then the same
+    // polarity-aware TENSION gain as COMP/CLIP. Select the branch from the
+    // delayed sample's sign, never the current undelayed key: otherwise
+    // LOOKAHEAD would apply the opposite half-wave's gain to this carrier.
+    const auto delayedL = delayedSample(dryL, bufPosDry);
+    const auto delayedR = delayedSample(dryR, bufPosDry);
+    const auto gainL = tension.playbackGains[delayedL >= 0.0 ? branchLeftUp : branchLeftDown];
+    const auto gainR = tension.playbackGains[delayedR >= 0.0 ? branchRightUp : branchRightDown];
+    return finishSample(delayedL * gain * gainL,
+                        delayedR * gain * gainR);
 }
 
 }

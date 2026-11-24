@@ -13,4 +13,4 @@ struct Description
     const char* bypassSuffix;
     const char* hiddenSuffix;
 };
-} // namespace ava::modules::chain::blocks
+}

@@ -22,7 +22,6 @@ inline constexpr std::array<const char*, splitControlCount> splitLabels {
     "SPLIT-1", "SPLIT-2", "SPLIT-3", "SPLIT-4", "SPLIT-5"
 };
 
-
 inline std::unique_ptr<BoxTextButton> makeTextButton(const juce::String& text)
 {
     auto button = std::make_unique<BoxTextButton>();

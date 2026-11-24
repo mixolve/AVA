@@ -23,11 +23,11 @@ public:
     void reset();
     void refreshDelayCapacity();
     bool needsDelayCapacity() const noexcept;
-    void process(juce::AudioBuffer<float>&, juce::MidiBuffer&);
+    unsigned process(juce::AudioBuffer<float>&, juce::MidiBuffer&);
     int getLatencySamples() const noexcept;
     int getMaximumLatencySamples() const noexcept { return maximumGroupLatency(topology.entryInstanceId); }
     AvaAudioProcessor* getSoloProcessor(bool channelSolo) const noexcept;
-    void clearOtherSolo(AvaAudioProcessor& selected, bool channelSolo);
+    void synchronizeSoloSelection();
     std::shared_ptr<AvaAudioProcessor> getInstanceHandle(int id) noexcept;
     uint64_t getRenderControlSignature() const noexcept;
     bool hasMultipleInstances() const noexcept { return getInstanceCount(topology) > 1; }
@@ -56,8 +56,16 @@ private:
     void prepareBuffers(Instance&);
     unsigned branchChannels(int id) const noexcept;
     unsigned groupChannels(int firstId) const noexcept;
+    bool needsUpstreamForListen(const AvaAudioProcessor&) const noexcept;
+    struct SoloListen
+    {
+        juce::AudioBuffer<float>& output;
+        int instanceId;
+        bool captured = false;
+    };
     unsigned processGroup(int firstId, juce::AudioBuffer<float>& input,
-                          juce::AudioBuffer<float>& output, juce::MidiBuffer&);
+                          juce::AudioBuffer<float>& output, juce::MidiBuffer&, SoloListen* = nullptr);
+    int latencyToInstance(int firstId, int instanceId) const noexcept;
     void planGroupDelays(int firstId);
     void applyDelay(int id, juce::AudioBuffer<float>&);
     int nodeLatency(int id) const noexcept;

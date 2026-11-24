@@ -24,6 +24,9 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
 
     if (config.moduleKey.isNotEmpty())
         setName("module-" + config.moduleKey);
+    // MODULES' thumbs belong to their scrolling controls rather than the
+    // outer editor overlay; otherwise the two repaint paths can show different frames.
+    getProperties().set("paintRangeLocally", config.moduleKey == "chain" || config.moduleKey == "dyn");
 
     const auto requiresCrossoverState = config.showCrossoverControls || config.showCrossoverNavigation || config.showCrossoverSolo;
 
@@ -48,7 +51,6 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
         instanceHeading->setInteractionOutlineEnabled(false);
         instanceHeading->setInterceptsMouseClicks(false, false);
         addAndMakeVisible(*instanceHeading);
-
 
     }
 
@@ -111,12 +113,37 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
 
     updateRangeNavigation();
     updatePageVisibility();
+    // Capture the dependencies declared by the control policies. Only these
+    // parameters can affect the module control layout/enablement; ordinary
+    // value movement is already handled by each control's APVTS attachment.
+    if ((config.moduleKey == "chain" || config.moduleKey == "dyn")
+        && config.getControlPolicy && config.makeRangeParameterId)
+    {
+        for (size_t range = 0; range < numRanges; ++range)
+            for (const auto& spec : config.rangeControls)
+            {
+                const auto policy = config.getControlPolicy(range, spec.suffix);
+                for (const auto* suffix : policy.dependencies)
+                    uiDependentParameterIds.addIfNotAlreadyThere(config.makeRangeParameterId(range, suffix));
+                if (spec.kind == ControlKind::readout)
+                {
+                    uiDependentParameterIds.addIfNotAlreadyThere(config.makeRangeParameterId(range, spec.suffix));
+                    if (spec.modeSuffix != nullptr && spec.modeSuffix[0] != '\0')
+                        uiDependentParameterIds.addIfNotAlreadyThere(config.makeRangeParameterId(range, spec.modeSuffix));
+                }
+            }
+    }
+
     observedState = valueTreeState.state;
     observedState.addListener(this);
     for (auto* parameter : valueTreeState.processor.getParameters())
         if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(parameter)) {
-            observedParameterIds.push_back(ranged->getParameterID());
-            valueTreeState.addParameterListener(ranged->getParameterID(), this);
+            const auto id = ranged->getParameterID();
+            if ((config.moduleKey == "chain" || config.moduleKey == "dyn")
+                && !uiDependentParameterIds.contains(id) && !id.endsWith(".hidden"))
+                continue;
+            observedParameterIds.push_back(id);
+            valueTreeState.addParameterListener(id, this);
         }
 }
 
@@ -134,6 +161,14 @@ void CrossoverModuleComponent::setModuleDisplayTitle(const juce::String& title)
         }
 }
 
+void CrossoverModuleComponent::setModuleNameplateBypass(std::function<bool()> isBypassed,
+                                                       std::function<void()> toggle)
+{
+    for (auto& page : rangePages)
+        if (page != nullptr)
+            page->setModuleNameplateBypass(isBypassed, toggle);
+}
+
 void CrossoverModuleComponent::setInstanceName(const juce::String& name)
 {
     if (instanceHeading != nullptr && instanceHeading->getButtonText() != name)
@@ -146,11 +181,8 @@ std::vector<juce::Component*> CrossoverModuleComponent::getMainControls()
     pageViewport.setViewedComponent(nullptr, false);
 
     std::vector<juce::Component*> controls;
-    // The instance name is rendered on the outer INSTANCE header instead.
     if (instanceHeading != nullptr) instanceHeading->setVisible(false);
 
-    // Every BAND has a permanent slot in MAIN. XOV only enables/disables
-    // navigation; it no longer changes the number of controls or their rows.
     for (const auto& band : bandControls)
         if (band != nullptr) controls.push_back(band.get());
     return controls;
@@ -201,8 +233,6 @@ CrossoverModuleComponent::~CrossoverModuleComponent()
     pageViewport.setViewedComponent(nullptr, false);
 }
 
-
-
 std::vector<std::pair<int, juce::Component*>> CrossoverModuleComponent::independentBlocks(juce::Component& parent, int width)
 {
     getProperties().set("flatBlocks", true);
@@ -212,4 +242,48 @@ std::vector<std::pair<int, juce::Component*>> CrossoverModuleComponent::independ
     if (auto* range = dynamic_cast<CrossoverRangePage*>(getCurrentPageComponent()))
         return range->independentBlocks(parent, width);
     return {};
+}
+
+using namespace crossover_ui;
+
+size_t CrossoverModuleComponent::getActiveSplitCount() const
+{
+    if (activeSplitCountParameter == nullptr)
+        return numRanges - 1;
+
+    return static_cast<size_t>(juce::jlimit(0,
+                                           static_cast<int>(numRanges - 1),
+                                           static_cast<int>(std::round(activeSplitCountParameter->convertFrom0to1(
+                                               activeSplitCountParameter->getValue())))));
+}
+
+size_t CrossoverModuleComponent::getActiveRangeCount() const
+{
+    return getActiveSplitCount() + 1;
+}
+
+bool CrossoverModuleComponent::setParameterNormalisedValue(juce::RangedAudioParameter& parameter, const float normalisedValue)
+{
+    const auto value = juce::jlimit(0.0f, 1.0f, normalisedValue);
+    const auto wasDifferent = std::abs(parameter.getValue() - value) > 1.0e-6f;
+
+    if (! wasDifferent)
+        return false;
+
+    parameter.beginChangeGesture();
+    parameter.setValueNotifyingHost(value);
+    parameter.endChangeGesture();
+
+    if (config.markParametersDirty != nullptr)
+        config.markParametersDirty();
+
+    return true;
+}
+
+void CrossoverModuleComponent::clearFocus()
+{
+    if (config.clearKeyboardFocus != nullptr)
+        config.clearKeyboardFocus();
+    else
+        clearKeyboardFocus(*this);
 }

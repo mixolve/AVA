@@ -37,28 +37,26 @@ bool restoreBinaryModuleState(Processor* processor, const juce::String& stateBas
     return processor->setStateInformation(stateData.getData(), static_cast<int>(stateData.getSize()));
 }
 
-
 }
 
 void AvaAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
-    restoreStateInformation(data, sizeInBytes, true, true);
+    restoreStateInformation(data, sizeInBytes, true);
 }
 
 bool AvaAudioProcessor::applyClipboardStateInformation(const void* data, const int sizeInBytes)
 {
-    return restoreStateInformation(data, sizeInBytes, true, false);
+    return restoreStateInformation(data, sizeInBytes, true);
 }
 
 bool AvaAudioProcessor::applyHistoryStateInformation(const void* data, const int sizeInBytes)
 {
-    return restoreStateInformation(data, sizeInBytes, false, false);
+    return restoreStateInformation(data, sizeInBytes, false);
 }
 
 bool AvaAudioProcessor::restoreStateInformation(const void* data,
                                                 const int sizeInBytes,
-                                                const bool includeABCompareState,
-                                                const bool preserveHostEditorView)
+                                                const bool includeABCompareState)
 {
     // Offline freeze can restore a headless plugin from a render worker.
     // There are no GUI components to protect when no editor is attached, and
@@ -74,42 +72,11 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
     if (stateXml == nullptr || ! stateXml->hasTagName(parameters.state.getType()))
         return false;
 
-    auto restoredState = ava::modules::state::completeMissingParameterDefaults(
-        juce::ValueTree::fromXml(*stateXml), parameters);
-    // Older sessions and transient editor switches may have saved module blobs
-    // without an active tab. Infer the UI tab; never discard saved audio data.
-    if (!restoredState.hasProperty(activeModuleStateKey))
-    {
-        const auto inferred = restoredState.hasProperty(blockChainModuleStateKey) ? ActiveModule::chain
-            : restoredState.hasProperty(dynModuleStateKey) ? ActiveModule::dyn
-            : restoredState.hasProperty(eqlModuleStateKey) ? ActiveModule::eql
-            : ActiveModule::none;
-        if (inferred != ActiveModule::none)
-            restoredState.setProperty(activeModuleStateKey, stateIdForModule(inferred), nullptr);
-    }
-    if (!shell_state_validation::hasCurrentState(restoredState, *this, includeABCompareState))
-    {
-        juce::Logger::writeToLog("AVA: host project state rejected: incompatible outer state schema.");
-        return false;
-    }
-
-    // Envelope undo often resends the unchanged plugin chunk. Its host-slot
-    // values are derived mirrors of module parameters, and view coordinates
-    // are not audio edits. Keep live processors, attachments and editors when
-    // the processing state is unchanged instead of rebuilding the whole graph.
-    // During a DAW Undo/Redo, the host restores an old *audio* snapshot.
-    // If the editor is currently open, the current scroll positions, collapsed
-    // sections, dock layout and selected view must remain unchanged.  The
-    // snapshot is still allowed to restore its UI when the project is first
-    // loaded (there is no live editor in that case).
-    const bool preserveLiveView = preserveHostEditorView && getContentEditor() != nullptr;
-    // The APVTS scroll property is not necessarily the currently visible
-    // pixel position. Flush both root and active INSTANCE before merging
-    // the host snapshot, otherwise Undo can restore scroll.eql = 0.
-    if (preserveLiveView)
-        getContentEditor()->captureLiveViewBeforeHostRestore();
-    if (includeABCompareState && !routingInstance
-        && (getBlockChainProcessor() != nullptr || preserveLiveView))
+    auto restoredState = juce::ValueTree::fromXml(*stateXml);
+    // Repeated identical host chunks do not need a model or editor refresh.
+    // Host chunks are also presets: their saved view is authoritative. Only
+    // internal history/A-B explicitly merge the live view before calling here.
+    if (includeABCompareState && !routingInstance && getBlockChainProcessor() != nullptr)
     {
         std::unique_ptr<juce::XmlElement> liveXml;
         uint64_t liveRevision = 0, liveViewRevision = 0;
@@ -132,28 +99,6 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
         auto incomingXml = restoredState.createXml();
         if (liveXml != nullptr && incomingXml != nullptr)
         {
-            if (preserveLiveView)
-            {
-                preserveEditorViewState(*incomingXml, *liveXml);
-                // Keep the merged view in the state that will actually be
-                // loaded below. Previously the merge affected only this
-                // temporary XML used for comparison, so external DAW Undo
-                // restored stale collapse and scroll coordinates anyway.
-            }
-            // During ordinary envelope Undo, REAPER may restore an older
-            // chunk while separately driving the current host parameters.
-            // During offline render, however, the incoming chunk is the
-            // authoritative initial state of the render processor. Copying
-            // live slot values over it breaks freeze automation.
-            if (!isNonRealtime())
-                for (auto* child : incomingXml->getChildIterator())
-                    if (child->hasTagName("PARAM")
-                        && child->getStringAttribute("id").startsWith(paramHostSlotPrefix))
-                        for (const auto* live : liveXml->getChildIterator())
-                            if (live->hasTagName("PARAM") && live->getStringAttribute("id") == child->getStringAttribute("id"))
-                            { child->setAttribute("value", live->getStringAttribute("value")); break; }
-            if (preserveLiveView)
-                restoredState = juce::ValueTree::fromXml(*incomingXml);
             if (getStateRevision() == liveRevision && viewStateRevision.load(std::memory_order_relaxed) == liveViewRevision
                 && incomingXml->isEquivalentTo(liveXml.get(), true))
             {
@@ -165,38 +110,10 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
                     queueCurrentHostSlotValues();
                     refreshHostSlotTargets();
                 }
-                if (preserveLiveView) getContentEditor()->cancelLiveViewHostRestore();
                 return true;
             }
         }
     }
-
-    const auto restoredActiveModule = moduleFromStateId(restoredState.getProperty(activeModuleStateKey).toString());
-    auto restoredABCompareState = includeABCompareState
-        ? std::optional<shell_state_serialization::RestoredABCompareState> { shell_state_serialization::RestoredABCompareState(restoredState) }
-        : std::nullopt;
-    if (restoredABCompareState.has_value())
-    {
-        // An obsolete A/B snapshot is not evidence that the *live* project
-        // state is corrupt. Discard only that snapshot, not all host settings.
-        const auto validateSnapshot = [this](juce::String& encoded, const char* label)
-        {
-            if (encoded.isEmpty()) return;
-            juce::MemoryBlock bytes;
-            const auto decoded = bytes.fromBase64Encoding(encoded)
-                ? juce::AudioProcessor::getXmlFromBinary(bytes.getData(), static_cast<int>(bytes.getSize()))
-                : nullptr;
-            if (decoded != nullptr
-                && shell_state_validation::hasCurrentState(juce::ValueTree::fromXml(*decoded), *this, false))
-                return;
-            juce::Logger::writeToLog(juce::String("AVA: ignoring incompatible A/B snapshot ") + label);
-            encoded.clear();
-        };
-        validateSnapshot(restoredABCompareState->snapshotA, "A");
-        validateSnapshot(restoredABCompareState->snapshotB, "B");
-    }
-    const auto restoredSelectedRange = getRestoredSelectedCrossoverRange(restoredState);
-    shell_state_serialization::removeABCompareStateProperties(restoredState);
 
     // One restoration path for project load, clipboard, A/B and DAW Undo.
     // The incoming chunk is a complete snapshot, but existing processors and
@@ -206,12 +123,42 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
     writeStateInformation(liveData, includeABCompareState);
     const auto liveXml = getXmlFromBinary(liveData.getData(), int(liveData.getSize()));
     if (liveXml == nullptr)
-    {
-        if (preserveLiveView && getContentEditor() != nullptr)
-            getContentEditor()->cancelLiveViewHostRestore();
         return false;
-    }
     const auto currentState = juce::ValueTree::fromXml(*liveXml);
+    // Individual bad fields never veto a valid host chunk. Keep live values
+    // only for those fields; all other settings are restored normally.
+    shell_state_validation::retainValidProperties(restoredState, currentState, includeABCompareState);
+    const auto restoredActiveModule = moduleFromStateId(restoredState.getProperty(activeModuleStateKey).toString());
+    auto restoredABCompareState = includeABCompareState
+        ? std::optional<shell_state_serialization::RestoredABCompareState> { shell_state_serialization::RestoredABCompareState(restoredState) }
+        : std::nullopt;
+    if (restoredABCompareState.has_value())
+    {
+        // A broken A/B snapshot must not discard the other slot or the live
+        // state. Keep its existing slot contents if the incoming blob is unreadable.
+        const auto validateSnapshot = [this](juce::String& encoded, const char* label)
+        {
+            if (encoded.isEmpty()) return;
+            juce::MemoryBlock bytes;
+            const auto decoded = bytes.fromBase64Encoding(encoded)
+                ? juce::AudioProcessor::getXmlFromBinary(bytes.getData(), static_cast<int>(bytes.getSize()))
+                : nullptr;
+            if (decoded != nullptr && decoded->hasTagName(parameters.state.getType()))
+                return;
+            juce::Logger::writeToLog(juce::String("AVA: retaining existing A/B snapshot ") + label);
+            const auto previous = getABCompareSnapshot(juce::String(label) == "A" ? 0 : 1);
+            encoded = previous.isEmpty() ? juce::String() : previous.toBase64Encoding();
+        };
+        validateSnapshot(restoredABCompareState->snapshotA, "A");
+        validateSnapshot(restoredABCompareState->snapshotB, "B");
+    }
+    const auto restoredSelectedRange = getRestoredSelectedCrossoverRange(restoredState);
+    shell_state_serialization::removeABCompareStateProperties(restoredState);
+
+    auto incomingView = restoredState.createXml();
+    auto currentView = std::make_unique<juce::XmlElement>(*incomingView);
+    preserveEditorViewState(*currentView, *liveXml);
+    const bool viewChanged = !incomingView->isEquivalentTo(currentView.get(), true);
 
     const juce::ScopedLock ownerLock(getRoutingOwner().processingLock);
     const juce::ScopedLock lock(processingLock);
@@ -220,10 +167,6 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
     const juce::ScopeGuard restoreProcessingFlags {[this, previousSuppression, previousRestore] {
         restoringModel.store(previousRestore, std::memory_order_release);
         suppressHostStateNotifications.store(previousSuppression, std::memory_order_release);
-    }};
-    const juce::ScopeGuard finishEditorRestore {[this, preserveLiveView] {
-        if (preserveLiveView && getContentEditor() != nullptr)
-            getContentEditor()->cancelLiveViewHostRestore();
     }};
     cachedHostStateXml.reset();
     cachedHostStateData.reset();
@@ -236,30 +179,24 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
     // it is represented as a normal APVTS parameter.
     const auto previousSplits = ava::modules::state::readParameterPlainValue(
         currentState, paramCrossoverActiveSplitCountId);
-    const auto restoredSplits = ava::modules::state::readParameterPlainValue(
-        restoredState, paramCrossoverActiveSplitCountId);
-    if (previousSplits != restoredSplits)
-        structuralChanged = graphChanged = true;
 
-    // APVTS parameters have two linked representations: parameter value and
-    // ValueTree PARAM.value. Calling setValue() alone (the old fast path) does
-    // NOT write the ValueTree; this caused e.g. global BYPASS to revert or fail
-    // a subsequent Undo. Set the parameter first, then synchronise its tree.
-    // Updating in that order avoids a duplicate host notification from JUCE's
-    // ParameterAdapter, which already knows the new value.
+    juce::StringArray appliedParameters;
     for (const auto child : restoredState)
     {
         if (!child.hasType("PARAM")) continue;
         const auto id = child.getProperty("id").toString();
         auto* parameter = dynamic_cast<juce::RangedAudioParameter*>(parameters.getParameter(id));
-        const auto value = ava::modules::state::readParameterPlainValue(restoredState, id);
-        if (parameter == nullptr || !value.has_value())
+        const auto value = ava::modules::state::parseExactFiniteNumber(child.getProperty("value"));
+        if (parameter == nullptr || appliedParameters.contains(id) || child.getNumChildren() != 0
+            || !value.has_value() || *value < parameter->getNormalisableRange().start - 1.0e-5
+            || *value > parameter->getNormalisableRange().end + 1.0e-5)
         {
-            juce::Logger::writeToLog("AVA: missing or invalid parameter in snapshot: " + id);
+            juce::Logger::writeToLog("AVA: ignoring invalid parameter in snapshot: " + id);
             success = false;
             continue;
         }
-        const auto normalised = parameter->convertTo0to1(*value);
+        appliedParameters.add(id);
+        const auto normalised = parameter->convertTo0to1(static_cast<float>(*value));
         if (!juce::approximatelyEqual(parameter->getValue(), normalised))
             parameter->setValue(normalised);
         auto liveParam = parameters.state.getChildWithProperty("id", id);
@@ -277,6 +214,10 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
             success = false;
         }
     }
+
+    if (previousSplits != ava::modules::state::readParameterPlainValue(
+            parameters.state, paramCrossoverActiveSplitCountId))
+        structuralChanged = graphChanged = true;
 
     // Preserve the ValueTree's identity and all its child PARAM handles.
     // Remove obsolete metadata too, not just overwrite existing properties.
@@ -302,8 +243,8 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
         eqlProcessorBank->setSelectedRange(nextRange);
     graphChanged |= previousRange != nextRange;
 
-    // Update cached band order/visibility metadata independently of the
-    // process graph; these are not APVTS parameters.
+    // Update cached band order and original EQL/DYN bypass metadata.
+    // MODULES activation is separately restored from each slot's `shown` state.
     for (size_t band = 0; band < bandModuleOrders.size(); ++band)
     {
         auto order = module_order::defaultOrder;
@@ -327,10 +268,15 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
     {
         const auto encoded = restoredState.getProperty(key).toString();
         if (encoded.isEmpty() || encoded == currentState.getProperty(key).toString()) return;
-        modulesChanged = graphChanged = true;
-        if (!restoreBinaryModuleState(module, encoded))
+        if (restoreBinaryModuleState(module, encoded))
+            modulesChanged = graphChanged = true;
+        else
         {
-            juce::Logger::writeToLog(juce::String("AVA: failed restoring ") + name);
+            juce::Logger::writeToLog(juce::String("AVA: ignoring invalid module state ") + name);
+            if (currentState.hasProperty(key))
+                parameters.state.setProperty(key, currentState.getProperty(key), nullptr);
+            else
+                parameters.state.removeProperty(key, nullptr);
             success = false;
         }
     };
@@ -340,16 +286,20 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
 
     if (restoredState.getProperty(moduleStackStateKey) != currentState.getProperty(moduleStackStateKey))
     {
-        graphChanged = modulesChanged = true;
         const auto beforeStacks = moduleStacks;
         const auto beforeCopies = moduleCopies;
         if (!restoreModuleCopies(restoredState))
         {
-            juce::Logger::writeToLog("AVA: failed to reconcile module copies without resetting DSP");
+            juce::Logger::writeToLog("AVA: ignoring invalid module stack; other settings remain restored");
+            if (currentState.hasProperty(moduleStackStateKey))
+                parameters.state.setProperty(moduleStackStateKey, currentState.getProperty(moduleStackStateKey), nullptr);
+            else
+                parameters.state.removeProperty(moduleStackStateKey, nullptr);
             success = false;
         }
         else
         {
+            graphChanged = modulesChanged = true;
             for (size_t band = 0; band < moduleStacks.size(); ++band)
             {
                 const auto& oldOrder = beforeStacks[band];
@@ -410,9 +360,15 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
         registerLoadedModuleStateListeners();
     if (graphChanged)
         publishRenderGraph(structuralChanged);
-    if (structuralChanged)
+    if (structuralChanged || viewChanged)
         if (auto* editor = getContentEditor())
             editor->requestStructureRestoreResync();
+    if (!routingInstance) {
+        // Restore may change values without emitting all parameter callbacks.
+        // Rebuild solo selection from the restored flags, not a prior request.
+        for (auto& selected : requestedSolo) selected.store(-1, std::memory_order_release);
+        soloStatePending.store(true, std::memory_order_release);
+    }
     refreshHostSlotTargets();
     // setValue() during state restoration runs with notifications suppressed.
     // REAPER is not required to resend unchanged envelope values afterwards;
@@ -421,14 +377,15 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
     if (restoredABCompareState.has_value())
         shell_state_serialization::restoreABCompareState(*this, *restoredABCompareState);
     updateShellLatency();
-    if (!preserveLiveView)
-        setLastEditorSize(static_cast<int>(parameters.state.getProperty(editorWidthStateKey, 0)),
-                          static_cast<int>(parameters.state.getProperty(editorHeightStateKey, 0)));
+    setLastEditorSize(static_cast<int>(parameters.state.getProperty(editorWidthStateKey, 0)),
+                      static_cast<int>(parameters.state.getProperty(editorHeightStateKey, 0)));
     refreshOscConfiguration();
     triggerAsyncUpdate();
     if (!success)
-        juce::Logger::writeToLog("AVA: incremental snapshot restore incomplete; no destructive fallback was performed.");
-    return success;
+        juce::Logger::writeToLog("AVA: some invalid snapshot fields were skipped; valid fields restored.");
+    // This was a readable plugin state. Malformed individual values are
+    // skipped locally and must not turn a partial restore into a total reject.
+    return true;
 
 }
 
@@ -442,7 +399,7 @@ bool AvaAudioProcessor::applyStateInformationForABCompare(const void* data, cons
                                        std::memory_order_release);
     abCompareLatencyLocked.store(true, std::memory_order_release);
 
-    const auto restored = restoreStateInformation(data, sizeInBytes, false, false);
+    const auto restored = restoreStateInformation(data, sizeInBytes, false);
 
     if (! restored)
     {

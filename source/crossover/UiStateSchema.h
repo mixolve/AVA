@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Splitter.h"
-#include "../modules/gain/GainOrder.h"
+#include "../modules/gain/Order.h"
 #include "../modules/shared/StateValidation.h"
 
 #include <JuceHeader.h>

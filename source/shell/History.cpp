@@ -220,7 +220,6 @@ bool AvaAudioProcessorEditor::applyHistorySnapshot(const juce::MemoryBlock& snap
     refreshFilterPresetList();
     refreshEqlFilterSectionsFromProcessor();
 
-
     storeEditorStateToValueTree();
     updateEditorResizeLimits();
     updateSectionStates();

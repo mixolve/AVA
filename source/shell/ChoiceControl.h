@@ -89,6 +89,8 @@ class PushControl final : public ChoiceField
 public:
     explicit PushControl(const juce::String& title, bool showStateIndicators = true);
     void setRestingState(bool active) { valueBox->setMomentaryRestingState(active); }
+    void setPressFeedbackEnabled(bool enabled) { valueBox->setMomentaryPressFeedbackEnabled(enabled); }
+    void setTextTopInset(int pixels) { valueBox->getProperties().set("textTopInset", pixels); valueBox->repaint(); }
     void setDisplayText(const juce::String& text) { overrideText=text;valueBox->repaint(); }
     void setDragAction(std::function<void(const juce::MouseEvent&, bool)> action, std::function<void()> cancelled = {})
     { valueBox->onMomentaryDrag = std::move(action); valueBox->onMomentaryDragCancelled = std::move(cancelled); }

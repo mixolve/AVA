@@ -40,7 +40,6 @@ public:
 
         if (nextPolarity != polarity && polarity != 0)
         {
-            // A complete below-threshold half-wave can interrupt Attack.
             if (active && halfWavePeak < gateThreshold) active = false;
 
             halfWavePeak = magnitude;

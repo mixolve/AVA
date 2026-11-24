@@ -1,7 +1,5 @@
 #pragma once
 
-// Owns the parameter definitions for this block. Slot indices and identifiers
-// are intentionally stable for existing host automation and saved sessions.
 #include "../shared/BlockParameterTypes.h"
 
 namespace ava::modules::gain
@@ -27,6 +25,6 @@ inline constexpr auto parameterCatalog = std::to_array<SlotDefinition>({
     { ParameterSlot::gainRightBypass, { "right.gain.bypass", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"GAIN / RIGHT", "BYPASS"} },
     { ParameterSlot::gainMidBypass, { "mid.gain.bypass", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"GAIN / MID", "BYPASS"} },
     { ParameterSlot::gainSideBypass, { "side.gain.bypass", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"GAIN / SIDE", "BYPASS"} },
-    { ParameterSlot::gainHidden, { "gain.hidden", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 1.0f, "" } , {"GAIN", "HIDDEN"} },
+    { ParameterSlot::gainHidden, { "gain.hidden", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"GAIN", "HIDDEN"} },
 });
-} // namespace ava::modules::gain
+}

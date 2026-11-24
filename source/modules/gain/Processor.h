@@ -1,6 +1,6 @@
 #pragma once
 #include "Parameters.h"
-#include "GainOrder.h"
+#include "Order.h"
 #include <array>
 #include <vector>
 #include <optional>

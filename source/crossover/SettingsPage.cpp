@@ -11,8 +11,6 @@ class CrossoverSettingsPage final : public CrossoverModulePage
 public:
     explicit CrossoverSettingsPage(CrossoverModuleComponent& ownerIn) : owner(ownerIn)
     {
-        // The CROSSOVER and INPUT controls are now one uninterrupted grid.
-        // No nested dark #444444 section headers or collapsed controls.
         if (!owner.config.showCrossoverControls) return;
         if (owner.config.processingInputParameterId.isNotEmpty())
         {
@@ -31,10 +29,10 @@ public:
         splitCountControl = makeParameter(owner.config.makeCrossoverSplitCountParameterId(), "XOVERS");
         splitCountControl->setDiscreteChoiceIndicator(static_cast<int>(splitControls.size()) + 1);
         splitCountControl->onValueChanged = [this] { owner.activeSplitCountChanged(); };
-        if (owner.config.soloInstanceParameterId.isNotEmpty())
-            soloInstanceControl = makeParameter(owner.config.soloInstanceParameterId, "INSTANCE SOLO");
         if (owner.config.soloChannelParameterId.isNotEmpty())
             soloChannelControl = makeParameter(owner.config.soloChannelParameterId, "CHANNEL SOLO");
+        if (owner.config.outputMuteParameterId.isNotEmpty())
+            outputMuteControl = makeParameter(owner.config.outputMuteParameterId, "OUT\nMUTE");
         autoSoloControl = makeParameter(owner.config.makeCrossoverParameterId("auto-solo"), "AUTO-SOLO");
         autoSoloControl->onValueChanged = [this]
         {
@@ -97,8 +95,6 @@ public:
     std::vector<juce::Component*> getInstanceControls() const override
     {
         std::vector<juce::Component*> controls;
-        // The INSTANCE page uses a single grid, not the old separate
-        // CROSSOVER and INPUT rows. Keep their original reading order.
         for (const auto& group : controlGroups())
             for (const auto& row : group)
                 for (const auto& cell : row)
@@ -109,7 +105,7 @@ public:
     InstanceMainRows getInstanceMainRows() const override
     {
         InstanceMainRows rows;
-        rows.secondary = {soloInstanceControl.get(), processingInputControl.get(), soloChannelControl.get()};
+        rows.secondary = {processingInputControl.get(), outputMuteControl.get(), soloChannelControl.get()};
         rows.splits[0] = splitCountControl.get();
         for (size_t i = 0; i < splitControls.size(); ++i)
             rows.splits[i + 1] = splitControls[i].get();
@@ -193,10 +189,9 @@ private:
         add(0, 0, splitCountControl.get());
         add(0, 0, autoSoloControl.get());
         add(0, 0, soloModeControl.get());
-        // All five split frequencies stay on CROSSOVER's second row.
         for (const auto& control : splitControls) add(0, 1, control.get());
         add(1, 0, processingInputControl.get());
-        add(1, 0, soloInstanceControl.get());
+        add(1, 0, outputMuteControl.get());
         add(1, 0, soloChannelControl.get());
         add(1, 0, copyAllControl.get());
         add(1, 0, pasteAllControl.get());
@@ -206,7 +201,7 @@ private:
     CrossoverModuleComponent& owner;
     std::unique_ptr<ChoiceControl> processingInputControl, syncTypeControl;
     std::unique_ptr<ParameterControl> bpmControl;
-    std::unique_ptr<ParameterControl> splitCountControl, soloInstanceControl, soloChannelControl, autoSoloControl;
+    std::unique_ptr<ParameterControl> splitCountControl, soloChannelControl, outputMuteControl, autoSoloControl;
     std::unique_ptr<PushControl> copyAllControl, pasteAllControl;
     std::unique_ptr<LocalChoiceControl> soloModeControl;
     std::array<std::unique_ptr<ParameterControl>, splitControlCount> splitControls;

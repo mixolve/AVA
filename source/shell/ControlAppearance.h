@@ -3,7 +3,6 @@
 
 void paintControlFill(juce::Graphics&, juce::Rectangle<int>, juce::Colour);
 
-// Shared control body and frame. Text buttons paint their interaction states separately.
 struct ControlAppearance
 {
     bool frameVisible = true;

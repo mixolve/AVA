@@ -8,8 +8,7 @@ namespace eql_state
 bool isCurrentState(const juce::ValueTree& state,
                     juce::AudioProcessorValueTreeState& parameters)
 {
-    const auto completed = ava::modules::state::completeMissingParameterDefaults(state, parameters);
-    if (! ava::modules::state::hasValidParameterState(completed, parameters))
+    if (! ava::modules::state::hasValidParameterState(state, parameters))
         return false;
 
     if (! state.hasProperty(EqlModuleProcessor::activeFilterCountStateKey))
@@ -46,7 +45,6 @@ bool isCurrentState(const juce::ValueTree& state,
 
 bool EqlModuleProcessor::restoreState(juce::ValueTree restoredState, const bool resolvePreset) noexcept
 {
-    restoredState = ava::modules::state::completeMissingParameterDefaults(restoredState, parameters);
     if (! eql_state::isCurrentState(restoredState, parameters))
         return false;
 

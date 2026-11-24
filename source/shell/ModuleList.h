@@ -23,7 +23,6 @@ struct ModuleListItem {
     bool canDelete = false;
 };
 
-// Inline MODULES grid: click toggles a module; dragging rearranges its position.
 class ModuleList final : public juce::Component
 {
 public:
@@ -36,10 +35,8 @@ public:
     {
         setName("MODULES");
         getProperties().set("disableDockSelection", true);
-        // The standard ValueBox/RangeIndicator renderer paints the module controls.
         setWantsKeyboardFocus(true);
         viewport.setViewedComponent(&list, false);
-        // Clip controls to the scrolling area.
         viewport.getProperties().set("controlViewportClip", true);
         viewport.setScrollBarsShown(false, false);
         viewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
@@ -91,7 +88,43 @@ public:
     void doDelete(int uid) {
         if (deleteAction && deleteAction(uid)) queueReload();
     }
-    void doToggle(int uid) { if(toggleAction) toggleAction(uid); queueReload(); }
+    void doToggle(int uid)
+    {
+        if (!toggleAction) return;
+        toggleAction(uid);
+        if (!reloadItems) { queueReload(); return; }
+
+        // Only the shown state changes on a normal click. Updating its existing
+        // tile avoids destroying/recreating the entire MODULES grid mid-click.
+        const auto items = reloadItems();
+        if (items.size() != order.size()) { queueReload(); return; }
+        for (size_t index = 0; index < items.size(); ++index)
+        {
+            const auto& item = items[index];
+            const auto it = rows.find(item.id);
+            if (it == rows.end() || order[index] != item.id
+                || it->second->serial != item.serial || it->second->text != item.name
+                || it->second->canDelete != item.canDelete)
+            {
+                queueReload();
+                return;
+            }
+        }
+        bool changed = false;
+        for (const auto& item : items)
+        {
+            auto& row = *rows.at(item.id);
+            if (row.localEnabled == item.enabled) continue;
+            row.localEnabled = item.enabled;
+            row.control.setRestingState(item.enabled);
+            changed = true;
+        }
+        if (changed && layoutChanged)
+            juce::MessageManager::callAsync([safe = juce::Component::SafePointer<ModuleList>(this)]
+            {
+                if (safe != nullptr && safe->layoutChanged) safe->layoutChanged();
+            });
+    }
     void doSelect(int uid) { if(selectAction) selectAction(uid); }
     void refreshItemsIfChanged()
     {
@@ -181,18 +214,16 @@ private:
               serial(item.serial), localEnabled(item.enabled), canDelete(item.canDelete)
         {
             setName(text);
-            // Reuse the standard ValueBoxComponent and embedded actions for
-            // appearance; route their presses explicitly because this row
-            // also supports selecting and dragging a module.
             control.setBottomIndicatorsVisible(false, false);
-            // Stable identity for the module row.
+            // A module tile is a persistent toggle: its marker must not jump to ON
+            // during mouseDown and back before the actual toggle on mouseUp.
+            control.setPressFeedbackEnabled(false);
             control.setComponentID("module-slot-" + juce::String(id));
             control.onTrigger = [this] {
                 const auto point = control.getMouseXYRelative();
                 if (control.getBottomTextZone(control.getLocalBounds(), 0, 2).contains(point)
                     || control.getBottomTextZone(control.getLocalBounds(), 1, 2).contains(point))
                     return;
-                // The entire module face toggles only this instance.
                 owner.doToggle(id);
             };
             control.setDragAction([this](const juce::MouseEvent& event, bool released) {
@@ -310,7 +341,6 @@ private:
         layoutRows();
     }
     void setDragCursor(bool active) {
-        // All rows use the same cursor while dragging, including when the pointer crosses a row.
         const auto cursor=active?juce::MouseCursor::DraggingHandCursor:juce::MouseCursor::NormalCursor;
         setMouseCursor(cursor);
         for(auto& [uid,row]:rows) { juce::ignoreUnused(uid); row->setMouseCursor(cursor); }
@@ -348,6 +378,4 @@ private:
     bool reloadQueued = false;
     std::function<void()> layoutChanged;
 };
-
-
 

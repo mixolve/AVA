@@ -1,11 +1,11 @@
-#include "TransustEnvelope.h"
+#include "TransientSustainEnvelope.h"
 #include "BallisticsCurve.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
-namespace dyn::transust
+namespace dyn::transientSustain
 {
 
 void Envelope::prepare(const double sampleRate)
@@ -23,7 +23,7 @@ void Envelope::reset()
 void Envelope::setParameters(const Parameters& newParameters)
 {
     if (newParameters.oneShot && ! parameters.oneShot)
-        resetDetector(); // Arm the first event without the previous cycle's timers.
+        resetDetector();
     else if (! newParameters.oneShot && parameters.oneShot)
         detector.wasAboveThreshold = false;
 
@@ -65,8 +65,8 @@ void Envelope::updateDerivedParameters()
     derived.attackSamples = juce::jmax(0, static_cast<int>(std::round(juce::jmax(0.0f, parameters.attackMs) * 0.001 * currentSampleRate)));
     derived.normalizedAttackCurve = juce::jlimit(-10.0f, 10.0f, parameters.attackCurve * 0.01f);
     derived.holdSamples = juce::jmax(0, static_cast<int>(std::round(holdMs * 0.001 * currentSampleRate)));
-    const auto retriggerMs = juce::jlimit(1.0f, 5000.0f, parameters.retriggerMs);
-    derived.retriggerSamples = juce::jmax(1, static_cast<int>(std::round(retriggerMs * 0.001 * currentSampleRate)));
+    const auto retriggerMs = juce::jlimit(0.0f, 5000.0f, parameters.retriggerMs);
+    derived.retriggerSamples = juce::jmax(0, static_cast<int>(std::round(retriggerMs * 0.001 * currentSampleRate)));
     derived.autoRelease = juce::jlimit(0.0, 4.0, static_cast<double>(parameters.autoRelease) * 0.01);
     derived.releaseDepth = juce::jlimit(0.0, 1.0, static_cast<double>(parameters.releaseDepth) * 0.01);
     derived.releaseMemoryCoefficient = std::exp(-1.0 / (currentSampleRate * juce::jlimit(10.0, 2000.0, static_cast<double>(parameters.releaseMemoryMs)) * 0.001));

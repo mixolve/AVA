@@ -1,7 +1,5 @@
 #pragma once
 
-// Owns the parameter definitions for this block. Slot indices and identifiers
-// are intentionally stable for existing host automation and saved sessions.
 #include "../shared/BlockParameterTypes.h"
 
 namespace ava::modules::ortho
@@ -15,6 +13,6 @@ inline constexpr auto parameterCatalog = std::to_array<SlotDefinition>({
     { ParameterSlot::flipRight, { "flip-right", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "", 0, "flip-right.bypass" } , {"ORTHO", "FLIP RIGHT"} },
     { ParameterSlot::flipRightBypass, { "flip-right.bypass", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"ORTHO / FLIP RIGHT", "BYPASS"} },
     { ParameterSlot::orthoBypass, { "ortho.bypass", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"ORTHO", "BYPASS"} },
-    { ParameterSlot::orthoHidden, { "ortho.hidden", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 1.0f, "" } , {"ORTHO", "HIDDEN"} },
+    { ParameterSlot::orthoHidden, { "ortho.hidden", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"ORTHO", "HIDDEN"} },
 });
-} // namespace ava::modules::ortho
+}

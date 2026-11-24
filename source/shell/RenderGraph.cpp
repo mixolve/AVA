@@ -13,7 +13,7 @@ void AvaAudioProcessor::AudioBuffers::prepare(double rate, int size, int latency
     blockSize = size;
     maximumLatency = latency;
     crossoverRouter.prepare(rate, size, int(maxSupportedChannels), latency);
-    routingChannels.setSize(routingChannelCount, size);
+    routingChannels.setSize(2 * routingChannelCount, size);
     selectedInputBuffer.setSize(int(maxSupportedChannels), size);
     routingInputSnapshot.setSize(routingChannelCount, size);
     unselectedDelay.setSize(routingChannelCount, latency + 1);
@@ -67,6 +67,7 @@ AvaAudioProcessor::RenderingScope::RenderingScope(AvaAudioProcessor& p, RenderGr
         b.settings = owner.getCrossoverSettings();
         b.inputChoice = owner.processingInputParam != nullptr ? juce::roundToInt(owner.processingInputParam->load()) : 0;
         b.instanceMuted = owner.instanceMuteParam != nullptr && owner.instanceMuteParam->load() >= 0.5f;
+        b.outputMuted = owner.outputMuteParam != nullptr && owner.outputMuteParam->load() >= 0.5f;
         b.globalBypass = owner.globalBypassParam != nullptr && owner.globalBypassParam->load() >= 0.5f;
         b.instanceBypass = graph->routing != nullptr && graph->routing->isRootBypassed();
         b.bypassMask = owner.moduleBypasses.load(std::memory_order_acquire);
@@ -100,11 +101,11 @@ uint64_t AvaAudioProcessor::getRenderControlSignature(const RenderGraph& graph) 
         mix(bandModuleOrders[band].load(std::memory_order_acquire));
         mix(bandHiddenMasks[band].load(std::memory_order_acquire));
         for (const auto& slot : graph.moduleStacks[band])
-            mix(uint64_t(slot.uid + 1) << 32 | uint32_t(slot.enabled));
+            mix(uint64_t(slot.uid + 1) << 32 | uint32_t(ava::module_stack::processingActive(slot)));
     }
     mix(globalBypassParam != nullptr && globalBypassParam->load() >= 0.5f ? 1u : 0u);
-    mix(instanceMuteParam != nullptr && instanceMuteParam->load() >= 0.5f ? 1u : 0u);
     mix(processingInputParam != nullptr ? uint64_t(juce::roundToInt(processingInputParam->load())) : 0u);
+    mix(outputMuteParam != nullptr && outputMuteParam->load() >= 0.5f ? 1u : 0u);
     mix(crossoverActiveSplitCountParam != nullptr ? uint64_t(juce::roundToInt(crossoverActiveSplitCountParam->load())) : 0u);
     if (graph.routing != nullptr) mix(graph.routing->getRenderControlSignature());
     return result;
@@ -173,7 +174,7 @@ int AvaAudioProcessor::getMaximumChainLatencySamples() const noexcept
     for (size_t band = 0; band < moduleStacks.size(); ++band) {
         int path = 0;
         for (const auto& slot : moduleStacks[band]) {
-            if (!slot.enabled || slot.uid < ava::module_stack::originalCount) continue;
+            if (!ava::module_stack::processingActive(slot) || slot.uid < ava::module_stack::originalCount) continue;
             const auto it = moduleCopies.find(slot.uid);
             if (it == moduleCopies.end()) continue;
             const auto& copy = *it->second;

@@ -5,7 +5,6 @@
 #include <functional>
 #include <vector>
 
-// A live, scoped search for controls and block captions on the ALL page.
 struct ControlSearchEntry
 {
     enum class Action { none, scrollTop, collapseAll };
@@ -25,7 +24,6 @@ public:
     std::function<std::vector<ControlSearchEntry>(const juce::String&)> findMatches;
     std::function<void(ControlSearchEntry)> onChoose;
 
-    // The search header stays visible; a results frame exists only for matches.
     void setPinned(bool pinned) noexcept;
     int getDisplayedHeight() const noexcept;
     int getPreferredHeight() const noexcept;

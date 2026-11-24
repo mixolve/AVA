@@ -6,7 +6,7 @@
 
 #include <JuceHeader.h>
 
-namespace dyn::transust
+namespace dyn::transientSustain
 {
 class Envelope
 {

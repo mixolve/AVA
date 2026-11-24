@@ -20,7 +20,8 @@ int editorPropertyPolicy(const juce::Identifier& property)
     const auto name = property.toString();
     if (name.startsWith(shell_editor_ui::key("selected.").toString())
         || name.startsWith(shell_editor_ui::key("dock.meta.").toString())
-        || property == shell_editor_ui::key("quick_access")) policy = preservedPreference;
+        || property == shell_editor_ui::key("quick_access")
+        || property == shell_editor_ui::key("pinned_routing_order")) policy = preservedPreference;
     if (property == juce::Identifier(AvaAudioProcessor::activeModuleStateKey)
         || property == juce::Identifier(AvaAudioProcessor::editorWidthStateKey)
         || property == juce::Identifier(AvaAudioProcessor::editorHeightStateKey)
@@ -95,8 +96,6 @@ bool transformEditorViews(juce::XmlElement& target, const juce::XmlElement* curr
     for (int i = target.getNumAttributes(); --i >= 0;)
     {
         const auto name = target.getAttributeName(i);
-        // First-time navigation persists false defaults for solo UI settings.
-        // Missing and explicitly false represent the same sound state.
         if (current == nullptr && name.startsWith("ava.crossover.") && !target.getBoolAttribute(name)
             && (name.endsWith(".auto_solo_enabled") || name.endsWith(".manual_solo_inclusive")
                 || name.contains(".manual_solo.")))

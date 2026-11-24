@@ -14,6 +14,8 @@
 
 #include <algorithm>
 
+thread_local AvaAudioProcessor* AvaAudioProcessor::updatingSoloOwner = nullptr;
+
 const char* AvaAudioProcessor::stateIdForModule(const ActiveModule module) noexcept
 {
     switch (module)
@@ -84,7 +86,6 @@ bool AvaAudioProcessor::loadModule(const ActiveModule module)
         notifyHostOfStateChange();
         return true;
     }
-
 
     clearLoadedModuleStateListeners();
     const auto wasProcessingPrepared = processingPrepared.load(std::memory_order_acquire);
@@ -247,10 +248,18 @@ void AvaAudioProcessor::parameterChanged(const juce::String& parameterID, const 
     if (parameterID == paramSoloInstanceId || parameterID == paramSoloChannelId)
     {
         auto& owner = getRoutingOwner();
-        const juce::ScopedLock lock(owner.processingLock);
-        if (newValue >= 0.5f && owner.routingRuntime != nullptr)
-            owner.routingRuntime->clearOtherSolo(*this, parameterID == paramSoloChannelId);
-        owner.triggerAsyncUpdate();
+        if (updatingSoloOwner != &owner)
+        {
+            auto& selected = owner.requestedSolo[parameterID == paramSoloChannelId ? 1u : 0u];
+            const auto id = routingInstance ? routingNodeId : 0;
+            if (newValue >= 0.5f) selected.store(id, std::memory_order_release);
+            else {
+                auto expected = id;
+                selected.compare_exchange_strong(expected, -2, std::memory_order_acq_rel);
+            }
+            owner.soloStatePending.store(true, std::memory_order_release);
+            owner.triggerAsyncUpdate();
+        }
     }
 
     if (parameterID == paramCrossoverActiveSplitCountId)
@@ -274,6 +283,14 @@ void AvaAudioProcessor::parameterChanged(const juce::String& parameterID, const 
 void AvaAudioProcessor::handleAsyncUpdate()
 {
     { const juce::ScopedLock lock(processingLock); collectRetiredRenderGraphs(); }
+    if (soloStatePending.exchange(false, std::memory_order_acq_rel))
+    {
+        std::shared_ptr<ava::routing::Runtime> runtime;
+        { const juce::ScopedLock lock(processingLock); runtime = routingRuntime; }
+        // Parameter callbacks may be running on separate automation threads.
+        // Reconcile their buttons outside both callback and processor locks.
+        if (runtime != nullptr) runtime->synchronizeSoloSelection();
+    }
     if (manualSoloStatePending.exchange(false, std::memory_order_acq_rel)
         && !bool(parameters.state.getProperty(crossover_ui::makeStatePropertyId("crossover", "auto_solo_enabled"), false)))
         for (size_t band = 0; band < crossoverSoloParams.size(); ++band)
@@ -340,7 +357,6 @@ void AvaAudioProcessor::ensureActiveCrossoverRangeCount(const size_t rangeCount)
 
     if (! eqlNeedsRange && ! blockChainNeedsRange && ! dynNeedsRange)
         return;
-
 
     const auto wasProcessingPrepared = processingPrepared.load(std::memory_order_acquire);
 

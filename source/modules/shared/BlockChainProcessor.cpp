@@ -57,9 +57,8 @@ void BlockChainProcessor::getStateInformation(juce::MemoryBlock& destData) const
 bool BlockChainProcessor::isCurrentState(const juce::ValueTree& state,
                                         juce::AudioProcessorValueTreeState& parameters)
 {
-    const auto completed = ava::modules::state::completeMissingParameterDefaults(state, parameters);
-    return ava::modules::state::hasValidParameterState(completed, parameters)
-        && crossover_ui::hasCurrentStateProperties(completed, "chain");
+    return ava::modules::state::hasValidParameterState(state, parameters)
+        && crossover_ui::hasCurrentStateProperties(state, "chain");
 }
 
 bool BlockChainProcessor::setStateInformation(const void* data, const int sizeInBytes)
@@ -69,8 +68,7 @@ bool BlockChainProcessor::setStateInformation(const void* data, const int sizeIn
     if (xmlState == nullptr)
         return false;
 
-    const auto candidate = juce::ValueTree::fromXml(*xmlState);
-    auto restoredState = ava::modules::state::completeMissingParameterDefaults(candidate, valueTreeState);
+    auto restoredState = juce::ValueTree::fromXml(*xmlState);
 
     if (!isCurrentState(restoredState, valueTreeState))
         return false;
@@ -135,7 +133,8 @@ void BlockChainProcessor::processBlockRange(size_t rangeIndex, ava::modules::cha
 {
     auto* core = processorBank.getProcessor(rangeIndex);
     if (core == nullptr || buffer.getNumChannels() < 1) return;
-    if (block == ava::modules::chain::blocks::Id::varispeed)
+    if (block == ava::modules::chain::blocks::Id::varispeed ||
+        block == ava::modules::chain::blocks::Id::sibil)
     {
         std::optional<int64_t> transportSample;
         std::optional<bool> transportPlaying;
@@ -143,10 +142,13 @@ void BlockChainProcessor::processBlockRange(size_t rangeIndex, ava::modules::cha
             if (auto position = playHead->getPosition())
             {
                 transportPlaying = position->getIsPlaying();
-                if (*transportPlaying)
+                if (*transportPlaying || ownerProcessor.isNonRealtime())
                     if (auto sample = position->getTimeInSamples()) transportSample = *sample;
             }
-        core->beginVarispeedBlock(transportSample, transportPlaying, ownerProcessor.isNonRealtime());
+        if (block == ava::modules::chain::blocks::Id::varispeed)
+            core->beginVarispeedBlock(transportSample, transportPlaying, ownerProcessor.isNonRealtime());
+        else
+            core->beginSibilBlock(transportSample, transportPlaying, buffer.getNumSamples());
     }
     auto* left = buffer.getWritePointer(0);
     auto* right = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : nullptr;

@@ -140,7 +140,6 @@ int CrossoverRangePage::ParameterGroup::getPreferredWidth() const
 
 int CrossoverRangePage::ParameterGroup::getTopGap() const noexcept
 {
-    // Adjacent groups already reserve padding above and below their controls.
     return 0;
 }
 
@@ -197,8 +196,6 @@ void CrossoverRangePage::ParameterGroup::resized()
     }
     controlBlockFrames.clear();
     const auto* page = findParentComponentOfClass<CrossoverRangePage>();
-    // Independent CHAIN modules belong to the nested INSTANCE stack.
-    // Their headers and borders are dark with white captions, just like DYN.
     const auto colour = independent || (page != nullptr && page->owner.config.moduleKey == "dyn")
         ? uiGreyDark : uiWhite;
     // Independent module blocks occupy their whole row both open and closed;
@@ -300,8 +297,6 @@ int CrossoverRangePage::getPreferredHeight() const
     {
         if (isBlockCollapsed("DYN"))
             return controlBlockHeaderHeight;
-        // DYN uses equal 80px cells with explicit row boundaries for its
-        // parameter sections. Width-based wrapping is retained on narrow hosts.
         std::vector<ControlGridCell> cells;
         cells.reserve(rows.size());
         for (const auto& row : rows)
@@ -530,8 +525,11 @@ bool CrossoverRangePage::refreshBlockVisibility()
         auto& row=*rows[i];
         if(row.blockIndex<0) continue;
         const auto& block=ava::modules::chain::blocks::descriptions[size_t(row.blockIndex)];
-        const auto hidden=readRawParameter(owner.valueTreeState,
-            owner.config.makeRangeParameterId(rangeIndex,block.hiddenSuffix),0)>=.5f;
+        // In the independent MODULES stack the header stays visible while
+        // audio processing is bypassed, so BP can be clicked again.
+        const auto hidden = !bool(getProperties().getWithDefault("flatBlocks", false))
+            && readRawParameter(owner.valueTreeState,
+                owner.config.makeRangeParameterId(rangeIndex,block.hiddenSuffix),0)>=.5f;
         if(row.layoutHidden!=hidden) {
             row.layoutHidden=hidden;
             row.setVisible(!hidden);
@@ -562,6 +560,9 @@ std::vector<std::pair<int, juce::Component*>> CrossoverRangePage::independentBlo
     {
         if (row->layoutHidden) { row->setVisible(false); continue; }
         row->getProperties().set("independentBlock", true);
+        // CHAIN rows are reparented out of CrossoverModuleComponent when
+        // shown in MODULES; keep their local-thumb painting policy with them.
+        row->getProperties().set("paintRangeLocally", true);
         if (row->getParentComponent() != &parent) parent.addAndMakeVisible(*row);
         row->setVisible(true);
         row->setSize(width, row->getLayoutHeight(width));

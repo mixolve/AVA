@@ -157,7 +157,6 @@ public:
         refresh();
     }
 
-
     void paint(juce::Graphics& graphics) override
     {
         for (const auto& [id, frame] : frames)
@@ -241,7 +240,6 @@ public:
         }
         signalPaths.clear();
 
-        // Only draw connections within the routing graph. No IN/OUT stubs.
         paintSignalGroup(graphics, layoutState.entryInstanceId);
         paintSignalPaths(graphics);
     }
@@ -347,8 +345,6 @@ public:
 
     void updateInstanceLabels()
     {
-        // The BLK composition preview has been removed. Each routing node
-        // always shows its own regular instance name.
         for (auto& [id, instance] : controls)
         {
             instance.name->setButtonText(getDisplayNameFor(id));
@@ -444,21 +440,27 @@ public:
             // Ctrl+click must reach the routing deletion action, not manual selection.
             instance.name->getProperties().set("preserveCtrlClick", true);
             instance.name->setDragRequiresControl(false);
-            instance.name->setBottomIndicator(1, {
-                [this, id] {
-                    auto* target = processor.findHostSlotTarget(ava::routing::parameterTargetId(id, AvaAudioProcessor::paramInstanceMuteId));
-                    return target != nullptr ? (target->getValue() >= 0.5f ? 1 : 0) : -1;
-                },
-                [this, id](bool muted) {
-                    if (auto* target = processor.findHostSlotTarget(ava::routing::parameterTargetId(id, AvaAudioProcessor::paramInstanceMuteId))) {
-                        target->beginChangeGesture(); target->setValueNotifyingHost(muted ? 1.0f : 0.0f); target->endChangeGesture();
+            const auto bindSwitch = [this, id, tile = instance.name.get()]
+                (int index, const char* parameterId, const char* label)
+            {
+                const auto targetId = ava::routing::parameterTargetId(id, parameterId);
+                tile->setBottomIndicator(index, {
+                    [this, targetId] {
+                        auto* parameter = processor.getRoutingOwner().findHostSlotTarget(targetId);
+                        return parameter != nullptr ? (parameter->getValue() >= 0.5f ? 1 : 0) : -1;
+                    },
+                    [this, targetId](bool enabled) {
+                        if (auto* parameter = processor.getRoutingOwner().findHostSlotTarget(targetId)) {
+                            parameter->beginChangeGesture();
+                            parameter->setValueNotifyingHost(enabled ? 1.0f : 0.0f);
+                            parameter->endChangeGesture();
+                        }
                     }
-                }
-            }, "MT");
-            instance.name->setBottomIndicator(2, {
-                [this, id] { const auto value = getBypassValue(id); return value < 0.0f ? -1 : value >= 0.5f ? 1 : 0; },
-                [this, id](bool bypassed) { if ((getBypassValue(id) >= 0.5f) != bypassed) toggleBypass(id); }
-            }, "BP");
+                }, label);
+            };
+            bindSwitch(0, AvaAudioProcessor::paramSoloInstanceId, "S");
+            bindSwitch(1, AvaAudioProcessor::paramInstanceMuteId, "MT");
+            bindSwitch(2, AvaAudioProcessor::paramGlobalBypassId, "BP");
             const auto removeAction = [this, id]
             {
                 if (ava::routing::removeInstance(state.state, id))
@@ -835,6 +837,7 @@ private:
         {
             const auto value = getBypassValue(id);
             instance.name->setFillColour(juce::Colour(value >= 0.5f ? 0xff222222 : 0xff444444));
+            instance.name->refreshBottomIndicatorStates();
             instance.name->repaint();
         }
     }
@@ -1472,7 +1475,7 @@ private:
     std::vector<SignalPath> retiringSignalPaths;
     bool controlDragActive = false;
     int moveSourceId = 0;
-    bool showContainers = false;
+    bool showContainers = true;
 };
 
 RoutingPanel::RoutingPanel(AvaAudioProcessor& processor)
@@ -1516,13 +1519,13 @@ RoutingPanel::RoutingPanel(AvaAudioProcessor& processor)
     containersButton->getProperties().set("disableDockSelection", true);
     containersButton->onClick = [this]
     {
-        const auto visible = !bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), false));
+        const auto visible = !bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), true));
         parameters.state.setProperty(shell_editor_ui::key("routing.containers"), visible, nullptr);
         content->setContainersVisible(visible);
         containersButton->setSelectionHighlighted(visible);
     };
     addAndMakeVisible(*containersButton);
-    const auto visible = bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), false));
+    const auto visible = bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), true));
     content->setContainersVisible(visible);
     containersButton->setSelectionHighlighted(visible);
 
@@ -1579,7 +1582,7 @@ void RoutingPanel::restoreUiState()
 {
     const juce::ScopedValueSetter<bool> restoreGuard(updatingViewport, true);
     content->refresh();
-    const auto visible = bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), false));
+    const auto visible = bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), true));
     content->setContainersVisible(visible);
     containersButton->setSelectionHighlighted(visible);
     restoreScrollPending = true;
@@ -1654,7 +1657,7 @@ void RoutingPanel::resized()
 
 void RoutingPanel::timerCallback()
 {
-    const auto visible = bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), false));
+    const auto visible = bool(parameters.state.getProperty(shell_editor_ui::key("routing.containers"), true));
     content->setContainersVisible(visible);
     containersButton->setSelectionHighlighted(visible);
     const auto previousHeight = content->getPreferredHeight();

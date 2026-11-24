@@ -59,7 +59,6 @@ public:
         if (!enabled || (!held && !ready)) return;
         g.setColour(held ? uiWhite : juce::Colour(0xff666666));
         g.fillRect(bounds);
-        // Embedded buttons paint their own inverted caption and fill.
 
     }
 
@@ -76,8 +75,6 @@ public:
         const bool manuallySelected = source != nullptr && isManualControlSelected(*source);
         if (manuallySelected)
         {
-            // Two solid, aligned pixels, centred beneath the marker.
-            // The selected marker and the control frame are white as well.
             g.setColour(uiWhite);
             g.fillRect(bounds.getX(), bounds.getY() + bounds.getHeight() / 2 - 1,
                        bounds.getWidth(), 2);
@@ -134,7 +131,6 @@ public:
     bool begin(const juce::MouseEvent& event, juce::Rectangle<int> bounds, juce::Slider& slider, int choices = 0)
     {
         if (!contains(event, bounds, slider) || !beginFromValue(event, bounds, slider, choices)) return false;
-        fromIndicator = true;
         return true;
     }
 
@@ -143,8 +139,8 @@ public:
         if (!event.mods.isLeftButtonDown()) return false;
         target = &slider;
         moved = false;
-        fromIndicator = false;
         discreteChoices = choices;
+        startedOnMarker = contains(event, bounds, slider);
         position = rangePosition(slider);
         // Work in the original component's drag coordinate system. JUCE can
         // extend these coordinates beyond the screen while dragging; converting
@@ -158,8 +154,18 @@ public:
 
     bool isActive() const { return target != nullptr; }
     bool wasDragged() const { return moved; }
-    bool hasInteractionHighlight() const { return isActive() && (fromIndicator || moved); }
-    double visualPosition() const { return isActive() && moved ? position : -1.0; }
+    bool isDragging() const { return isActive() && moved; }
+    bool startedDragOnMarker() const { return isDragging() && startedOnMarker; }
+    // Continuous values are applied on every drag event; paint the slider's
+    // actual (possibly quantised) value. Discrete choices are committed only
+    // on release, so display the snapped choice during the drag as well.
+    double visualPosition() const
+    {
+        if (!isDragging() || discreteChoices <= 1) return -1.0;
+        auto index = juce::roundToInt(position * double(discreteChoices - 1));
+        if (discreteChoices > 2) index = (index % discreteChoices + discreteChoices) % discreteChoices;
+        return double(juce::jlimit(0, discreteChoices - 1, index)) / double(discreteChoices - 1);
+    }
     void drag(const juce::MouseEvent& event)
     {
         if (target == nullptr || (!moved && !event.mouseWasDraggedSinceMouseDown())) return;
@@ -174,6 +180,10 @@ public:
                 return;
             dragAxis = std::abs(offset.x) >= std::abs(offset.y)
                 ? DragAxis::horizontal : DragAxis::vertical;
+            // The initial movement only selects the drag axis. Applying it as
+            // a value delta makes the thumb jump on the first drag event.
+            lastDragDistance = dragAxis == DragAxis::horizontal
+                ? double(offset.x) : -double(offset.y);
         }
 
         // Only one fixed axis contributes for the whole gesture. An absolute
@@ -193,7 +203,6 @@ public:
         }
         if (delta == 0.0) return;
 
-        // Full parameter range = 4 * indicator travel; Shift = 10x finer.
         const auto increment = delta * (event.mods.isShiftDown() ? 0.1 : 1.0)
             / (4.0 * double(travel));
         if (discreteChoices > 1)
@@ -220,6 +229,7 @@ public:
         gesture.reset();
         target = nullptr;
         dragAxis = DragAxis::unlocked;
+        startedOnMarker = false;
     }
 
 private:
@@ -232,7 +242,8 @@ private:
     std::unique_ptr<juce::Slider::ScopedDragNotification> gesture;
     double position = 0.0;
     int travel = 1;
-    bool moved = false, fromIndicator = false;
+    bool moved = false;
+    bool startedOnMarker = false;
     int discreteChoices = 0;
 };
 
@@ -256,11 +267,10 @@ public:
         const auto area = RangeIndicator::potentiometerBounds(*this, bounds);
         // Editing has an ordinary rail. The control's manual-selection state
         // remains saved and is drawn again when the value editor closes.
-        RangeIndicator::paint(g, area, *target, indicator.hasInteractionHighlight() ? uiWhite : uiIndicatorActive,
-                              indicator.visualPosition());
+        RangeIndicator::paint(g, area, *target, uiIndicatorActive, indicator.visualPosition());
         const auto position = indicator.visualPosition() >= 0.0 ? indicator.visualPosition() : RangeIndicator::rangePosition(*target);
         if (const auto* parent = getParentComponent())
-            RangeIndicator::paintHover(g, *this, *parent, RangeIndicator::continuousMarker(area, position), isEnabled(), indicator.hasInteractionHighlight());
+            RangeIndicator::paintHover(g, *this, *parent, RangeIndicator::continuousMarker(area, position), isEnabled() && !indicator.isDragging());
     }
 
     void refreshPresentationFor(juce::Slider& control)

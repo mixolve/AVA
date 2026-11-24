@@ -84,7 +84,24 @@ juce::String ControlBlockComponent::blockHeaderAt(juce::Point<int> position) con
 void ControlBlockComponent::updateHoveredBlock(juce::Point<int> position)
 {
     const auto title = blockHeaderAt(position);
-    if (hoveredBlockTitle == title) return;
+    juce::String bypassTitle;
+    if (moduleHeaderToggle)
+        for (const auto& frame : controlBlockFrames)
+            if (frame.colour == uiGreyDark
+                && moduleNameplateBypassBounds(frame.bounds).contains(position))
+            {
+                bypassTitle = frame.title;
+                break;
+            }
+
+    if (hoveredBlockTitle == title && hoveredBypassTitle == bypassTitle) return;
+    hoveredBypassTitle = bypassTitle;
+    if (hoveredBlockTitle == title)
+    {
+        repaint();
+        return;
+    }
+
     hoveredBlockTitle = title;
     hoveredBlockVisualReady = false;
     const auto generation = ++hoverGeneration;
@@ -121,8 +138,9 @@ void ControlBlockComponent::mouseEnter(const juce::MouseEvent& event)
 
 void ControlBlockComponent::mouseExit(const juce::MouseEvent&)
 {
-    if (hoveredBlockTitle.isEmpty()) return;
+    if (hoveredBlockTitle.isEmpty() && hoveredBypassTitle.isEmpty()) return;
     hoveredBlockTitle.clear();
+    hoveredBypassTitle.clear();
     hoveredBlockVisualReady = false;
     ++hoverGeneration;
     repaint();
@@ -130,13 +148,23 @@ void ControlBlockComponent::mouseExit(const juce::MouseEvent&)
 
 juce::MouseCursor ControlBlockComponent::getMouseCursor()
 {
-    // Collapsible module headers remain clickable but use the normal cursor.
     return juce::MouseCursor::NormalCursor;
 }
 
 void ControlBlockComponent::mouseUp(const juce::MouseEvent& event)
 {
     if (event.mods.isPopupMenu() || event.mouseWasDraggedSinceMouseDown()) return;
+    // A click on BP in the module's title BAR is a bypass gesture,
+    // not a collapse gesture. Keep the name and surrounding frame intact.
+    if (moduleHeaderToggle)
+        for (const auto& frame : controlBlockFrames)
+            if (frame.colour == uiGreyDark
+                && moduleNameplateBypassBounds(frame.bounds).contains(event.getPosition()))
+            {
+                moduleHeaderToggle();
+                repaint();
+                return;
+            }
     const auto title = blockHeaderAt(event.getPosition());
     if (title.isEmpty()) return;
     setBlockCollapsed(title, !isBlockCollapsed(title));

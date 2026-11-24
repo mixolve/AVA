@@ -61,12 +61,14 @@ void AvaAudioProcessorEditor::timerCallback()
     }
     if (unitSampleRateLabel != nullptr)
     {
-        // The host determines the processor sample rate; no local setting is
-        // written and no parameter is exposed for this informational readout.
         const auto sampleRate = audioProcessor.getRoutingOwner().getSampleRate();
         juce::String value = "—";
         if (sampleRate > 0.0 && std::isfinite(sampleRate))
-            value = juce::String(juce::roundToInt(sampleRate));
+        {
+            const auto latencySamples = audioProcessor.getRoutingOwner().getLatencySamples();
+            value = juce::String(juce::roundToInt(sampleRate)) + "\n"
+                  + juce::String(latencySamples);
+        }
         if (unitSampleRateLabel->getText() != value)
             unitSampleRateLabel->setText(value, juce::dontSendNotification);
     }
@@ -160,11 +162,9 @@ bool AvaAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    // Nested routing instance editors have their own search/ALL page.
     if (activeInstanceEditor != nullptr && activeInstanceEditor->isShowing())
         return activeInstanceEditor->keyPressed(key);
 
-    // A disabled UNIT search must not intercept Enter or close ABOUT.
     if (!bool(getRootWindowState().getProperty(shell_editor_ui::key("search_visible"), true)))
         return false;
     // Enter is a search shortcut on ALL and INFO alike; navigating

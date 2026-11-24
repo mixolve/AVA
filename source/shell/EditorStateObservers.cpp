@@ -13,7 +13,7 @@
 void AvaAudioProcessorEditor::parameterChanged(const juce::String& parameterID, float)
 {
     if (parameterID == AvaAudioProcessor::paramCrossoverActiveSplitCountId)
-        scheduleModuleControlsRefresh(true); // Refresh the per-band DYN controls on XOV automation.
+        scheduleModuleControlsRefresh(true);
     else if (parameterID.endsWith(".hidden"))
         scheduleModuleControlsRefresh(false);
     else if (parameterID.endsWith("_domain") || parameterID.endsWith("_mode"))
@@ -54,30 +54,22 @@ void AvaAudioProcessorEditor::scheduleModuleControlsRefresh(const bool rebind)
 void AvaAudioProcessorEditor::resyncEditorFromProcessorState()
 {
     const juce::ScopedValueSetter<bool> restoreGuard(restoringEditorUiState, true);
-    const int scrollBeforeUndo = pendingHostRestoreScrollY;
-    pendingHostRestoreScrollY = -1;
     const auto restoredInstance = static_cast<int>(valueTreeState.state.getProperty(shell_editor_ui::key("active_instance"), 0));
     if (routingInstanceId == 0)
     {
-        updateEditorResizeLimits();
-        // Preserve the user's independently resized height during state reloads.
-        const auto height = juce::jlimit(getMinimumEditorHeight(), getMaximumEditorHeight(),
-            getHeight() > 0 ? getHeight() : getEditorHeight(*this));
-        setSize(getEditorWidth(*this), height);
+        const juce::ScopedValueSetter<bool> sizeGuard(suppressEditorSizeStateSave, true);
+        const auto savedHeight = int(valueTreeState.state.getProperty(
+            AvaAudioProcessor::editorHeightStateKey, getEditorHeight(*this)));
+        expandedHeightBeforeDock = savedHeight;
+        applyDockWindowSize(getEditorWidth(*this), juce::jlimit(
+            getMinimumEditorHeight(), getMaximumEditorHeight(),
+            isDockOnly() ? getMinimumEditorHeight() : savedHeight));
     }
     restoreEditorStateFromValueTree();
+    refreshQuickAccessControls();
     refreshModuleStateListeners();
     updateSectionStates();
     resized();
-    if (scrollBeforeUndo >= 0)
-    {
-        // Restore after the new module layout has its final height.
-        // The guard above prevents the intermediate 0 from being stored.
-        const auto maxY = juce::jmax(0, moduleContent.getHeight() - filterViewport.getHeight());
-        filterViewport.setViewPosition(0, juce::jlimit(0, maxY, scrollBeforeUndo));
-        valueTreeState.state.setProperty(shell_editor_ui::key("scroll.eql"),
-                                        filterViewport.getViewPositionY(), nullptr);
-    }
     repaint();
     if (routingInstanceId == 0)
     {

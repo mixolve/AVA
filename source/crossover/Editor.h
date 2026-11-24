@@ -2,7 +2,7 @@
 #include "../shell/Controls.h"
 
 #include "../modules/shared/BlockCatalog.h"
-#include "../modules/gain/GainOrder.h"
+#include "../modules/gain/Order.h"
 
 #include "Splitter.h"
 #include "Page.h"
@@ -51,7 +51,6 @@ public:
         bool startNewControlRow = false;
     };
 
-
     struct Config
     {
         void* processorIdentity = nullptr;
@@ -71,7 +70,7 @@ public:
         std::function<juce::String(size_t)> makeCrossoverSoloParameterId;
         std::function<juce::String()> makeCrossoverSplitCountParameterId;
         juce::String processingInputParameterId;
-        juce::String soloInstanceParameterId;
+        juce::String outputMuteParameterId;
         juce::String soloChannelParameterId;
         std::function<bool(int)> isProcessingInputAvailable;
         std::function<bool(const juce::String&, int)> isRangeChoiceAvailable;
@@ -102,6 +101,8 @@ public:
     void refreshRangeControls();
     void setInstanceName(const juce::String& name);
     void setModuleDisplayTitle(const juce::String& title);
+    void setModuleNameplateBypass(std::function<bool()> isBypassed,
+                                 std::function<void()> toggle);
     std::vector<juce::Component*> getMainControls();
     std::array<juce::Component*, 2> getMainSyncControls() const;
     std::vector<juce::Component*> getInstanceSettingsControls() const;
@@ -140,12 +141,28 @@ private:
     void clearFocus();
     void notifyPageChanged();
 
-    void parameterChanged(const juce::String&, float) override { externalStateDirty.store(true); }
-    void valueTreePropertyChanged(juce::ValueTree&, const juce::Identifier&) override { if (!writingUiState.load()) externalStateDirty.store(true); }
+    void parameterChanged(const juce::String& parameterId, float) override
+    {
+        // Module parameters are not all layout dependencies. A knob gesture
+        // must not schedule a full module refresh on every value notification.
+        if ((config.moduleKey == "chain" || config.moduleKey == "dyn")
+            && !uiDependentParameterIds.contains(parameterId)
+            && !parameterId.endsWith(".hidden"))
+            return;
+        externalStateDirty.store(true, std::memory_order_release);
+    }
+    void valueTreePropertyChanged(juce::ValueTree& changed, const juce::Identifier&) override
+    {
+        // APVTS mirrors numeric changes into PARAM nodes. They are not
+        // structural UI changes and must not reflow MODULES during a drag.
+        if (changed.hasType("PARAM")) return;
+        if (!writingUiState.load()) externalStateDirty.store(true);
+    }
     void valueTreeRedirected(juce::ValueTree&) override { externalStateDirty.store(true); }
     std::atomic<bool> externalStateDirty { true }, writingUiState { false };
     juce::ValueTree observedState;
     std::vector<juce::String> observedParameterIds;
+    juce::StringArray uiDependentParameterIds;
     uint32_t lastAvailabilityRefresh = 0;
     Config config;
     juce::AudioProcessorValueTreeState& valueTreeState;

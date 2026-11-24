@@ -120,10 +120,6 @@ void parameter_control_support::bindBypassIndicator(ValueBoxComponent& value,
 
 void ParameterField::paintOverChildren(juce::Graphics& graphics)
 {
-    // Visible fills and click regions share the same bottom-row geometry.
-    // Draw the existing hover outline from the parent to avoid clipping its
-    // one-pixel overhang. Do not force a highlight just because the button
-    // is pressed: the cursor must actually be inside the painted indicator.
     const auto drawHover = [this, &graphics] (const juce::Button* button)
     {
         if (button == nullptr || !button->isVisible() || !button->isEnabled()) return;
@@ -136,8 +132,6 @@ void ParameterField::paintOverChildren(juce::Graphics& graphics)
 
 void ParameterField::repaintBottomHover(const juce::Component& button)
 {
-    // Invalidate the complete outline, including its one-pixel overhang.
-    // The click rectangle and indicator rectangle are now identical.
     repaint(getLocalArea(&button, button.getLocalBounds()).expanded(3));
 }
 
@@ -216,7 +210,6 @@ void ParameterField::layoutBottomAccessory(juce::Rectangle<int> bounds)
     for (int index = 0; index < count; ++index)
     {
         const auto zone = getBottomTextZone(bounds, index, count);
-        // Match click, hover and visible fill exactly; no hidden 24px hit area.
         bottomActions[static_cast<size_t>(index)]->setBounds(zone);
         bottomActions[static_cast<size_t>(index)]->toFront(false);
     }
@@ -230,9 +223,7 @@ public:
     explicit TextIndicatorButton(const juce::String& text) : juce::Button(text)
     {
         setButtonText(text);
-        // Keep the bottom-row actions clickable while editing the main value.
         getProperties().set("embeddedControlButton", true);
-        // Repaint the existing hover when the button state changes.
         onStateChange = [this] { repaintValueOverlay(*this); };
         setWantsKeyboardFocus(false);
         setMouseClickGrabsKeyboardFocus(false);
@@ -248,8 +239,6 @@ public:
     void paintButton(juce::Graphics& graphics, bool hover, bool pressed) override
     {
         const auto zone = getLocalBounds();
-        // Use the existing hover outline with state-dependent indicator fill.
-        // A disabled action is #888888, idle is #BBBBBB, active is #FFFFFF.
         const bool active = isEnabled() && isActive && isActive();
         graphics.setColour(!isEnabled() ? uiIndicatorDisabled : (active || pressed) ? uiWhite : uiIndicatorInactive);
         graphics.fillRect(zone);

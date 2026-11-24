@@ -1,7 +1,5 @@
 #pragma once
 
-// Owns the parameter definitions for this block. Slot indices and identifiers
-// are intentionally stable for existing host automation and saved sessions.
 #include "../shared/BlockParameterTypes.h"
 
 namespace ava::modules::varispeed
@@ -17,8 +15,8 @@ inline constexpr auto parameterCatalog = std::to_array<SlotDefinition>({
     { ParameterSlot::varispeedCrossfade, { "varispeed.crossfade", ParameterType::floating, 0.0f, 100.0f, 0.01f, 2.0f, "ms", 2 } , {"VSPEED", "FADE"} },
     { ParameterSlot::varispeedPreserve, { "varispeed.preserve", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"VSPEED", "PRESERVE PITCH"} },
     { ParameterSlot::varispeedBypass, { "varispeed.bypass", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"VSPEED", "BYPASS"} },
-    { ParameterSlot::varispeedHidden, { "varispeed.hidden", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 1.0f, "" } , {"VSPEED", "HIDDEN"} },
+    { ParameterSlot::varispeedHidden, { "varispeed.hidden", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"VSPEED", "HIDDEN"} },
     { ParameterSlot::varispeedUnits, { "varispeed.units", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"VSPEED", "RATE/PITCH UNITS"} },
     { ParameterSlot::varispeedQuality, { "varispeed.quality", ParameterType::choice, 0.0f, 2.0f, 1.0f, 0.0f, "" } , {"VSPEED", "SOUNDTOUCH QUALITY"} },
 });
-} // namespace ava::modules::varispeed
+}

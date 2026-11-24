@@ -1,12 +1,13 @@
 #pragma once
 
 #include "../shared/DspUtilities.h"
-#include "TransustEnvelope.h"
+#include "TransientSustainEnvelope.h"
 #include "PeakCrest.h"
 #include "AutoRelease.h"
 #include "ThresholdHysteresis.h"
 #include "HoldWindow.h"
 #include "LookaheadGainShaper.h"
+#include "LookaheadTensionShaper.h"
 #include "AttackSourceGate.h"
 #include "../shared/SampleRangeBank.h"
 
@@ -65,7 +66,7 @@ public:
         bool sidechainListen = false;
         bool useSidechainInput = false;
         bool delta = false;
-        bool transust = false, transientMute = false, sustainMute = false, oneShot = false;
+        bool transientSustain = false, transientMute = false, sustainMute = false, oneShot = false;
         float transientGain = 0.0f, sustainGain = 0.0f, retriggerMs = 60.0f;
         bool operator==(const Parameters& other) const noexcept
         {
@@ -106,7 +107,7 @@ public:
                 && sidechainListen == other.sidechainListen
                 && useSidechainInput == other.useSidechainInput
                 && delta == other.delta
-                && transust == other.transust && transientMute == other.transientMute
+                && transientSustain == other.transientSustain && transientMute == other.transientMute
                 && sustainMute == other.sustainMute && oneShot == other.oneShot
                 && juce::approximatelyEqual(transientGain, other.transientGain)
                 && juce::approximatelyEqual(sustainGain, other.sustainGain)
@@ -207,8 +208,16 @@ private:
     double getEffectiveThreshold(size_t branchIndex) const noexcept;
     Parameters parameters;
     DerivedParameters derived;
-    std::array<dyn::transust::Envelope, detector::count> transustCores;
-    StereoSample processTransustSample(double keyL, double keyR, double adaptiveLevelDb, double signalPeak);
+    std::array<dyn::transientSustain::Envelope, detector::count> transientSustainCores;
+    struct TensionFrame
+    {
+        std::array<double, DerivedParameters::numBranches> gainTargets {};
+        std::array<double, DerivedParameters::numBranches> playbackGains {};
+        std::array<double, DerivedParameters::numBranches> thresholds {};
+    };
+    TensionFrame evaluateTension(double envelope, double adaptiveRmsDb);
+    StereoSample processTransientSustainSample(double keyL, double keyR, double adaptiveLevelDb,
+                                      double signalPeak, const TensionFrame& tension);
     StereoSample finishSample(double wetL, double wetR);
 
     enum BranchIndex : size_t
@@ -231,6 +240,9 @@ private:
                               int releaseSamples, double gainExponent, double feedbackGainScale);
     std::array<HoldWindow, detector::count> compressorHoldWindows;
     LookaheadGainShaper lookaheadGain;
+    // Maximum of the detector over LOOKAHEAD: stable across carrier cycles.
+    HoldWindow tensionPreviewWindow;
+    std::array<LookaheadTensionShaper, DerivedParameters::numBranches> lookaheadTension;
     dyn::ballistics::AttackSourceGate attackSourceGate;
     bool attackSourceQuiet = false;
     std::array<double, detector::count> cleanEnvPeak { 0.0, 0.0 };

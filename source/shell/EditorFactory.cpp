@@ -12,7 +12,7 @@ public:
     BorderlessBottomResizer(juce::Component* target, juce::ComponentBoundsConstrainer* constrainer)
         : juce::ResizableEdgeComponent(target, constrainer, juce::ResizableEdgeComponent::bottomEdge) {}
 
-    void paint(juce::Graphics&) override {} // Resize cursor and dragging, no visible strip/grip.
+    void paint(juce::Graphics&) override {}
 };
 
 class ZoomedEditor final : public juce::AudioProcessorEditor,
@@ -27,8 +27,6 @@ public:
         setName("zoomed-editor");
         setOpaque(true);
         addAndMakeVisible(content);
-        // Native JUCE edge-resizer across the entire bottom strip. No custom
-        // painted grip, and the constrainer keeps the width fixed.
         setResizable(true, false);
         resizeHandle = std::make_unique<BorderlessBottomResizer>(this, getConstrainer());
         resizeHandle->setMouseCursor(juce::MouseCursor::UpDownResizeCursor);

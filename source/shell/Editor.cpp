@@ -224,7 +224,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     // sections on the routing owner, not on an individual instance APVTS;
     // switching pages must not swap UNIT expansion preferences.
     auto& unitState = audioProcessor.getRoutingOwner().getValueTreeState();
-    // UNIT MAIN holds the actions formerly shown on the global sidebar.
     unitMainContent.collapseBlockInitially("MAIN");
     unitMainContent.bindCollapseState(unitState, "shell.unit.main");
     unitContent.addAndMakeVisible(unitMainContent);
@@ -242,8 +241,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     oscActions.isInputPortBusy = [this] { return audioProcessor.isOscInputPortBusy(); };
     oscPanel = std::make_unique<OscPanel>(std::move(oscActions));
     unitContent.addAndMakeVisible(*oscPanel);
-    // UNIT contains MAIN, ROUTING (the former RTN page), OSC, SYNC and SLOTS.
-    // Internal instance LINK remains in INSTANCE MAIN.
+    // The instance LINK control stays in INSTANCE MAIN, not the UNIT navigation.
     unitSyncContent.collapseBlockInitially("SYNC");
     unitSyncContent.bindCollapseState(unitState, "shell.unit.sync");
     unitContent.addAndMakeVisible(unitSyncContent);
@@ -267,7 +265,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     mainContent.bindCollapseState(valueTreeState, "shell.main");
     eqlContent.collapseBlockInitially("EQL");
     instanceContent.bindCollapseState(valueTreeState, "shell.instance");
-    // The INSTANCE header stays white; MAIN and its module headers are dark.
     oscPanel->collapseBlockInitially("OSC");
     oscPanel->bindCollapseState(unitState, "shell.unit.osc");
     moduleContent.addAndMakeVisible(unitContent);
@@ -391,7 +388,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
         // Keep the persisted scroll coordinate current for viewport wheel,
         // scrollbar thumb and trackpad gestures. Never persist a transient
         // clamp-to-zero while the page is being rebuilt on DAW Undo.
-        if (!restoringEditorUiState && !layingOutEditor && pendingHostRestoreScrollY < 0)
+        if (canStoreEditorUiState() && !layingOutEditor)
         {
             const auto key = shell_editor_ui::key("scroll.eql");
             const int y = filterViewport.getViewPositionY();
@@ -491,7 +488,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     addChildComponent(*aboutPanel);
     aboutControl = std::make_unique<LocalChoiceControl>("ABOUT", juce::StringArray { "OFF", "ON" }, 0);
     aboutControl->setName("info");
-    // A transparent hit-test overlay captures dragging on all four margins.
     windowDragHandle = std::make_unique<SidebarFocusHandle>();
     windowDragHandle->setName("window-drag-handle");
     windowDragHandle->setWantsKeyboardFocus(false);
@@ -515,7 +511,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
 
     // Native UNIT MAIN controls use the same Ctrl-click quick-access marking
     // as all module controls (no special treatment for action/toggle controls).
-
 
     startTimerHz(60);
     registerParameterListeners();
@@ -596,7 +591,6 @@ juce::ValueTree& AvaAudioProcessorEditor::getRootWindowState() const
 
     return root->valueTreeState.state;
 }
-
 
 void AvaAudioProcessorEditor::refreshInstanceLinkControls()
 {

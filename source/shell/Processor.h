@@ -45,6 +45,7 @@ public:
     inline static constexpr auto linkSendStateKey = "ava.link.send";
     inline static constexpr auto linkReceiveStateKey = "ava.link.receive";
     inline static constexpr auto activeModuleStateKey = "ava.active_module";
+    inline static constexpr auto moduleStackStateKey = "ava.module_stacks_v1";
     inline static constexpr auto eqlModuleStateKey = "ava.eql_state";
     inline static constexpr auto blockChainModuleStateKey = "ava.chain_state";
     inline static constexpr auto dynModuleStateKey = "ava.dyn_state";
@@ -65,6 +66,7 @@ public:
     inline static constexpr auto hostSlotDefaultsKey="ava.host_slot.defaults_initialized";
     static constexpr int routingChannelCount = ava::channels::count;
     inline static constexpr auto paramProcessingInputId = "process-input";
+    inline static constexpr auto paramOutputMuteId = "out-mute";
     inline static constexpr auto paramSoloInstanceId = "solo-ins";
     inline static constexpr auto paramSoloChannelId = "solo-ch";
     static juce::StringArray getProcessingInputChoices();
@@ -84,6 +86,7 @@ public:
         ActiveModule::dyn
     };
     explicit AvaAudioProcessor(bool routingInstance = false);
+    bool isRestoringState() const noexcept { return restoringModel.load(std::memory_order_acquire); }
     uint64_t getLinkSessionId() const noexcept { return linkSessionId; }
     ~AvaAudioProcessor() override;
 
@@ -140,6 +143,7 @@ public:
     int addModuleCopy(size_t rangeIndex, int sourceUid);
     bool deleteModuleSlot(size_t rangeIndex, int uid);
     bool setModuleSlotEnabled(size_t rangeIndex, int uid, bool enabled);
+    bool isModuleSlotBypassed(size_t rangeIndex, int uid) const;
     bool moveModuleSlots(size_t rangeIndex, const std::vector<int>& order);
     bool selectModuleCopy(int uid);
     int getSelectedModuleCopy() const noexcept { return selectedModuleCopy.load(); }
@@ -152,6 +156,7 @@ public:
     EqlModuleProcessor* getCopiedEqlProcessor(int uid, size_t band) noexcept;
     bool isModuleHiddenForRange(size_t rangeIndex, int moduleId) const noexcept;
     void setModuleHiddenForRange(size_t rangeIndex, int moduleId, bool hidden);
+    bool setModuleSlotShown(size_t rangeIndex, int uid, bool shown);
     juce::RangedAudioParameter* getBandModuleVisibilityParameter(size_t rangeIndex, int moduleId) const noexcept;
     void setModuleOrder(const module_order::Order& order);
     unsigned getModuleBypassMask() const noexcept;
@@ -285,6 +290,8 @@ private:
     static ActiveModule moduleFromStateId(const juce::String& moduleId);
     ava::crossover::BufferRouter::RangeLatencies getModuleChainRangeLatencies(unsigned bypassMask = ~0u) const noexcept;
     void refreshModuleBypasses();
+    void registerModuleSlotBypassTarget(size_t band, int uid, int type);
+    void assignNewModuleBypassToHostSlot(size_t band, int uid);
     FilterParameterDomain getFilterParameterDomain(const juce::String& id) const;
     void remapEqlFilterTargets(size_t band, const std::array<int, 64>& mapping, int copyUid = -1);
     int getModuleChainLatencySamples() const noexcept;
@@ -297,7 +304,7 @@ private:
     void clearLoadedModuleStateListeners();
     void writeStateInformation(juce::MemoryBlock& destData, bool includeABCompareState);
     bool restoreStateInformation(const void* data, int sizeInBytes,
-                                 bool includeABCompareState, bool preserveHostEditorView);
+                                 bool includeABCompareState);
     void parameterChanged(const juce::String& parameterID, float newValue) override;
     void valueTreePropertyChanged(juce::ValueTree& treeWhosePropertyHasChanged,
                                   const juce::Identifier& property) override;
@@ -306,8 +313,11 @@ private:
     void ensureActiveCrossoverRangeCount(size_t rangeCount);
     void recordClippedBlock(const juce::AudioBuffer<float>& buffer) noexcept;
     void processOwnBlock(juce::AudioBuffer<float>&, const juce::AudioBuffer<float>* routingInputs);
-    void processChannelBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&);
+    unsigned processChannelBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&,
+                                 juce::AudioBuffer<float>* routingAndOutput = nullptr);
     unsigned processOwnChannels(juce::AudioBuffer<float>&);
+    static void writeOutputChannels(juce::AudioBuffer<float>&, unsigned channelMask, bool muted);
+    void applyInstanceMute(juce::AudioBuffer<float>&, unsigned channelMask);
     void delayUnselectedChannels(juce::AudioBuffer<float>&, unsigned selectedMask, int latency);
     struct AudioBuffers {
         void prepare(double sampleRate, int blockSize, int maximumLatency);
@@ -317,7 +327,8 @@ private:
         unsigned lastProcessingMask = 0, lastModuleBypassMask = 0;
         ava::crossover::Settings settings;
         int inputChoice = 0;
-        bool globalBypass = false, instanceBypass = false, instanceMuted = false;
+        bool globalBypass = false, instanceBypass = false, instanceMuted = false, outputMuted = false;
+        float instanceMuteGain = -1.0f;
         unsigned bypassMask = 0;
         module_order::Order order = module_order::defaultOrder;
     };
@@ -404,10 +415,15 @@ private:
     std::atomic<float>* globalBypassParam = nullptr;
     std::atomic<float>* bypassCompensationParam = nullptr;
     std::atomic<float>* instanceMuteParam = nullptr;
+    std::atomic<float>* outputMuteParam = nullptr;
     std::atomic<float>* crossoverActiveSplitCountParam = nullptr;
     std::array<std::atomic<float>*, ava::crossover::BufferRouter::numSplits> crossoverSplitFrequencyParams {};
     std::array<std::atomic<float>*, ava::crossover::BufferRouter::numRanges> crossoverSoloParams {};
     std::atomic<bool> manualSoloStatePending { false };
+    // -1: restored/default flags; -2: no solo; 0: owner; positive: routing node.
+    std::array<std::atomic<int>, 2> requestedSolo {{-1, -1}};
+    std::atomic<bool> soloStatePending { false };
+    static thread_local AvaAudioProcessor* updatingSoloOwner;
     bool synchronisingHostSlots = false; // Protected by processingLock.
     std::atomic<bool> applyingHostSlotValue { false }; // Automation -> module propagation.
     std::array<juce::String, hostAutomationSlotCount> hostSlotParameterIds {};
@@ -439,8 +455,9 @@ private:
     void saveModuleCopies(juce::ValueTree& state) const;
     bool restoreModuleCopies(const juce::ValueTree& state);
     std::shared_ptr<ModuleCopy> makeModuleCopy(int type,int range,int uid,int serial);
-    static constexpr const char* moduleStackStateKey = "ava.module_stacks_v1";
     std::array<std::unique_ptr<juce::RangedAudioParameter>, 3> moduleBypassTargets;
+    // One stable, automatable BP proxy per MODULES tile, including module copies.
+    std::map<std::pair<size_t, int>, std::unique_ptr<juce::RangedAudioParameter>> moduleSlotBypassTargets;
     std::atomic<unsigned> moduleBypasses { 0 };
     std::array<std::atomic<uint64_t>, ava::crossover::BufferRouter::numRanges> bandModuleOrders {};
     // Local EQL/DYN visibility is independent for each crossover range.

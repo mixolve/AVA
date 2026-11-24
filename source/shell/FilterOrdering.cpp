@@ -15,8 +15,6 @@ void AvaAudioProcessorEditor::selectFilterSection(const int filterIndex)
 
     if (filterSections[static_cast<size_t>(filterIndex)] != nullptr)
     {
-        // The EQL editor now uses one shared grid; filter bodies cover the
-        // entire module, so scroll to the selected filter's actual controls.
         const auto* section = filterSections[size_t(filterIndex)].get();
         const auto sectionBounds = moduleContent.getLocalArea(section->typeControl.get(),
             section->typeControl->getLocalBounds());

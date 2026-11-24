@@ -19,16 +19,20 @@ struct Slot {
     int uid = -1;
     int type = 0;
     int created = 1;
-    bool enabled = true;
+    bool enabled = true; // Independent BP (false = bypassed)
+    bool shown = false;  // MODULES activation and editor visibility
 };
+// Only a switched-on MODULES tile that is not BP-bypassed may run DSP.
+// Collapsing the MODULES section itself does not change this state.
+inline bool processingActive(const Slot& slot) noexcept { return slot.shown && slot.enabled; }
 using Order = std::vector<Slot>;
-template<class LegacyOrder>
-inline Order initial(const LegacyOrder& order) {
+template<class ModuleOrder>
+inline Order initial(const ModuleOrder& order) {
     Order result;
     result.reserve(typeCount);
-    for (auto type : order) result.push_back({originalUid(type), type, 1, true});
+    for (auto type : order) result.push_back({originalUid(type), type, 1, true, false});
     for (int type=originalCount; type<typeCount; ++type)
-        result.push_back({originalUid(type),type,1,true});
+        result.push_back({originalUid(type),type,1,true,false});
     return result;
 }
 inline const Slot* find(const Order& order, int uid) {
@@ -40,12 +44,13 @@ inline Slot* find(Order& order,int uid) {
     return it == order.end() ? nullptr : &*it;
 }
 inline bool insertCopy(Order& order,int sourceUid,int newUid,int serial) {
-    if (order.size() >= maximumSlotsPerBand || find(order,newUid) != nullptr) return false;
+    if (newUid < originalCount || order.size() >= maximumSlotsPerBand
+        || find(order, newUid) != nullptr) return false;
     const auto it = std::find_if(order.begin(),order.end(),[sourceUid](const Slot& s){return s.uid==sourceUid;});
     if (it == order.end() || serial < 2) return false;
     const auto insertion = static_cast<size_t>(std::distance(order.begin(),it));
     const int type = it->type;
-    order.insert(order.begin()+std::ptrdiff_t(insertion+1), Slot{newUid,type,serial,true});
+    order.insert(order.begin()+std::ptrdiff_t(insertion+1), Slot{newUid,type,serial,true,true});
     return true;
 }
 inline bool remove(Order& order,int uid) {
@@ -55,6 +60,9 @@ inline bool remove(Order& order,int uid) {
 }
 inline bool reorder(Order& order,const std::vector<int>& ids) {
     if (ids.size()!=order.size())return false;
+    // Ignore an unchanged order: it must not trigger a render-graph rebuild.
+    if (std::equal(ids.begin(), ids.end(), order.begin(),
+                   [](int uid, const Slot& slot) { return uid == slot.uid; })) return false;
     Order changed;changed.reserve(order.size());
     for(int uid:ids) {
         const auto* source=find(order,uid);

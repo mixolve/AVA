@@ -25,7 +25,6 @@ void paintUiFrame(juce::Graphics& graphics, juce::Rectangle<float> bounds,
 
 bool isManualControlSelected(const juce::Component& component);
 
-
 void paintIndicator(juce::Graphics& graphics, juce::Rectangle<float> bounds, juce::Colour colour, float radius = defaultUiCornerRadius);
 
 std::vector<juce::Component*> getForegroundOccluders(juce::Component& root);
@@ -43,7 +42,8 @@ juce::Rectangle<int> layoutControlGrid(const juce::Component& owner, juce::Recta
                                         const std::vector<ControlGridCell>& cells);
 
 inline constexpr int squareControlSize = 80;
-inline constexpr int standardControlTextZoneHeight = 44; // 1px border + 42px interior + 1px border
+int getPinnedRoutingTileHeight(const juce::Component&) noexcept;
+inline constexpr int standardControlTextZoneHeight = 44;
 inline constexpr int maximumStoredEditorDimension = 4096;
 inline constexpr int rowHeight = 30;
 inline constexpr float uiFontSize = 22.0f;
@@ -51,8 +51,6 @@ inline constexpr float uiFontSize = 22.0f;
 inline const auto uiPanelBackground = juce::Colour(0xff666666);
 inline const auto uiWhite = juce::Colour(0xffffffff);
 inline const auto uiIndicatorActive = juce::Colour(0xffbbbbbb);
-// Idle indicators use the same light gray as other idle controls.
-// Disabled/unavailable indicators are darker; pressed/selected actions are white.
 inline const auto uiIndicatorInactive = juce::Colour(0xffbbbbbb);
 inline const auto uiIndicatorDisabled = juce::Colour(0xff888888);
 inline const auto uiGreyLight = juce::Colour(0xffbbbbbb);
@@ -73,8 +71,6 @@ juce::String visibleControlCaption(const juce::String& text);
 bool drawSquareControlText(juce::Graphics& graphics, const juce::String& text,
                            juce::Rectangle<int> bounds,
                            juce::Justification justification = juce::Justification::centred);
-// Read-only status tiles may need more than the two lines used by parameter controls.
-// Fit every line uniformly so the last line remains visible at compact zoom levels.
 void drawMultilineStatusText(juce::Graphics& graphics, const juce::String& text,
                              juce::Rectangle<int> bounds);
 int getTextPixelWidth(const juce::Font& font, const juce::String& text);

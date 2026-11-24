@@ -5,7 +5,6 @@
 
 #include <utility>
 
-
 ParameterControl::ParameterControl(juce::AudioProcessorValueTreeState& state,
                                    const juce::String& parameterIdIn,
                                    const juce::String& titleTextIn,
@@ -71,7 +70,6 @@ ParameterControl::ParameterControl(juce::AudioProcessorValueTreeState& state,
     valueBox->setIdleTextProvider([this] { return titleText; });
     rebind(state);
 }
-
 
 int ParameterControl::getPreferredHeight() const noexcept
 {
@@ -379,12 +377,9 @@ bool AccessoryButton::isActive() const
 
 void AccessoryButton::paintButton(juce::Graphics& graphics, bool hovered, bool pressed)
 {
-    // The same filled bottom-row text button as the multi-action
-    // buttons, aligned with the host-slot and bypass indicators (2px gaps).
     const auto* field = findParentComponentOfClass<ParameterField>();
     juce::ignoreUnused(field);
     const auto textBounds = getLocalBounds();
-    // Distinguish disabled (#888888), idle (#BBBBBB) and active (#FFFFFF).
     graphics.setColour(!isEnabled() ? uiIndicatorDisabled : (isActive() || pressed) ? uiWhite : uiIndicatorInactive);
     graphics.fillRect(textBounds);
     const auto inverted = isEnabled() && !pressed && isHoverInversionReady(*this, hovered && isEnabled(), "indicator");

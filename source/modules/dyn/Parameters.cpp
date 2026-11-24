@@ -48,10 +48,6 @@ inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
     { ParameterSlot::spectralSlope, "SPECTRAL / SLOPE" },
     { ParameterSlot::morph, "PROCESSOR / MORPH" },
     { ParameterSlot::ratio, "PROCESSOR / RATIO" },
-    // Host-index placeholders; no DYN controls or DSP functions use these.
-    { ParameterSlot::legacyProgression, "LEGACY / UNUSED 1" },
-    { ParameterSlot::legacyProgressionSpan, "LEGACY / UNUSED 2" },
-    { ParameterSlot::legacyCorrProgressionSpan, "LEGACY / UNUSED 3" },
     { ParameterSlot::compKnee, "PROCESSOR / COMP-KNEE" },
     { ParameterSlot::lookahead, "PROCESSOR / LOOKAHEAD" },
     { ParameterSlot::tensionFloor, "PROCESSOR / TENSION-FLOOR" },
@@ -93,7 +89,6 @@ inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
     { ParameterSlot::releaseRmsNote, "PROCESSOR / RELEASE-RMS NOTE" },
     { ParameterSlot::feedback, "PROCESSOR / FWD/FB" },
     { ParameterSlot::clipKnee, "PROCESSOR / CLIP-KNEE" },
-    // Append new host automation parameters, never shift existing indices.
     { ParameterSlot::lookaheadCurve, "PROCESSOR / LOOKAHEAD-CURVE" },
     { ParameterSlot::clipEql, "PROCESSOR / CLIP-EQL" },
 });
@@ -132,7 +127,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 
         for (const auto& entry : parameterOrder)
         {
-            // The embedded EQL switch is appended after the bypass groups.
             if (entry.slot == ParameterSlot::clipEql) continue;
             const auto& spec = parameterSpecs[toIndex(entry.slot)];
             const auto parameterId = makeRangeParameterId(rangeIndex, spec.suffix);
@@ -154,7 +148,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                 group->addChild(makeFloatParameter(
                     parameterId, parameterName,
                     { spec.min, spec.max, spec.step }, spec.defaultValue,
-                    [isTransustGain = entry.slot == ParameterSlot::transientGain || entry.slot == ParameterSlot::sustainGain,
+                    [isTransientSustainGain = entry.slot == ParameterSlot::transientGain || entry.slot == ParameterSlot::sustainGain,
                      isMorph = entry.slot == ParameterSlot::morph,
                      isImpact = entry.slot == ParameterSlot::corrImpact,
                      isCorrSlope = entry.slot == ParameterSlot::corrSlope,
@@ -167,7 +161,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                      isAttackCurve = entry.slot == ParameterSlot::attackCurve,
                      isCurve = entry.slot == ParameterSlot::releaseCurve || entry.slot == ParameterSlot::attackCurve || entry.slot == ParameterSlot::lookaheadCurve] (float value) -> ValueText
                     {
-                        if (isTransustGain && ava::modules::dsp::isGainMuted(value)) return ValueText::named("MUTED", true);
+                        if (isTransientSustainGain && ava::modules::dsp::isGainMuted(value)) return ValueText::named("MUTED", true);
                         if (isPeakRms && value <= 0.0f) return ValueText::named("PEAK");
                         if (isPeakRms && value >= 100.0f) return ValueText::named("RMS");
                         if (isCorrSlope) return ava::modules::parameters::formatFixedDecimalValue(value, 2);
@@ -186,7 +180,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 
                         if (isFeedback && value == 0.0f) return ValueText::named("FWD");
                         if (isFeedback && value == 100.0f) return ValueText::named("FB");
-
 
                         if (isMix && value == 0.0f)
                             return ValueText::named("DRY");
@@ -221,15 +214,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         layout.add(std::move(group));
     }
 
-    // The additional internal control has its own persisted parameter, but is
-    // not a separate tile on the DYN page. Add it after the existing parameter
-    // and bypass layouts so old automation parameter indices stay stable.
     for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
     {
         auto group = std::make_unique<juce::AudioProcessorParameterGroup>(
             makeRangeGroupId(rangeIndex) + "-internal",
             makeRangeGroupName(rangeIndex) + " / INTERNAL", " | ");
-        // Keep the v27 ID for saved sessions and host automation.
         group->addChild(makeBoolParameter(
             makeRangeParameterId(rangeIndex, "clip-qual"),
             makeRangeHostName(rangeIndex, "PROCESSOR / CLIP-EQL"), false));
@@ -262,23 +251,22 @@ ControlPolicy getControlPolicy(const juce::AudioProcessorValueTreeState& state, 
         "processor-attack-mode", "processor-attack", "processor-release-peak-mode", "processor-release-peak", "processor-release-rms-mode", "processor-release-rms" };
     result.dependencies = dependencies;
     const auto spectral = read("domain") >= 0.5f;
-    const auto transust = !spectral && read("mode") >= 0.5f;
+    const auto transientSustain = !spectral && read("mode") >= 0.5f;
     const auto correlation = spectral && read("mode") >= 0.5f;
     const auto spectralOnly = suffix == "fft-size" || suffix == "fft-overlap" || suffix == "spectral-slope";
     const auto timeOnly = suffix == "morph" || suffix == "clip-knee" || suffix == "feedback";
-    const auto transustOnly = suffix == "trans-gain" || suffix == "sust-gain" || suffix == "retrigger";
-    const auto legacy = suffix == "progression" || suffix == "prog-span" || suffix == "corr-prog-span";
-    result.visible = !legacy && (!spectralOnly || spectral) && (!timeOnly || (!spectral && !transust))
-        && (!transustOnly || transust);
-    static const juce::StringArray compClipParameters { "morph", "clip-knee", "ratio", "feedback", "range", "range-curve", "tension", "tension-floor", "tension-hyst" };
+    const auto transientSustainOnly = suffix == "trans-gain" || suffix == "sust-gain" || suffix == "retrigger";
+    result.visible = (!spectralOnly || spectral) && (!timeOnly || (!spectral && !transientSustain))
+        && (!transientSustainOnly || transientSustain);
+    // TENSION is also available in TRANS/SUST. Only COMP/CLIP-specific
+    // processing controls remain disabled in TRANS/SUST.
+    static const juce::StringArray compClipParameters { "morph", "clip-knee", "ratio", "feedback", "range", "range-curve" };
     const auto compClipOnly = compClipParameters.contains(suffix);
-    result.enabled = !legacy && (!spectralOnly || spectral) && (!timeOnly || !spectral)
-        && (!transustOnly || transust) && (!transust || !compClipOnly)
+    result.enabled = (!spectralOnly || spectral) && (!timeOnly || !spectral)
+        && (!transientSustainOnly || transientSustain) && (!transientSustain || !compClipOnly)
         && (!suffix.startsWith("corr-") || correlation);
     if (suffix == "mode")
     {
-        // MODE keeps one normal-sized cell. The selected mode appears only
-        // on hover, through ChoiceControl's existing value presentation.
         result.cellSpan = 1;
         result.title = "MODE";
         result.choices = spectral ? juce::StringArray { "FREQ", "CORR" }
@@ -289,10 +277,12 @@ ControlPolicy getControlPolicy(const juce::AudioProcessorValueTreeState& state, 
         const auto pureClip = read("domain") < 0.5f && read("mode") < 0.5f && read("morph") == 0.0f;
         if (suffix == "tension-floor" || suffix == "corr-tension-floor" || suffix == "tension-hyst")
             return finish(std::abs(read("tension")) > 0.0f);
+        // LOOKAHEAD is independent of MORPH, TENSION and ADAPTIVE.
+        // Keep the control enabled in every processor mode, including pure CLIPPER.
+        if (suffix == "lookahead")
+            return result;
         if (suffix == "lookahead-curve")
-            return finish((spectral || transust || !pureClip) && read("lookahead") > 0.0f);
-        if (pureClip && suffix == "lookahead")
-            return finish(read("adaptive") > 0.0f);
+            return finish(read("lookahead") > 0.0f);
         const auto envelopeActive = !pureClip;
         const auto detectorActive = envelopeActive || std::abs(read("tension")) > 0.0f;
         const auto peakActive = read("peak-rms") < 100.0f;
@@ -315,11 +305,11 @@ ControlPolicy getControlPolicy(const juce::AudioProcessorValueTreeState& state, 
     if (metadata.modeSuffix[0] != '\0')
     {
         const auto compressor = read("domain") >= 0.5f || read("morph") > 0.0f;
-        return finish(transust || compressor || (suffix != "processor-attack" && std::abs(read("tension")) > 0.0f));
+        return finish(transientSustain || compressor || (suffix != "processor-attack" && std::abs(read("tension")) > 0.0f));
     }
     static const juce::StringArray morphDependencies { "feedback", "clip-knee", "ratio", "comp-knee", "corr-knee", "attack-curve" };
     const auto morphDependent = morphDependencies.contains(suffix);
-    if (morphDependent && !spectral && !transust) return finish(suffix == "clip-knee" ? read("morph") < 100.0f : read("morph") > 0.0f);
+    if (morphDependent && !spectral && !transientSustain) return finish(suffix == "clip-knee" ? read("morph") < 100.0f : read("morph") > 0.0f);
     if (suffix == "threshold" || suffix == "corr-threshold") return finish(read("adaptive") < 100.0f);
     if (suffix == "range-curve") return finish(read("range") > 0.0f);
     if (suffix == "adap-time" || suffix == "offset" || suffix == "corr-offset") return finish(read("adaptive") > 0.0f);

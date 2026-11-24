@@ -63,7 +63,6 @@ bool pasteEqlFilterFromClipboard(juce::AudioProcessorValueTreeState& destination
         if (!std::isfinite(scaled)) return false;
         normalised[index] = juce::jlimit(0.0f, 1.0f, scaled);
     }
-    // Validate the complete clipboard and destination before changing anything.
     for (size_t index = 0; index < targets.size(); ++index)
     {
         targets[index]->beginChangeGesture();

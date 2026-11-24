@@ -1,4 +1,4 @@
-#include "VarispeedEngine.h"
+#include "Engine.h"
 #include <CDSPResampler.h>
 #include <atomic>
 #include <chrono>
@@ -294,7 +294,6 @@ std::array<double, 2> VarispeedEngine::process(double left, double right) noexce
     const auto peak = std::max(std::abs(left), std::abs(right));
     detectorEnvelope = peak >= detectorEnvelope ? peak
         : peak + (detectorEnvelope - peak) * detectorReleaseCoefficient;
-    // A small fixed hysteresis prevents chatter right at the threshold.
     constexpr double hysteresisGain = 0.9885530946569389; // -0.1 dB
     const auto aboveThreshold = detectorEnvelope >= thresholdLevel
         || (wasAboveThreshold && detectorEnvelope >= thresholdLevel * hysteresisGain);

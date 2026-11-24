@@ -41,11 +41,12 @@ public:
     }
     bool isSpectralRange(size_t rangeIndex) const noexcept;
     bool isCorrelationRange(size_t rangeIndex) const noexcept;
-    bool isTransustRange(size_t rangeIndex) const noexcept;
+    bool isTransientSustainRange(size_t rangeIndex) const noexcept;
     void* getDomainEditorIdentity(size_t rangeIndex) const noexcept;
     void markParametersDirty() noexcept;
     void setProcessingInputChannel(int choice) noexcept;
     bool isSidechainChannelAvailable(int choice) const;
+    bool listensToOtherInput(size_t rangeIndex, int inputChoice) const noexcept;
 
 private:
     static constexpr size_t numRanges = dyn::dsp::ProcessorBank::numRanges;
@@ -67,7 +68,7 @@ private:
     int processingInputChannel = 0;
     std::array<int, numRanges> processingSidechainChannel {};
     std::array<bool, numRanges> processingSpectral {};
-    std::array<bool, numRanges> processingTransust {};
+    std::array<bool, numRanges> processingTransientSustain {};
     std::array<bool, numRanges> processingCorrelation {};
     double spectralSampleRate = 0.0;
     int spectralBlockSize = 0;

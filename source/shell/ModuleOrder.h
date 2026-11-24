@@ -17,9 +17,9 @@ inline constexpr int eql = 12, dyn = 13, sibil = 14;
 inline constexpr bool isChain(int type) { return (type >= 0 && type < eql) || type == sibil; }
 inline constexpr int chainIndex(int type) { return type == sibil ? 12 : type; }
 inline constexpr int fromChain(int index) { return index == 12 ? sibil : index; }
-// Per-band enabled state is represented by a hidden bit for EQL and DYN.
-// Both modules start disabled in new bands.
-inline constexpr unsigned defaultHiddenMask = 3u;
+// Per-band EQL/DYN hidden bits represent DSP bypass, not MODULES visibility.
+// New projects start unbypassed; saved project flags are still restored.
+inline constexpr unsigned defaultHiddenMask = 0u;
 using Order = std::array<int, 14>;
 inline constexpr Order defaultOrder {eql,0,1,2,3,4,5,6,7,8,9,10,11,dyn};
 // Each BAND has its own independently saved module order.

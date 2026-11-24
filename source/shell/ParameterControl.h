@@ -70,7 +70,6 @@ private:
     juce::ListenerList<Listener> listeners;
 };
 
-// A compact, independently clickable text button for the bottom row.
 class AccessoryButton final : public juce::Button, private ParameterControl::Listener
 {
 public:

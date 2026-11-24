@@ -34,6 +34,9 @@ public:
     int getBlockLatencySamples(blocks::Id id) const noexcept;
     int getShiftLatencySamples() const noexcept { return shift.getShiftLatencySamples(); }
     int getMaximumVarispeedLatencySamples() const noexcept { return varispeed.getMaximumLatencySamples(); }
+    void beginSibilBlock(std::optional<int64_t> sample,std::optional<bool> playing,int length) noexcept {
+        sibil.beginBlock(sample,playing,length);
+    }
     void beginVarispeedBlock(std::optional<int64_t> sample,std::optional<bool> playing=std::nullopt,bool offline=false) noexcept {
         varispeed.beginBlock(sample,playing,offline);
     }

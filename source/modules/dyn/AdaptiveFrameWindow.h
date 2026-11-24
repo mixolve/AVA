@@ -17,7 +17,6 @@ public:
         double correlationWeight = 0.0;
     };
 
-    // Called only from prepare(), never from the audio callback.
     void prepare(const std::size_t maximumFrames)
     {
         frames.assign(std::max<std::size_t>(1, maximumFrames), {});

@@ -104,7 +104,7 @@ enum class ParameterSlot : size_t
     shiftSoloPitched,
     shiftGainOrigBypass,
     shiftGainPitchedBypass,
-    sibilLevel, sibilBrightness, sibilNoise, sibilWindow, sibilFade, sibilGainS, sibilGainRest, sibilSoloS, sibilSoloRest, sibilBypass, sibilHidden, sibilRange, sibilMin, sibilMax, sibilPre, sibilPost,
+    sibilLevel, sibilBrightness, sibilNoise, sibilFade, sibilGainS, sibilGainRest, sibilSoloS, sibilSoloRest, sibilBypass, sibilHidden, sibilEdgeDetect,
     count
 };
 
@@ -127,7 +127,6 @@ struct ParameterSpec
     ControlMetadata control {};
 };
 
-
 struct HostLabel
 {
     const char* block;
@@ -145,4 +144,4 @@ constexpr size_t toIndex(const ParameterSlot slot) noexcept
 {
     return static_cast<size_t>(slot);
 }
-} // namespace ava::modules::chain::parameters
+}

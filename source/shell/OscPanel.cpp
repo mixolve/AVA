@@ -4,7 +4,6 @@
 
 #include <utility>
 
-
 OscPanel::OscPanel(Actions actionsIn) : actions(std::move(actionsIn))
 {
     getProperties().set("emptyEditorBackground",true);

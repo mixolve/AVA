@@ -72,6 +72,18 @@ void CrossoverModuleComponent::refreshExternalState()
         && pageViewport.getViewPositionY() != restoredPageScrollY)
         saveUiState();
 
+    // MODULES reuses this editor for CHAIN and DYN. Their UI state is
+    // already bound to parameters; refreshing navigation and the viewport for
+    // every knob tick reflows the page while JUCE is processing its drag.
+    // Refresh only dependent control policies here. A genuine visibility
+    // change still triggers the page's own resized() path.
+    if (config.moduleKey == "chain" || config.moduleKey == "dyn")
+    {
+        for (auto& page : rangePages)
+            if (page != nullptr) page->refreshExternalState();
+        return;
+    }
+
     synchroniseManualSoloMaskFromParameters();
     if(config.moduleKey == "chain") refreshRangeControls();
 

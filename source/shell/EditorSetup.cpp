@@ -1,4 +1,5 @@
 #include "EditorSetup.h"
+#include <BinaryData.h>
 
 namespace shell_setup_support
 {

@@ -1,11 +1,10 @@
-#include "ShiftEngine.h"
+#include "Engine.h"
 #include "../eql/CutDesign.h"
 #include <rubberband/RubberBandStretcher.h>
 #include <algorithm>
 #include <cmath>
 namespace ava::modules::chain::dsp {
 namespace {
-// Adapter to EQL's shared coefficient designer, without a parameter processor.
 struct CutCoefficients {
     struct Section {
         std::array<double, 3> b {1.0, 0.0, 0.0};
@@ -108,9 +107,6 @@ void ShiftEngine::prepare(double sampleRate)
             Stretcher::OptionThreadingNever | Stretcher::OptionChannelsApart |
             windows[window] | Stretcher::OptionPitchHighConsistency);
         engine->setMaxProcessSize(blockSize);
-        // R2 preallocates the common FFT sizes. Visit all supported ratios and
-        // modes here as well, including smaller resampling windows, so option
-        // automation never has to construct an FFT or grow a buffer.
         for (const auto mode : pitchModes) {
             engine->setPitchOption(mode);
             for (int semi = -24; semi <= 24; ++semi) {
@@ -288,7 +284,6 @@ std::array<double, 2> ShiftEngine::process(double left, double right) noexcept
                 branches[branch] = previous[branch] + mix * (branches[branch] - previous[branch]);
         }
         for (size_t branch = 0; branch < 2; ++branch) branches[branch] *= gains[branch];
-        // Both SOLO switches enabled means both branches are audible.
         if (options.soloOrig && options.soloPitched)
             result[channel] = branches[0] + branches[1];
         else if (options.soloOrig)

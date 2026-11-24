@@ -27,7 +27,6 @@ ControlSearchPanel::ControlSearchPanel() : input(*this), resultsCanvas(*this)
     input.setIndents(0, 0);
     input.setJustification(juce::Justification::centred);
     input.setInputFilter(new UppercaseEditorInputFilter(), true);
-    // No placeholder: both empty caret and actual text occupy the centre.
     input.setColour(juce::TextEditor::backgroundColourId, uiWhite);
     // Native text is transparent, but the native highlight and caret remain
     // untouched. Only our overlay draws the visible ink, at the correct Y.
@@ -195,7 +194,6 @@ void ControlSearchPanel::selectRow(int index)
 {
     if (!juce::isPositiveAndBelow(index, int(results.size()))) return;
     selectedRow = index;
-    // Keep the active result in view, even with hundreds of matches.
     const auto rowTop = index * (controlBlockHeaderHeight + rowGap);
     const auto rowBottom = rowTop + controlBlockHeaderHeight;
     const auto viewTop = listViewport.getViewPositionY();
@@ -250,7 +248,6 @@ void ControlSearchPanel::updateQuery()
         else
             input.setCaretPosition(juce::jlimit(0, length, caret));
     }
-    // Editing the query is an explicit new search, even after a result click.
     resultsDismissed = false;
     refreshMatches();
 }
@@ -306,7 +303,6 @@ void ControlSearchPanel::paint(juce::Graphics& g)
     // they can never bleed through a partially repainted search frame.
     g.setColour(uiPanelBackground);
     g.fillRect(frame);
-    // The field fills the complete header, including gaps behind the glyphs.
     g.setColour(uiWhite);
     g.fillRect(frame.withHeight(controlBlockHeaderHeight));
 }
@@ -314,8 +310,6 @@ void ControlSearchPanel::paint(juce::Graphics& g)
 void ControlSearchPanel::paintOverChildren(juce::Graphics& g)
 {
     if (frame.isEmpty()) return;
-    // When results are visible, draw only the result list frame below the
-    // borderless search field, preserving the input's original dimensions.
     if (getHeight() > controlBlockHeaderHeight)
     {
         const auto resultsFrame = frame.withTrimmedTop(controlBlockHeaderHeight);
@@ -326,8 +320,6 @@ void ControlSearchPanel::paintOverChildren(juce::Graphics& g)
         g.fillRect(resultsFrame.withLeft(resultsFrame.getRight() - thickness));
         g.fillRect(resultsFrame.withTop(resultsFrame.getBottom() - thickness));
     }
-    // The search field is borderless; TextEditor itself paints the white fill.
-    // Keep the result-list frame below it, without outlining the search input.
 }
 
 int ControlSearchPanel::ResultCanvas::getContentHeight() const noexcept
@@ -352,7 +344,7 @@ void ControlSearchPanel::ResultCanvas::mouseMove(const juce::MouseEvent& e)
     hoveredRow = selected;
     shownHoveredRow = -1;
     const auto generation = ++hoverGeneration;
-    repaint(); // Remove the previous hover immediately.
+    repaint();
     if (selected >= 0)
         juce::Timer::callAfterDelay(50,
             [safe = juce::Component::SafePointer<ResultCanvas>(this), selected, generation]
@@ -394,7 +386,6 @@ void ControlSearchPanel::ResultCanvas::mouseUp(const juce::MouseEvent& e)
 void ControlSearchPanel::ResultCanvas::paint(juce::Graphics& g)
 {
     const auto count = static_cast<int>(owner.results.size());
-    // Paint actual matches only; no empty box when there are no matches.
     for (int i = 0; i < count; ++i)
     {
         const auto bounds = juce::Rectangle<int>(0, i * (controlBlockHeaderHeight + rowGap),

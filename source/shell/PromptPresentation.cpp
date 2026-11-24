@@ -42,10 +42,23 @@ void AvaAudioProcessorEditor::showTextPrompt(const juce::String& currentText,
     auto* promptComponent = prompt.get();
     textPromptOverlay = std::move(prompt);
     addAndMakeVisible(*textPromptOverlay);
-    if (anchorComponent != nullptr) promptComponent->followAnchor(*anchorComponent);
-    resized();
+    const bool anchoredNumericEdit = anchorComponent != nullptr && numericControl != nullptr
+        && !bool(textPromptOverlay->getProperties().getWithDefault("hidesModuleContent", false));
+    if (anchoredNumericEdit)
+    {
+        // The numeric prompt overlays an existing control; opening it must not
+        // reflow MODULES and reparent its live parameter-bound rows mid-click.
+        textPromptOverlay->setBounds(getLocalBounds());
+        promptComponent->followAnchor(*anchorComponent);
+    }
+    else
+    {
+        if (anchorComponent != nullptr) promptComponent->followAnchor(*anchorComponent);
+        resized();
+    }
 
-    if (filterViewport.isVisible())
+    // Without a reflow the viewport is already at its original position.
+    if (!anchoredNumericEdit && filterViewport.isVisible())
     {
         const auto maxOffset = juce::jmax(0, getActiveFilterContentHeight() - filterViewport.getHeight());
         filterViewport.setViewPosition(0, juce::jlimit(0, maxOffset, preservedFilterScrollY));
@@ -188,7 +201,6 @@ void AvaAudioProcessorEditor::ensureModuleList()
     const auto buildItems = [this,range]() -> std::vector<ModuleListItem>
     {
         std::vector<ModuleListItem> items;
-        auto* processor = audioProcessor.getBlockChainProcessor();
         const auto slots = audioProcessor.getModuleStackForRange(range);
         std::array<int, ava::module_stack::typeCount> instancesByType {};
         for (const auto& slot : slots)
@@ -200,21 +212,7 @@ void AvaAudioProcessorEditor::ensureModuleList()
             item.id=slot.uid;
             item.name=module_order::descriptions[size_t(slot.type)].name;
             item.serial=ava::module_stack::displayOrdinal(slots, slot.uid);
-            // The original modules also have per-block hidden parameters. Display
-            // their EFFECTIVE state, not the separate cached slot flag.
-            item.enabled=slot.enabled;
-            if (slot.uid < ava::module_stack::originalCount)
-            {
-                if (module_order::isChain(slot.type) && processor != nullptr)
-                {
-                    const auto parameterId=ava::crossover::parameters::makeRangeParameterId(range,
-                        ava::modules::chain::blocks::descriptions[size_t(module_order::chainIndex(slot.type))].hiddenSuffix);
-                    if (auto* hidden=processor->getValueTreeState().getParameter(parameterId))
-                        item.enabled = item.enabled && hidden->getValue() < 0.5f;
-                }
-                else if (slot.type == module_order::eql || slot.type == module_order::dyn)
-                    item.enabled = item.enabled && !audioProcessor.isModuleHiddenForRange(range, slot.type);
-            }
+            item.enabled = slot.shown;
             item.canDelete = instancesByType[size_t(slot.type)] > 1;
             items.push_back(std::move(item));
         }
@@ -277,23 +275,7 @@ void AvaAudioProcessorEditor::ensureModuleList()
             const auto slots=safe->audioProcessor.getModuleStackForRange(range);
             const auto* slot=ava::module_stack::find(slots,id);
             if(slot==nullptr)return;
-            bool effectiveEnabled=slot->enabled;
-            if (id < ava::module_stack::originalCount)
-            {
-                if (module_order::isChain(slot->type))
-                {
-                    if (auto* chain=safe->audioProcessor.getBlockChainProcessor())
-                    {
-                        const auto parameterId=ava::crossover::parameters::makeRangeParameterId(range,
-                            ava::modules::chain::blocks::descriptions[size_t(module_order::chainIndex(slot->type))].hiddenSuffix);
-                        if (auto* hidden=chain->getValueTreeState().getParameter(parameterId))
-                            effectiveEnabled=effectiveEnabled && hidden->getValue() < 0.5f;
-                    }
-                }
-                else effectiveEnabled=effectiveEnabled
-                    && !safe->audioProcessor.isModuleHiddenForRange(range,slot->type);
-            }
-            if(safe->audioProcessor.setModuleSlotEnabled(range,id,!effectiveEnabled))
+            if(safe->audioProcessor.setModuleSlotShown(range,id,!slot->shown))
                 safe->scheduleHistorySnapshot();
         },
         [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)](int id)

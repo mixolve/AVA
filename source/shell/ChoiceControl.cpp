@@ -110,8 +110,6 @@ void ChoiceField::setTitleText(const juce::String& text)
     valueBox->repaint();
 }
 
-
-
 void ChoiceField::bindParameterIndicators(juce::AudioProcessorValueTreeState* state, const juce::String& parameterId)
 {
     if (state != nullptr)

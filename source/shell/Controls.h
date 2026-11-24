@@ -11,7 +11,6 @@
 
 void repaintValueOverlay(juce::Component& component);
 
-// Selection is stored with the host state, independently of audio parameters.
 class ControlSelectionGesture
 {
 public:
@@ -27,7 +26,6 @@ bool scrollViewportWithWheel(juce::Viewport& viewport,
                              const juce::MouseWheelDetails& wheel,
                              bool fineControl = false);
 
-// Nested pages forward the wheel to the nearest scrollable ancestor.
 class UiScrollViewport : public juce::Viewport
 {
 public:
@@ -49,12 +47,21 @@ public:
     }
 };
 
+inline juce::Rectangle<int> moduleNameplateBypassBounds(juce::Rectangle<int> frame)
+{
+    const auto header = frame.withHeight(controlBlockHeaderHeight);
+    constexpr int inset = controlEdgeInset;
+    const auto side = header.getHeight() - 2 * inset;
+    return {header.getRight() - inset - side,
+            header.getY() + inset,
+            side, side};
+}
+
 struct ControlBlockFrame
 {
     juce::Rectangle<int> bounds;
     juce::String title;
     juce::Colour colour = uiWhite;
-    // Shown in the header without changing the stable collapse/search key.
     juce::String displayTitle {};
     bool centreInkVertically = false;
 };
@@ -69,16 +76,32 @@ public:
         // mouse interaction must share the same bounds.
         for (const auto& frame : controlBlockFrames)
         {
+            const bool headerHighlighted = (hoveredBlockVisualReady && hoveredBlockTitle == frame.title)
+                || searchHighlightedTitle == frame.title;
             paintControlBlockFrame(graphics, frame.bounds,
                 frame.displayTitle.isNotEmpty() ? frame.displayTitle : frame.title, frame.colour,
-                (hoveredBlockVisualReady && hoveredBlockTitle == frame.title)
-                    || searchHighlightedTitle == frame.title,
+                headerHighlighted,
                 bool(getProperties().getWithDefault("headerOnlyBlock", false)) || isBlockCollapsed(frame.title),
                 frame.centreInkVertically);
+            if (moduleHeaderToggle && frame.colour == uiGreyDark)
+            {
+                const auto bp = moduleNameplateBypassBounds(frame.bounds);
+                const bool bypassed = moduleHeaderBypassed && moduleHeaderBypassed();
+                graphics.setColour(hoveredBypassTitle == frame.title ? juce::Colour(0xffdddddd)
+                    : bypassed ? uiWhite
+                    : headerHighlighted ? uiGreyDark : uiGreyLight);
+                graphics.fillRect(bp);
+            }
         }
     }
-    // Collapse state lives in the instance's APVTS root, not in this ephemeral UI.
-    // Scope includes the BAND for modules whose pages are range-specific.
+    void setModuleNameplateBypass(std::function<bool()> isBypassed,
+                                  std::function<void()> toggle)
+    {
+        moduleHeaderBypassed = std::move(isBypassed);
+        moduleHeaderToggle = std::move(toggle);
+        repaint();
+    }
+    // Collapse preferences are stored on the owning instance and scoped by BAND.
     void bindCollapseState(juce::AudioProcessorValueTreeState& state, juce::String scope);
     bool isBlockCollapsed(const juce::String& title) const;
     void collapseBlockInitially(const juce::String& title) { if (collapsible) collapsedBlockTitles.addIfNotAlreadyThere(title); }
@@ -109,10 +132,13 @@ private:
     // collapsed header (CROSSOVER/INPUT) after a restore.
     juce::StringArray collapsedBlockTitles;
     juce::String hoveredBlockTitle;
+    juce::String hoveredBypassTitle;
     juce::String searchHighlightedTitle;
     bool hoveredBlockVisualReady = false;
     int hoverGeneration = 0;
     bool collapsible = true;
+    std::function<bool()> moduleHeaderBypassed;
+    std::function<void()> moduleHeaderToggle;
 };
 
 class CopyPasteTextEditor : public juce::TextEditor
@@ -152,7 +178,12 @@ public:
             && getHeight() <= getCompactControlSize(*this) + 2;
         if (bool(getProperties().getWithDefault("multilineStatusText", false)))
         {
-            drawMultilineStatusText(g, getText(), textBounds);
+            // Keep both lines centred in the same text zone used by the
+            // ordinary square controls, not across the whole 80px tile.
+            const auto zoneHeight = juce::jmin(textBounds.getHeight(),
+                standardControlTextZoneHeight);
+            drawMultilineStatusText(g, getText(),
+                textBounds.withSizeKeepingCentre(textBounds.getWidth(), zoneHeight));
         }
         else
         {
@@ -180,7 +211,6 @@ public:
         const std::function<bool(const juce::Component&)>& include = {});
     struct BottomIndicator
     {
-        // -1: unavailable, 0: inactive, 1: active.
         std::function<int()> read;
         std::function<void(bool)> write;
         int state() const { return read ? read() : -1; }
@@ -205,6 +235,7 @@ public:
 
     void setInteractionEnabled(bool shouldEnable);
     void setMomentaryAction(std::function<void()> action) { momentaryAction = std::move(action); }
+    void setMomentaryPressFeedbackEnabled(bool enabled) noexcept { momentaryPressFeedbackEnabled = enabled; }
     std::function<void(const juce::MouseEvent&, bool released)> onMomentaryDrag;
     std::function<void()> onMomentaryDragCancelled;
     void setDragTargetHighlighted(bool highlighted) { if (dragTargetHighlighted != highlighted) { dragTargetHighlighted = highlighted; repaintValueOverlay(*this); } }
@@ -235,13 +266,13 @@ public:
     void modifierKeysChanged(const juce::ModifierKeys& modifiers) override;
 
     std::function<juce::String()> displayTextProvider;
-    // Optional availability for discrete choices (e.g. disabled filter orders).
     std::function<bool(int)> isDiscreteChoiceEnabled;
     std::function<juce::String()> editorTextProvider;
     std::function<bool(const juce::String&)> textCommit;
     std::function<double(const juce::String&)> textToValueParser;
 
 private:
+    static constexpr double valueTransitionDelayMs = 50.0;
     ControlSelectionGesture selectionGesture;
     void updateDockInstanceHover(juce::Point<int> position);
     int pressedBottomIndicator = -1;
@@ -266,15 +297,11 @@ private:
     juce::Slider& slider;
     bool interactionEnabled = true;
     bool pointerDown = false;
-    bool pressHighlight = false;
     bool momentaryPressed = false;
-    // Shared press preview for all binary choices (APVTS and local toggles).
-    // The real parameter is only committed on mouseUp.
-    bool togglePreviewActive = false;
-    double togglePreviewPosition = 0.0;
     bool momentaryDragging = false, dragTargetHighlighted = false;
     juce::MouseCursor momentaryDragCursor;
     bool momentaryRestingState = false;
+    bool momentaryPressFeedbackEnabled = true;
     bool selectionHighlighted = false;
     std::function<void()> momentaryAction;
     bool textInputActive = false;
@@ -307,6 +334,7 @@ public:
     void setBottomIndicator(int index, ValueBoxComponent::BottomIndicator indicator, juce::String label = {});
     juce::Rectangle<int> getBottomIndicatorBounds(int index) const;
     int bottomIndicatorAt(juce::Point<int> point) const;
+    void refreshBottomIndicatorStates();
     juce::MouseCursor getMouseCursor() override;
 
     std::function<void()> onShiftClick;
@@ -342,9 +370,11 @@ private:
     bool controlDragActive = false;
     bool dragRequiresControl = true;
     std::array<ValueBoxComponent::BottomIndicator, 3> bottomIndicators;
+    std::array<int, 3> lastBottomIndicatorStates { -2, -2, -2 };
     std::array<juce::String, 3> bottomIndicatorLabels { "SL", "BP", "" };
     std::array<bool, 3> bottomIndicatorVisible {};
     ControlSelectionGesture selectionGesture;
+    void paintBottomIndicators(juce::Graphics&);
     void updateDockBadgeTooltip(juce::Point<int> position);
     int pressedBottomIndicator = -1;
     juce::ModifierKeys clickModifiers;

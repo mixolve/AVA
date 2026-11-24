@@ -17,7 +17,6 @@ AvaAudioProcessorEditor::PresetsSection::PresetsSection()
     presetChoice.getProperties().set("layoutCellSpan", 1);
 
     presetChoice.setName("preset-list");
-    // Show PRESET / SELECT at rest; reveal the selected preset on hover.
     presetChoice.setIdleLabelVisible(true);
     presetChoice.displayFormatter = [](int, const juce::String& value)
     {

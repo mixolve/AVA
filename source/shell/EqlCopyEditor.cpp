@@ -87,7 +87,6 @@ void AvaAudioProcessorEditor::EqlCopyEditor::initializeControls()
         section->header->setDragAction(
             [this, i](const juce::MouseEvent& event, bool released)
             {
-                // Keep the display order local to this EQL copy.
                 if (released) {
                     const auto point = getLocalPoint(nullptr, event.getScreenPosition().toFloat());
                     int destination = -1;
@@ -196,7 +195,6 @@ void AvaAudioProcessorEditor::EqlCopyEditor::refreshFilterControls()
     {
         lastActiveCount = count;
         if (currentFilter >= count) currentFilter = juce::jmax(0, count - 1);
-        // Filter indices above the active count are not visible in the order.
         if (!shell_filter_order_state::decode(shell_filter_order_state::encode(displayOrder, count),
                                                count, EqlModuleProcessor::maxFilterCount))
             displayOrder = shell_filter_order_state::makeIdentity(EqlModuleProcessor::maxFilterCount);

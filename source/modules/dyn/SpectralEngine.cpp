@@ -28,11 +28,7 @@ void DynSpectralProcessor::DynamicProcessor::prepare(double newSampleRate, int n
 {
     sampleRate = juce::jmax(1.0, newSampleRate);
     configuredChannels = juce::jlimit(0, maxChannels, numChannels);
-    // 10s ADAP-TIME at the smallest supported FFT hop (1024/32 = 32 samples).
-    // Allocate history here, never while processing audio.
     adaptiveFrameWindow.prepare(static_cast<std::size_t>(std::ceil(sampleRate * 10.0 / 32.0)) + 2);
-    // Smallest hop is 1024/32 = 32 samples. Reserve the entire 30ms window
-    // at that rate, so changing FFT size cannot allocate on the audio thread.
     for (auto& curve : lookaheadGainCurves)
         curve.prepare(sampleRate / 32.0);
     reconfigure(configuredChannels, 0, 0);

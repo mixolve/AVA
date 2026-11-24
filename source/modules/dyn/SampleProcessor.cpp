@@ -1,4 +1,5 @@
 #include "SampleProcessor.h"
+#include "TensionTransfer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,7 +16,7 @@ double amplitudeToDb(const double amplitude)
 double tensionTargetDb(const double env,
                        const double threshold,
                        const double floorThreshold,
-                       const double shape,
+                       const double amount,
                        const bool mirrored)
 {
     const auto floorDb = amplitudeToDb(floorThreshold);
@@ -26,8 +27,7 @@ double tensionTargetDb(const double env,
         return threshold;
 
     const auto ratio = juce::jlimit(0.0, 1.0, (amplitudeToDb(env) - floorDb) / spanDb);
-    const auto shapedRatio = mirrored ? 1.0 - std::pow(1.0 - ratio, shape)
-                                      : std::pow(ratio, shape);
+    const auto shapedRatio = dyn_tension::shapePosition(ratio, amount, mirrored);
     return dbToAmp(floorDb + spanDb * shapedRatio);
 }
 }
@@ -37,9 +37,6 @@ double DspCore::satShape(const double value, const double referenceLevel) const
     if (derived.clipKneeDb <= epsilon)
         return juce::jlimit(-1.0, 1.0, value);
 
-    // Preserve the original soft-knee transfer for both EQL states. In v28,
-    // EQL replaced this curve with a hard ceiling at |x| >= 1: it erased the
-    // soft knee, which is why toggling EQL appeared to do nothing useful.
     const auto softMagnitude = [this] (const double level)
     {
         if (level <= derived.clipLower) return level;
@@ -82,17 +79,11 @@ double DspCore::tensionTarget(const double env,
         return env;
 
     const auto amount = std::abs(tension) * 0.01;
-    const auto shape = 1.0 + 42.0 * amount * amount;
     const auto clampedFloor = juce::jlimit(epsilon, threshold, floorThreshold);
-    // A zero-width FLOOR-to-THRESHOLD range has no valid curve to shape.
     if (threshold <= clampedFloor * (1.0 + 1.0e-6))
         return env;
-    const auto shapedFull = tensionTargetDb(env, threshold, clampedFloor, shape, tension < 0.0);
+    const auto shapedFull = tensionTargetDb(env, threshold, clampedFloor, amount, tension < 0.0);
 
-    // The FLOOR gate must join the shaped curve continuously. Previously it
-    // jumped straight from zero to shapedFull when the detector crossed FLOOR.
-    // Fade the gated portion over the first 3 dB above FLOOR; the normal
-    // tension curve is unchanged everywhere else.
     const auto floorFadeCeiling = std::min(threshold, clampedFloor * dbToAmp(3.0));
     auto floorFade = 1.0;
     if (env <= clampedFloor)
@@ -113,10 +104,12 @@ void DspCore::prepare(const double sampleRate, const int, const int)
 {
     currentSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
 
-    for (auto& core : transustCores) core.prepare(currentSampleRate);
+    for (auto& core : transientSustainCores) core.prepare(currentSampleRate);
     for (auto& window : compressorHoldWindows) window.prepare(currentSampleRate);
     resizeLookaheadBuffers();
     lookaheadGain.prepare(currentSampleRate);
+    tensionPreviewWindow.prepare(currentSampleRate, 0.030);
+    for (auto& shaper : lookaheadTension) shaper.prepare(currentSampleRate);
     // Allocate the maximum RMS history once; window changes reuse this history.
     const auto adaptiveWindowSamples = std::max<size_t>(1, static_cast<size_t>(std::ceil(currentSampleRate * 10.0)));
     for (auto& history : adaptiveRmsCumulativePowerHistory)

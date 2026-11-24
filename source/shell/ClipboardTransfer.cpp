@@ -1,6 +1,5 @@
 #include "ClipboardTransfer.h"
 #include "Processor.h"
-#include "StateValidation.h"
 
 namespace ava::clipboard
 {
@@ -21,7 +20,6 @@ bool readClipboard(const char* header, juce::MemoryBlock& bytes)
     const auto text = juce::SystemClipboard::getTextFromClipboard();
     if (!text.startsWith(header)) return false;
     const auto encoded = text.substring(juce::String(header).length());
-    // Bounds and format are checked before touching any DSP or host state.
     if (encoded.isEmpty() || encoded.length() > 90 * 1024 * 1024) return false;
     return bytes.fromBase64Encoding(encoded) && bytes.getSize() > 0 && bytes.getSize() <= 64 * 1024 * 1024;
 }
@@ -55,8 +53,6 @@ bool isInstanceProperty(const juce::String& name)
 
 void mergeInstanceSettings(const juce::ValueTree& source, juce::ValueTree& target)
 {
-    // Source and target are private snapshots; no live state changes happen
-    // until the fully assembled destination snapshot passes validation.
     for (int index = target.getNumProperties() - 1; index >= 0; --index)
     {
         const auto property = target.getPropertyName(index);
@@ -87,7 +83,7 @@ void mergeInstanceSettings(const juce::ValueTree& source, juce::ValueTree& targe
 
 bool restore(AvaAudioProcessor& processor, const juce::ValueTree& state)
 {
-    if (!state.isValid() || !shell_state_validation::hasCurrentState(state, processor, true)) return false;
+    if (!state.isValid() || state.getType() != processor.getValueTreeState().state.getType()) return false;
     const auto xml = state.createXml();
     if (xml == nullptr) return false;
     juce::MemoryBlock bytes;

@@ -17,8 +17,6 @@ using ava::crossover::parameters::makeRangeParameterId;
 
 namespace
 {
-// Host-facing parameter registration follows the declared slot order.
-// Actual names and specifications belong exclusively to each block catalog.
 inline constexpr std::array<ParameterSlot, numParameterSlots> parameterOrder {{
     ParameterSlot::gainMid,
     ParameterSlot::gainMidMute,
@@ -115,12 +113,11 @@ inline constexpr std::array<ParameterSlot, numParameterSlots> parameterOrder {{
     ParameterSlot::shiftGainOrigBypass,
     ParameterSlot::shiftGainPitchedBypass,
     ParameterSlot::sibilLevel, ParameterSlot::sibilBrightness, ParameterSlot::sibilNoise,
-    ParameterSlot::sibilWindow, ParameterSlot::sibilFade,
+    ParameterSlot::sibilFade,
     ParameterSlot::sibilGainS, ParameterSlot::sibilGainRest,
     ParameterSlot::sibilSoloS, ParameterSlot::sibilSoloRest,
     ParameterSlot::sibilBypass, ParameterSlot::sibilHidden,
-    ParameterSlot::sibilRange, ParameterSlot::sibilMin, ParameterSlot::sibilMax,
-    ParameterSlot::sibilPre, ParameterSlot::sibilPost,
+    ParameterSlot::sibilEdgeDetect,
 }};
 
 static_assert(parameterOrder.size() == numParameterSlots);
@@ -230,12 +227,6 @@ ControlPolicy getControlPolicy(const juce::AudioProcessorValueTreeState& state, 
 {
     ControlPolicy result;
     for (const auto& spec : parameterSpecs) if (suffix == spec.suffix) result.metadata = spec.control;
-    if (suffix == "sibil.min" || suffix == "sibil.max") {
-        static const char* const dependencies[] {"sibil.range"};
-        result.dependencies = dependencies;
-        const auto* enabled = state.getRawParameterValue(ava::crossover::parameters::makeRangeParameterId(range,"sibil.range"));
-        result.enabled = enabled != nullptr && enabled->load() >= .5f;
-    }
     if (suffix == "varispeed.rate") {
         static const char* const dependencies[] {"varispeed.units"};
         result.dependencies = dependencies;

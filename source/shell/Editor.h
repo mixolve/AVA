@@ -2,7 +2,7 @@
 
 #include "Processor.h"
 #include "../modules/shared/BlockCatalog.h"
-#include "../modules/gain/GainOrder.h"
+#include "../modules/gain/Order.h"
 #include "SvgExport.h"
 #include "Style.h"
 #include "Controls.h"
@@ -248,8 +248,6 @@ public:
     void requestStructureRestoreResync() { scheduleProcessorStateResync(); }
     // Capture the *visible* viewport position before DAW Undo replaces APVTS.
     // Scroll metadata can lag behind the viewport (e.g. thumb dragging).
-    void captureLiveViewBeforeHostRestore();
-    void cancelLiveViewHostRestore();
     bool keyPressed(const juce::KeyPress& key) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
@@ -275,7 +273,7 @@ private:
     struct FilterSection;
     class EqlCopyEditor;
 
-    juce::Identifier controlSelectionStateKey(const juce::Component& component, bool includeRoutingScope = true) const;
+    juce::Identifier controlSelectionStateKey(const juce::Component& component) const;
     void showAllSection();
     void openRoutingInstance(int instanceId);
     void closeRoutingInstance();
@@ -348,6 +346,7 @@ private:
     void restoreFilterDisplayOrderFromValueTree();
     void storeFilterDisplayOrderToValueTree() noexcept;
     void storeEditorStateToValueTree() noexcept;
+    bool canStoreEditorUiState() const noexcept;
     void storeEditorUiState();
     void restoreEditorUiState();
     void resetFilterSectionUiState(int filterIndex);
@@ -404,6 +403,7 @@ private:
     void updatePinnedSearchPosition();
     void refreshPinnedRoutingStrip();
     void switchPinnedRoutingInstance(int instanceId);
+    void handlePinnedRoutingDrag(int sourceId, const juce::MouseEvent& event, bool released);
     void layoutEqlModuleSections(juce::Rectangle<int>& bounds);
     juce::Rectangle<int> getModuleViewportBounds() const;
     void clearHostSlot(int slotIndex);
@@ -447,7 +447,6 @@ private:
     std::unique_ptr<PresetsSection> presetsSection;
     bool restoringEditorUiState = true;
     bool layingOutEditor = false;
-    int pendingHostRestoreScrollY = -1;
     std::unique_ptr<ParameterControl> globalBypassButton;
     std::unique_ptr<ParameterControl> bypassCompensationControl;
     std::unique_ptr<PushControl> undoButton;
@@ -504,6 +503,8 @@ private:
     RoutingTabsViewport pinnedRoutingViewport;
     juce::Component pinnedRoutingContent;
     std::vector<std::unique_ptr<BoxTextButton>> pinnedRoutingButtons;
+    std::vector<int> pinnedRoutingButtonIds;
+    int pinnedRoutingDragSourceId = 0;
     juce::String pinnedRoutingSignature;
     bool pinnedRoutingVisible = false;
 
@@ -540,7 +541,6 @@ private:
     std::unique_ptr<OscPanel> oscPanel;
     std::unique_ptr<juce::Component> blockChainModuleEditor;
     std::unique_ptr<juce::Component> dynModuleEditor;
-    // Extra instances use the SAME native module editor as the originals.
     std::map<int, std::unique_ptr<juce::Component>> copiedModuleEditors;
     std::map<int, std::unique_ptr<EqlCopyEditor>> eqlCopyEditors;
     // Newly added MODULES entries must also be shown on the underlying ALL page.

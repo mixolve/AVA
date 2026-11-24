@@ -169,7 +169,6 @@ class DynSpectralProcessor final
         // Reuse the sample-domain lookahead curve at FFT-hop resolution.
         // Buffers are allocated in prepare(), never during processFrame().
         std::array<dyn::dsp::LookaheadGainShaper, (maxFftSize / 2) + 1> lookaheadGainCurves{};
-        // Per-bin sustain phase follows the same user-defined slope and release.
         double sampleRate = 44100.0;
         float linkedAdaptiveReferenceDb = 0.0f;
         float correlationAdaptiveReference = -1.0f;

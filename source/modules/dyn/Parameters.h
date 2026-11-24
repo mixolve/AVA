@@ -23,11 +23,6 @@ enum class ParameterSlot : size_t
 {
     morph,
     ratio,
-    // Retain legacy host parameter positions/IDs to avoid breaking old REAPER
-    // envelopes. These parameters are no longer visible or used by DSP.
-    legacyProgression,
-    legacyProgressionSpan,
-    legacyCorrProgressionSpan,
     compKnee,
     lookahead,
     tensionFloor,
@@ -135,11 +130,6 @@ struct ParameterSpec
 inline constexpr auto parameterSpecs = std::to_array<ParameterSpec>({
     { "morph", ParameterType::floating, 0.0f, 100.0f, 0.01f, 100.0f, "" },
     { "ratio", ParameterType::floating, 1.0f, 100.0f, 0.01f, 100.0f, ":1" },
-    // Legacy placeholders: preserving these IDs keeps existing host automation
-    // indices stable. Old values are ignored by the DYN audio processors.
-    { "progression", ParameterType::floating, -100.0f, 100.0f, 0.01f, 0.0f, "" },
-    { "prog-span", ParameterType::floating, 0.1f, 96.0f, 0.01f, 12.0f, "dB" },
-    { "corr-prog-span", ParameterType::floating, 0.01f, 2.0f, 0.01f, 0.25f, "" },
     { "comp-knee", ParameterType::floating, 0.0f, 96.0f, 0.01f, 0.0f, "dB" },
     { "lookahead", ParameterType::floating, 0.0f, 30.0f, 0.01f, 0.0f, "ms" },
     { "tension-floor", ParameterType::floating, -96.0f, 0.0f, 0.01f, -96.0f, "dB" },
@@ -190,7 +180,7 @@ inline constexpr auto parameterSpecs = std::to_array<ParameterSpec>({
     { "sust-gain", ParameterType::floating, float(ava::modules::dsp::gainMinimumDb), float(ava::modules::dsp::gainMaximumDb), 0.01f, 0.0f, "dB", { "mute-sust", "MT", true } },
     { "mute-trans", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" },
     { "mute-sust", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" },
-    { "retrigger", ParameterType::floating, 1.0f, 5000.0f, 0.01f, 60.0f, "ms", { "one-shot", "ONE" } },
+    { "retrigger", ParameterType::floating, 0.0f, 5000.0f, 0.01f, 60.0f, "ms", { "one-shot", "ONE" } },
     { "one-shot", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" },
     { "corr-threshold", ParameterType::floating, -1.0f, 1.0f, 0.01f, 0.0f, "" },
     { "corr-thresh-hyst", ParameterType::floating, 0.0f, 2.0f, 0.01f, 0.0f, "" },
@@ -225,8 +215,7 @@ inline juce::String bypassSuffix(const ParameterSpec& spec)
 // Bypass changes the effective DSP value, never the stored control value.
 constexpr float bypassValue(const ParameterSlot slot) noexcept
 {
-    if (slot == ParameterSlot::ratio || slot == ParameterSlot::rmsTime
-        || slot == ParameterSlot::retrigger) return 1.0f;
+    if (slot == ParameterSlot::ratio || slot == ParameterSlot::rmsTime) return 1.0f;
     if (slot == ParameterSlot::adaptiveTime) return 50.0f;
     if (slot == ParameterSlot::threshold) return 12.0f;
     if (slot == ParameterSlot::corrThreshold) return 1.0f;
@@ -235,9 +224,6 @@ constexpr float bypassValue(const ParameterSlot slot) noexcept
     if (slot == ParameterSlot::corrTensionFloor) return -1.0f;
     if (slot == ParameterSlot::range) return 96.0f;
     if (slot == ParameterSlot::morph || slot == ParameterSlot::mix) return 100.0f;
-    // Legacy span parameter IDs must still pass the bypass range assertion.
-    if (slot == ParameterSlot::legacyProgressionSpan || slot == ParameterSlot::legacyCorrProgressionSpan)
-        return parameterSpecs[toIndex(slot)].defaultValue;
     return 0.0f;
 }
 

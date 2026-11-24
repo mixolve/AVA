@@ -1,6 +1,6 @@
 #pragma once
 #include "BlockTypes.h"
-#include "../gain/GainOrder.h"
+#include "../gain/Order.h"
 #include "../listen/Parameters.h"
 #include "../gain/Parameters.h"
 #include "../delay/Parameters.h"

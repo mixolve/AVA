@@ -16,7 +16,6 @@ void DspCore::reset() {
     shear.reset();balance.reset();ortho.reset();rect.reset();comb.reset();shift.reset();varispeed.reset();sibil.reset();
     gainStage.setOrder(parameters.gainOrder);
     hasProcessedSamples=false;
-    // No cross-block state is retained between a reset and the next sample.
 }
 void DspCore::setParameters(const Parameters& next) {
     parameters=next;

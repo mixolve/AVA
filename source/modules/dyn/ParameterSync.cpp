@@ -106,7 +106,7 @@ dyn::dsp::DspCore::Parameters DynModuleProcessor::readCrossoverRangeParameters(c
     parameters.releasePeakMs = noteMilliseconds(ParameterSlot::processorReleasePeak, ParameterSlot::releasePeakMode, ParameterSlot::releasePeakNote, parameters.releasePeakMs);
     parameters.releaseRmsMs = noteMilliseconds(ParameterSlot::processorReleaseRms, ParameterSlot::releaseRmsMode, ParameterSlot::releaseRmsNote, parameters.releaseRmsMs);
     parameters.delta = loadBool(ParameterSlot::delta);
-    parameters.transust = isTransustRange(rangeIndex);
+    parameters.transientSustain = isTransientSustainRange(rangeIndex);
     parameters.transientGain = loadFloat(ParameterSlot::transientGain);
     parameters.sustainGain = loadFloat(ParameterSlot::sustainGain);
     parameters.transientMute = loadBool(ParameterSlot::transientMute);
@@ -139,4 +139,49 @@ bool DynModuleProcessor::syncParameters(const bool force, const bool readHostTem
         currentRangeParameters,
         [this, bpm] (const size_t rangeIndex) { return readCrossoverRangeParameters(rangeIndex, bpm); },
         processorBank);
+}
+
+void DynModuleProcessor::setParameterListenersEnabled(const bool enabled)
+{
+    ava::crossover::parameters::setRangeParameterListenersEnabled(valueTreeState, *this,
+                                                                  dyn::parameters::parameterSpecs, numRanges, enabled);
+    for (size_t rangeIndex = 0; rangeIndex < numRanges; ++rangeIndex)
+        for (const auto& spec : dyn::parameters::parameterSpecs)
+            if (dyn::parameters::hasBypass(spec))
+            {
+                const auto id = ava::crossover::parameters::makeRangeParameterId(rangeIndex,
+                    dyn::parameters::bypassSuffix(spec).toRawUTF8());
+                if (enabled) valueTreeState.addParameterListener(id, this);
+                else valueTreeState.removeParameterListener(id, this);
+            }
+}
+
+void DynModuleProcessor::parameterChanged(const juce::String& parameterID, const float newValue)
+{
+    if (linkedParameterUpdateInProgress.exchange(true, std::memory_order_acq_rel))
+    {
+        markParametersDirty();
+        return;
+    }
+
+    for (const auto& range : linkedParameters)
+        for (size_t linkIndex = 0; linkIndex < range.size(); ++linkIndex)
+        {
+            auto* source = range[linkIndex];
+            if (source == nullptr || source->paramID != parameterID)
+                continue;
+
+            const auto normalizedValue = source->convertTo0to1(newValue);
+            for (const auto& targets : linkedParameters)
+                if (auto* target = targets[linkIndex]; target != nullptr
+                    && std::abs(target->getValue() - normalizedValue) > 1.0e-6f)
+                    target->setValueNotifyingHost(normalizedValue);
+
+            linkedParameterUpdateInProgress.store(false, std::memory_order_release);
+            markParametersDirty();
+            return;
+        }
+
+    linkedParameterUpdateInProgress.store(false, std::memory_order_release);
+    markParametersDirty();
 }

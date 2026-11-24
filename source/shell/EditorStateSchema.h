@@ -94,6 +94,23 @@ inline std::optional<bool> validate(const juce::Identifier& property, const juce
                 return false;
         return true;
     }
+    if (property == key("pinned_routing_order"))
+    {
+        if (!value.isString() || value.toString().length() > 704) return false;
+        const auto raw = value.toString();
+        const auto order = juce::StringArray::fromTokens(raw, "|", "");
+        if (order.size() > 64 || (raw.isNotEmpty() && order.isEmpty())) return false;
+        juce::StringArray seen;
+        for (const auto& item : order)
+        {
+            const auto id = item.getLargeIntValue();
+            if (item.isEmpty() || item.length() > 10 || !item.containsOnly("0123456789")
+                || id <= 0 || id > std::numeric_limits<int>::max()
+                || item != juce::String(id) || seen.contains(item)) return false;
+            seen.add(item);
+        }
+        return order.joinIntoString("|") == raw;
+    }
     if (property == key("pin_routing") || property == key("search_visible"))
         return crossover_ui::hasExactBooleanValue(value);
     if (property == key("dock_count")) return crossover_ui::hasExactIntegerValue(value, 1, 16);

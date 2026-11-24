@@ -323,6 +323,7 @@ public:
     void endTransparencyLayer() override {restoreState();content += "</g>\n";}
     void setFill(const juce::FillType& fill) override {state.fill=fill;}
     void setOpacity(float opacity) override {state.fill.setOpacity(opacity);}
+    void setImageBlendMode(juce::BlendMode) override {}
     void setInterpolationQuality(juce::Graphics::ResamplingQuality) override {}
     void fillRect(const juce::Rectangle<int>& r,bool) override {fillRect(r.toFloat());}
     void fillRect(const juce::Rectangle<float>& r) override {juce::Path p;p.addRectangle(r);fillPath(p,{});}
@@ -382,7 +383,7 @@ public:
         for(size_t i=0;i<glyphs.size();++i)
         {
             juce::Path outline;
-            typeface->getOutlineForGlyph(state.font.getMetricsKind(), glyphs[i], outline);
+            typeface->getOutlineForGlyph(glyphs[i], outline);
             if (!outline.isEmpty())
             {
                 const auto bounds = outline.getBoundsTransformed(juce::AffineTransform::scale(
@@ -415,7 +416,7 @@ public:
     }
     std::unique_ptr<juce::ImageType> getPreferredImageTypeForTemporaryImages() const override
     {return std::make_unique<juce::SoftwareImageType>();}
-    juce::uint64 getFrameId() const override {return 1;}
+    uint64_t getFrameId() const override {return 1;}
 private:
     struct State
     {

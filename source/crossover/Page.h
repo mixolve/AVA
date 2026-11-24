@@ -9,11 +9,9 @@
 
 class CrossoverModuleComponent;
 
-// Root INSTANCE / MAIN has four fixed visual rows. The settings page supplies
-// the three groups it owns without exposing its internal component members.
 struct InstanceMainRows
 {
-    std::array<juce::Component*, 3> secondary {};  // INSTANCE SOLO, CHANNEL INPUT, CHANNEL SOLO
+    std::array<juce::Component*, 3> secondary {};  // CHANNEL INPUT, OUT MUTE, CHANNEL SOLO
     std::array<juce::Component*, 6> splits {};     // XOVERS, SPLIT 1..5
     std::array<juce::Component*, 4> actions {};    // AUTO SOLO, SOLO MODE, COPY/PASTE ALL
 };

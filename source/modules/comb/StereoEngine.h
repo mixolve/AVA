@@ -6,7 +6,6 @@
 #include <complex>
 #include <vector>
 
-// Ported from Orbit Stereo 0.7.2.
 namespace ava::modules::chain::dsp::comb
 {
 

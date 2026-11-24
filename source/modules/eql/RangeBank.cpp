@@ -28,7 +28,6 @@ void EqlProcessorBank::timerCallback()
     if (!initialFilterPresetLoaded) return;
     const auto stamp = getFilterPresetCatalogStamp();
     if (stamp == presetCatalogStamp && !stamp.isEmpty()) return;
-    // The bank owns external catalog changes; the editor does not choose fallback states.
     eql_presets::ensureDefaultPresetExists();
     auto catalog = loadFilterPresetsXml();
     ranges.forEachProcessor([&] (EqlModuleProcessor& processor)

@@ -1,7 +1,5 @@
 #pragma once
 
-// Owns the parameter definitions for this block. Slot indices and identifiers
-// are intentionally stable for existing host automation and saved sessions.
 #include "../shared/BlockParameterTypes.h"
 
 namespace ava::modules::balance
@@ -14,6 +12,6 @@ inline constexpr auto parameterCatalog = std::to_array<SlotDefinition>({
     { ParameterSlot::mid, { "mid.balance", ParameterType::floating, -100.0f, 100.0f, 0.01f, 0.0f, "", 2, "balance.bypass" } , {"MS-BAL", "MID"} },
     { ParameterSlot::side, { "side.balance", ParameterType::floating, -100.0f, 100.0f, 0.01f, 0.0f, "", 2, "balance.bypass" } , {"MS-BAL", "SIDE"} },
     { ParameterSlot::balanceBypass, { "balance.bypass", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"MS-BAL", "BYPASS"} },
-    { ParameterSlot::balanceHidden, { "balance.hidden", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 1.0f, "" } , {"MS-BAL", "HIDDEN"} },
+    { ParameterSlot::balanceHidden, { "balance.hidden", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" } , {"MS-BAL", "HIDDEN"} },
 });
-} // namespace ava::modules::balance
+}

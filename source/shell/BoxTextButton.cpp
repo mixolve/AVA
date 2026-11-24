@@ -41,7 +41,6 @@ void BoxTextButton::paintOutline(juce::Graphics& graphics,const juce::Rectangle<
     style.paintFrame(graphics, bounds);
 }
 
-
 void BoxTextButton::setInteractionOutlineEnabled(const bool shouldEnable) noexcept
 {
     interactionOutlineEnabled = shouldEnable;
@@ -134,36 +133,23 @@ void BoxTextButton::setDragTargetHighlighted(const bool shouldShow) noexcept
     repaint();
 }
 
-void BoxTextButton::paintButton(juce::Graphics& graphics, const bool shouldDrawButtonAsHighlighted, const bool shouldDrawButtonAsDown)
+void BoxTextButton::refreshBottomIndicatorStates()
 {
-    const auto active=hasActiveHighlight();
-    if (bool(getProperties().getWithDefault("routingPinnedTile", false)))
+    bool changed = false;
+    for (size_t index = 0; index < bottomIndicators.size(); ++index)
     {
-        // Use the same 80px-wide outer frame as an ordinary control, without
-        // its top potentiometer or bottom SL/BP strip.  The 4px inset around
-        // the 72x44 caption stays dark (#444444); only the caption is #BBBBBB.
-        ControlAppearance tileAppearance;
-        tileAppearance.frameColour = uiWhite;
-        tileAppearance.fillColour = uiGreyDark;
-        tileAppearance.paint(graphics, getLocalBounds());
-
-        const auto caption = getControlTextBounds(*this, getLocalBounds());
-        const auto hover = isHoverInversionReady(*this,
-            isEnabled() && isMouseHovering(*this, caption), "routing.pinned.caption");
-        paintControlTextButton(graphics, caption, hover, isEnabled() && active,
-                               isEnabled() && (pressHighlight || shouldDrawButtonAsDown),
-                               isEnabled() ? uiGreyLight : uiIndicatorDisabled);
-        if (drawSquareControlText(graphics, getButtonText(), caption, textJustification))
-            scheduleMarqueeRepaint(*this, marqueeRepaintPending);
-        return;
+        const auto state = bottomIndicatorVisible[index] ? bottomIndicators[index].state() : -1;
+        if (lastBottomIndicatorStates[index] != state)
+        {
+            lastBottomIndicatorStates[index] = state;
+            changed = true;
+        }
     }
-    ControlAppearance style;
-    juce::ignoreUnused(shouldDrawButtonAsHighlighted);
-    style.fillColour=fillColour;
-    style.paintBackground(graphics,getLocalBounds());
+    if (changed) repaint();
+}
 
-    const auto drawOuterBorder = [&graphics, this]
-    {
+void BoxTextButton::paintBottomIndicators(juce::Graphics& graphics)
+{
         for (int index = 0; index < int(bottomIndicators.size()); ++index)
             if (bottomIndicatorVisible[static_cast<size_t>(index)])
             {
@@ -180,11 +166,42 @@ void BoxTextButton::paintButton(juce::Graphics& graphics, const bool shouldDrawB
                 drawEmbeddedButtonText(graphics, bottomIndicatorLabels[size_t(index)], bounds,
                     inverted ? uiWhite : juce::Colour(0xff222222));
             }
+}
+
+void BoxTextButton::paintButton(juce::Graphics& graphics, const bool shouldDrawButtonAsHighlighted, const bool shouldDrawButtonAsDown)
+{
+    const auto active=hasActiveHighlight();
+    if (bool(getProperties().getWithDefault("routingPinnedTile", false)))
+    {
+        ControlAppearance tileAppearance;
+        tileAppearance.frameColour = uiWhite;
+        tileAppearance.fillColour = uiGreyDark;
+        tileAppearance.paint(graphics, getLocalBounds());
+
+        const auto caption = getControlTextBounds(*this, getLocalBounds());
+        const auto hover = isHoverInversionReady(*this,
+            isEnabled() && isMouseHovering(*this, caption), "routing.pinned.caption");
+        const bool moving = bool(getProperties().getWithDefault("routing.instance.dragging", false));
+        paintControlTextButton(graphics, caption, hover, isEnabled() && active,
+                               isEnabled() && (moving || pressHighlight || shouldDrawButtonAsDown),
+                               isEnabled() ? uiGreyLight : uiIndicatorDisabled);
+        if (drawSquareControlText(graphics, getButtonText(), caption, textJustification))
+            scheduleMarqueeRepaint(*this, marqueeRepaintPending);
+        paintBottomIndicators(graphics);
+        return;
+    }
+    ControlAppearance style;
+    juce::ignoreUnused(shouldDrawButtonAsHighlighted);
+    style.fillColour=fillColour;
+    style.paintBackground(graphics,getLocalBounds());
+
+    const auto drawOuterBorder = [&graphics, this]
+    {
+        paintBottomIndicators(graphics);
         paintOutline(graphics, getLocalBounds());
     };
 
     drawOuterBorder();
-
 
     const auto font = makeUiFont();
     const auto textBounds = getControlTextBounds(*this,getLocalBounds());

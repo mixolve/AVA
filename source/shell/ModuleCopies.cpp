@@ -4,10 +4,11 @@
 #include "../modules/dyn/Processor.h"
 #include "../modules/eql/RangeBank.h"
 #include "ModuleCopyTargets.h"
+#include "ModuleSlotTargets.h"
+#include "ModuleStackState.h"
 #include "../routing/State.h"
 
 #include <algorithm>
-#include <set>
 #include "../crossover/ParameterAccess.h"
 
 namespace {
@@ -16,12 +17,6 @@ using Slot=ava::module_stack::Slot;
 juce::var asObject() { return juce::var(new juce::DynamicObject()); }
 void put(juce::var& object, const juce::Identifier& name, const juce::var& value) {
     if(auto* ptr=object.getDynamicObject())ptr->setProperty(name,value);
-}
-int number(const juce::var& o,const char* key,int fallback=-1) {
-    const auto* obj=o.getDynamicObject();
-    if(!obj || !obj->hasProperty(key))return fallback;
-    const auto v=obj->getProperty(key);
-    return v.isInt() ? int(v) : fallback;
 }
 }
 
@@ -49,7 +44,6 @@ std::shared_ptr<AvaAudioProcessor::ModuleCopy> AvaAudioProcessor::makeModuleCopy
     auto result=std::make_shared<ModuleCopy>();
     result->type=type;result->range=band;result->uid=uid;result->serial=serial;
     const auto requiredCount=juce::jmax(size_t(band+1),size_t(getCrossoverSettings().activeSplitCount+1));
-    // ADD creates an independent module with factory parameter values.
     if(module_order::isChain(type)) {
         result->blocks=std::make_shared<BlockChainProcessor>(*this);
         result->blocks->ensureRangeCount(requiredCount);
@@ -76,6 +70,26 @@ std::shared_ptr<AvaAudioProcessor::ModuleCopy> AvaAudioProcessor::makeModuleCopy
     return result;
 }
 
+bool AvaAudioProcessor::isModuleSlotBypassed(const size_t band, const int uid) const
+{
+    const auto slots = getModuleStackForRange(band);
+    const auto* slot = ava::module_stack::find(slots, uid);
+    if (slot == nullptr || !slot->enabled) return true;
+    if (uid < ava::module_stack::originalCount)
+    {
+        if (module_order::isChain(slot->type) && blockChainModuleProcessor != nullptr)
+        {
+            const auto hiddenId = ava::crossover::parameters::makeRangeParameterId(band,
+                ava::modules::chain::blocks::descriptions[size_t(module_order::chainIndex(slot->type))].hiddenSuffix);
+            if (const auto* hidden = blockChainModuleProcessor->getValueTreeState().getParameter(hiddenId))
+                return hidden->getValue() >= 0.5f;
+        }
+        else if (slot->type == module_order::eql || slot->type == module_order::dyn)
+            return isModuleHiddenForRange(band, slot->type);
+    }
+    return false;
+}
+
 int AvaAudioProcessor::addModuleCopy(size_t band,int sourceUid)
 {
     const juce::ScopedLock ownerLock(getRoutingOwner().processingLock);
@@ -84,6 +98,9 @@ int AvaAudioProcessor::addModuleCopy(size_t band,int sourceUid)
     const auto* slot=ava::module_stack::find(moduleStacks[band],sourceUid);
     if(slot==nullptr)return -1;
     const auto sourceType=slot->type;
+    if (nextModuleCopyUid >= ava::module_stack::state::maximumSavedSerial
+        || lastCreatedModuleNumbers[band][size_t(sourceType)] >= ava::module_stack::state::maximumSavedSerial)
+        return -1;
     const auto sourceCopy=sourceUid>=ava::module_stack::originalCount
         ? moduleCopies.find(sourceUid) : moduleCopies.end();
     if(sourceUid>=ava::module_stack::originalCount && sourceCopy==moduleCopies.end())return -1;
@@ -97,9 +114,11 @@ int AvaAudioProcessor::addModuleCopy(size_t band,int sourceUid)
     nextModuleCopyUid++;
     lastCreatedModuleNumbers[band][size_t(sourceType)]=serial;
     moduleCopies.emplace(id,std::move(copy));
+    registerModuleSlotBypassTarget(band, id, sourceType);
     registerLoadedModuleStateListeners();
     publishRenderGraph();
     updateShellLatency();
+    assignNewModuleBypassToHostSlot(band, id);
     notifyHostOfStateChange();
     return id;
 }
@@ -117,29 +136,14 @@ bool AvaAudioProcessor::deleteModuleSlot(size_t band,int uid)
                       [type](const auto& slot) { return slot.type == type; }) <= 1)
         return false;
     if (!ava::module_stack::remove(moduleStacks[band], uid)) return false;
+    // Unbind the owner's automation source before a slot's BP proxy can die.
+    invalidateHostSlotTargets();
     if(uid>=ava::module_stack::originalCount) {
         // Slots and module-state observers may point to the copied APVTS.
         // Both listener sets must be detached before destroying the copy.
-        invalidateHostSlotTargets();
         clearLoadedModuleStateListeners();
         if(selectedModuleCopy.load()==uid)selectedModuleCopy.store(-1);
         moduleCopies.erase(uid);
-        // Explicit user deletion is different from temporary absence while
-        // REAPER restores a freeze snapshot. Only the former removes slots.
-        auto& owner = getRoutingOwner();
-        for (int index = 0; index < assignableHostSlotCount; ++index)
-        {
-            const auto assigned = owner.getHostSlotTargetId(index);
-            int instanceId = 0;
-            juce::String local;
-            const auto qualified = ava::routing::parseParameterTarget(assigned, instanceId, local);
-            if (qualified && instanceId != getRoutingInstanceId()) continue;
-            if (!qualified) local = assigned;
-            int copyUid = -1;
-            juce::String copyParameter;
-            if (ava::module_copy_targets::parse(local, copyUid, copyParameter) && copyUid == uid)
-                owner.clearHostSlotAssignment(index);
-        }
     } else if (module_order::isChain(type) && blockChainModuleProcessor) {
         const auto& description=ava::modules::chain::blocks::descriptions[size_t(module_order::chainIndex(type))];
         auto& state=blockChainModuleProcessor->getValueTreeState();
@@ -148,9 +152,49 @@ bool AvaAudioProcessor::deleteModuleSlot(size_t band,int uid)
     } else if(uid==module_order::eql || uid==module_order::dyn) {
         setModuleHiddenForRange(band,uid,true);
     }
+    // A deleted tile also loses its host-slot BP binding.  Do this for both
+    // originals and copies, without touching any other module or instance.
+    auto& owner = getRoutingOwner();
+    for (int index = 0; index < assignableHostSlotCount; ++index)
+    {
+        const auto assigned = owner.getHostSlotTargetId(index);
+        int instanceId = 0;
+        juce::String local;
+        const auto qualified = ava::routing::parseParameterTarget(assigned, instanceId, local);
+        if (qualified && instanceId != getRoutingInstanceId()) continue;
+        if (!qualified) local = assigned;
+        int copyUid = -1;
+        juce::String copyParameter;
+        size_t moduleBand = 0;
+        int moduleUid = -1;
+        const bool isDeletedCopyParameter = uid >= ava::module_stack::originalCount
+            && ava::module_copy_targets::parse(local, copyUid, copyParameter) && copyUid == uid;
+        const bool isDeletedModuleBypass = ava::module_slot_targets::parse(local, moduleBand, moduleUid)
+            && moduleBand == band && moduleUid == uid;
+        if (isDeletedCopyParameter || isDeletedModuleBypass)
+            owner.clearHostSlotAssignment(index);
+    }
+    moduleSlotBypassTargets.erase(std::make_pair(band, uid));
     registerLoadedModuleStateListeners();
     publishRenderGraph();
     refreshHostSlotTargets();
+    updateShellLatency();
+    notifyHostOfStateChange();
+    return true;
+}
+
+// The MODULES tile activates/deactivates the module AND shows/hides its editor.
+// BP remains independent: hiding must not modify slot.enabled or its host target.
+// Re-publish the graph and update PDC so switched-off modules do not process audio.
+bool AvaAudioProcessor::setModuleSlotShown(size_t band, int uid, bool shown)
+{
+    const juce::ScopedLock ownerLock(getRoutingOwner().processingLock);
+    const juce::ScopedLock lock(processingLock);
+    if (band >= moduleStacks.size()) return false;
+    auto* slot = ava::module_stack::find(moduleStacks[band], uid);
+    if (slot == nullptr || slot->shown == shown) return false;
+    slot->shown = shown;
+    publishRenderGraph();
     updateShellLatency();
     notifyHostOfStateChange();
     return true;
@@ -163,7 +207,7 @@ bool AvaAudioProcessor::setModuleSlotEnabled(size_t band,int uid,bool enabled)
     if(band>=moduleStacks.size())return false;
     auto* slot=ava::module_stack::find(moduleStacks[band],uid);
     if(slot==nullptr)return false;
-    // Legacy original blocks also have a hidden flag. Keep it in sync with
+    // Original blocks also have a hidden flag. Keep it in sync with
     // the per-slot bypass so a single click always has an audible result.
     bool changed=slot->enabled!=enabled;
     if (uid < ava::module_stack::originalCount)
@@ -192,6 +236,9 @@ bool AvaAudioProcessor::setModuleSlotEnabled(size_t band,int uid,bool enabled)
     slot->enabled=enabled;
     publishRenderGraph();
     updateShellLatency();
+    if (auto target = moduleSlotBypassTargets.find(std::make_pair(band, uid));
+        target != moduleSlotBypassTargets.end())
+        target->second->sendValueChangedMessageToListeners(target->second->getValue());
     notifyHostOfStateChange();
     return true;
 }
@@ -263,18 +310,19 @@ void AvaAudioProcessor::saveModuleCopies(juce::ValueTree& state) const
         for(const auto& slot:moduleStacks[band]) {
             juce::var value=asObject();
             put(value,"id",slot.uid);put(value,"type",slot.type);
-            put(value,"created",slot.created);put(value,"enabled",slot.enabled);
+            put(value,"created",slot.created);put(value,"enabled",slot.enabled);put(value,"shown",slot.shown);
             slots.add(value);
         }
         juce::Array<juce::var> serials;
-        for(int type=0;type<ava::module_stack::originalCount;++type)
+        for (int type = 0; type < ava::module_stack::originalCount; ++type)
             serials.add(lastCreatedModuleNumbers[band][size_t(type)]);
-        juce::var addedCreated=asObject();
-        for(int type=ava::module_stack::originalCount;type<ava::module_stack::typeCount;++type)
-            put(addedCreated,juce::Identifier(juce::String(type)),lastCreatedModuleNumbers[band][size_t(type)]);
-        put(range,"addedCreated",addedCreated);
-        put(range,"slots",juce::var(slots));
-        put(range,"lastCreated",juce::var(serials));
+        juce::var addedCreated = asObject();
+        for (int type = ava::module_stack::originalCount; type < ava::module_stack::typeCount; ++type)
+            put(addedCreated, juce::Identifier(juce::String(type)),
+                lastCreatedModuleNumbers[band][size_t(type)]);
+        put(range, "addedCreated", addedCreated);
+        put(range, "slots", juce::var(slots));
+        put(range, "lastCreated", juce::var(serials));
         bands.add(range);
     }
     put(root,"bands",juce::var(bands));
@@ -301,8 +349,6 @@ bool AvaAudioProcessor::restoreModuleCopies(const juce::ValueTree& state)
 {
     if (!state.hasProperty(moduleStackStateKey))
     {
-        // Legacy state without a stack: only reset stack/copies, not CHAIN,
-        // DYN or EQL. Existing original processors remain untouched.
         if (!moduleCopies.empty())
         {
             invalidateHostSlotTargets();
@@ -319,98 +365,44 @@ bool AvaAudioProcessor::restoreModuleCopies(const juce::ValueTree& state)
         return true;
     }
 
-    const auto data = juce::JSON::parse(state.getProperty(moduleStackStateKey).toString());
-    const auto* root = data.getDynamicObject();
-    if (root == nullptr) return false;
-    const auto bandsData = root->getProperty("bands");
-    const auto copiesData = root->getProperty("copies");
-    const auto* bands = bandsData.getArray();
-    const auto* copies = copiesData.getArray();
-    if (bands == nullptr || copies == nullptr || bands->size() != int(moduleStacks.size())) return false;
-    const auto nextId = number(data, "nextId");
-    if (nextId < ava::module_stack::originalCount || nextId > 1000000) return false;
+    const auto decoded = ava::module_stack::state::decode(
+        state.getProperty(moduleStackStateKey).toString(), moduleStacks.size());
+    if (!decoded.has_value()) return false;
 
-    auto nextStacks = moduleStacks;
-    auto nextCreatedNumbers = lastCreatedModuleNumbers;
-    std::map<int, std::pair<int, Slot>> requestedCopies;
-    for (size_t band = 0; band < moduleStacks.size(); ++band)
-    {
-        const auto* object = (*bands)[int(band)].getDynamicObject();
-        if (object == nullptr) return false;
-        const auto entriesData = object->getProperty("slots");
-        const auto serialsData = object->getProperty("lastCreated");
-        const auto* entries = entriesData.getArray();
-        const auto* serials = serialsData.getArray();
-        if (entries == nullptr || serials == nullptr
-            || entries->size() > ava::module_stack::maximumSlotsPerBand
-            || serials->size() != ava::module_stack::originalCount) return false;
-        ava::module_stack::Order order;
-        std::set<int> idsInBand;
-        for (const auto& entry : *entries)
-        {
-            const int uid = number(entry, "id");
-            const int type = number(entry, "type");
-            const int created = number(entry, "created");
-            const auto* slotObject = entry.getDynamicObject();
-            if ((uid < 0 && uid != ava::module_stack::originalUid(module_order::sibil)) || uid >= nextId || type < 0 || type >= ava::module_stack::typeCount
-                || created < 1 || created > 1000000 || slotObject == nullptr
-                || !slotObject->getProperty("enabled").isBool()
-                || (uid < ava::module_stack::originalCount && (uid != ava::module_stack::originalUid(type) || created != 1))
-                || !idsInBand.insert(uid).second) return false;
-            Slot slot { uid, type, created, bool(slotObject->getProperty("enabled")) };
-            order.push_back(slot);
-            if (uid >= ava::module_stack::originalCount
-                && !requestedCopies.emplace(uid, std::make_pair(int(band), slot)).second)
-                return false;
-        }
-        // Every module type has at least one instance in the current model.
-        for (int type=0;type<ava::module_stack::typeCount;++type)
-            if (std::none_of(order.begin(),order.end(),[type](const auto& slot){return slot.type==type;}))
-                order.push_back({ava::module_stack::originalUid(type),type,1,true});
-        nextStacks[band] = std::move(order);
-        for (int type = 0; type < ava::module_stack::typeCount; ++type)
-        {
-            const auto added = object->getProperty("addedCreated");
-            const auto serial = type < serials->size() ? (*serials)[type]
-                : added.getProperty(juce::Identifier(juce::String(type)),1);
-            if (!serial.isInt() || int(serial) < 1 || int(serial) > 1000000) return false;
-            nextCreatedNumbers[band][size_t(type)] = int(serial);
-        }
-    }
-    if (copies->size() != int(requestedCopies.size())
-        || copies->size() > int(moduleStacks.size() * ava::module_stack::maximumSlotsPerBand))
-        return false;
+    const auto& nextStacks = decoded->stacks;
+    const auto& nextCreatedNumbers = decoded->lastCreated;
+    const auto nextId = decoded->nextUid;
 
     // Stage additions before touching live stacks. Reuse the old processor
     // whenever its UID, band and module type are unchanged.
     std::map<int, std::shared_ptr<ModuleCopy>> nextCopies;
-    std::set<int> decoded;
-    for (const auto& entry : *copies)
+    // Verify every state blob before touching a reused processor. Otherwise
+    // a malformed later entry can leave earlier copies half-restored.
+    for (const auto& [uid, saved] : decoded->copies)
     {
-        const auto uid = number(entry, "id");
-        const auto requested = requestedCopies.find(uid);
-        const auto* object = entry.getDynamicObject();
-        if (object == nullptr || requested == requestedCopies.end()
-            || !decoded.insert(uid).second) return false;
-        const auto& [band, slot] = requested->second;
         const auto found = moduleCopies.find(uid);
         const bool reuse = found != moduleCopies.end()
-            && found->second->type == slot.type && found->second->range == band;
-        auto copy = reuse ? found->second : makeModuleCopy(slot.type, band, uid, slot.created);
+            && found->second->type == saved.slot.type && found->second->range == saved.band;
+        auto copy = reuse ? found->second
+            : makeModuleCopy(saved.slot.type, saved.band, uid, saved.slot.created);
         if (copy == nullptr) return false;
-
-        const auto encoded = object->getProperty("state").toString();
-        juce::MemoryBlock binary;
-        if (!binary.fromBase64Encoding(encoded)) return false;
+        nextCopies.emplace(uid, std::move(copy));
+    }
+    for (const auto& [uid, saved] : decoded->copies)
+    {
+        auto& copy = nextCopies.at(uid);
         juce::MemoryBlock current;
-        if (reuse)
+        if (const auto found = moduleCopies.find(uid); found != moduleCopies.end()
+            && found->second == copy)
         {
             if (copy->blocks) copy->blocks->getStateInformation(current);
             else if (copy->dyn) copy->dyn->getStateInformation(current);
             else if (copy->eql) copy->eql->getStateInformation(current);
         }
-        if (!reuse || current.toBase64Encoding() != encoded)
+        if (current.toBase64Encoding() != saved.encodedState)
         {
+            juce::MemoryBlock binary;
+            binary.fromBase64Encoding(saved.encodedState);
             bool restored = false;
             if (copy->blocks) restored = copy->blocks->setStateInformation(binary.getData(), int(binary.getSize()));
             else if (copy->dyn) restored = copy->dyn->setStateInformation(binary.getData(), int(binary.getSize()));
@@ -421,8 +413,7 @@ bool AvaAudioProcessor::restoreModuleCopies(const juce::ValueTree& state)
                 return false;
             }
         }
-        copy->serial = slot.created;
-        nextCopies.emplace(uid, std::move(copy));
+        copy->serial = saved.slot.created;
     }
 
     // Observers and slot targets must be detached before removed UIDs die.
@@ -451,8 +442,13 @@ bool AvaAudioProcessor::restoreModuleCopies(const juce::ValueTree& state)
         invalidateHostSlotTargets();
         clearLoadedModuleStateListeners();
     }
-    moduleStacks = std::move(nextStacks);
-    lastCreatedModuleNumbers = std::move(nextCreatedNumbers);
+    for (size_t band = 0; band < nextStacks.size(); ++band)
+        moduleStacks[band] = nextStacks[band];
+    for (size_t band = 0; band < moduleStacks.size(); ++band)
+        for (const auto& slot : moduleStacks[band])
+            registerModuleSlotBypassTarget(band, slot.uid, slot.type);
+    for (size_t band = 0; band < nextCreatedNumbers.size(); ++band)
+        lastCreatedModuleNumbers[band] = nextCreatedNumbers[band];
     moduleCopies = std::move(nextCopies);
     nextModuleCopyUid = nextId;
     if (selectedModuleCopy.load() >= ava::module_stack::originalCount

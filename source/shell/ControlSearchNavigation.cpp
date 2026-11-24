@@ -72,7 +72,7 @@ std::vector<ControlSearchEntry> AvaAudioProcessorEditor::findControls(const juce
             auto path = ancestors;
             path.add(title);
             append(title, path.joinIntoString(" / "), component);
-            return; // Child sliders/indicators belong to this single control.
+            return;
         }
         if (auto* button = dynamic_cast<BoxTextButton*>(&component))
         {
@@ -95,7 +95,6 @@ std::vector<ControlSearchEntry> AvaAudioProcessorEditor::findControls(const juce
     };
 
     visit(moduleContent, {});
-    // ALL includes UNIT, INSTANCE, and their nested controls.
     std::stable_sort(matches.begin(), matches.end(), [](const auto& left, const auto& right)
     {
         return left.location.compareIgnoreCase(right.location) < 0;
@@ -121,8 +120,6 @@ std::vector<ControlSearchEntry> AvaAudioProcessorEditor::findControls(const juce
             distinct.push_back(std::move(match));
         }
     }
-    // Search commands are first-class results, sharing the normal result
-    // selection/Enter pipeline (including the Russian keyboard swap).
     const auto commandMatches = [&needle, &swapped](const juce::StringArray& aliases)
     {
         for (const auto& alias : aliases)
