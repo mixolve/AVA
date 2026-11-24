@@ -104,7 +104,9 @@ enum class ParameterSlot : size_t
     shiftSoloPitched,
     shiftGainOrigBypass,
     shiftGainPitchedBypass,
-    sibilLevel, sibilBrightness, sibilNoise, sibilFade, sibilGainS, sibilGainRest, sibilSoloS, sibilSoloRest, sibilBypass, sibilHidden, sibilEdgeDetect,
+    sibilLevel, sibilBrightness, sibilNoise, sibilFade, sibilGainS, sibilGainRest, sibilSoloS, sibilSoloRest, sibilBypass, sibilHidden,
+    sibilLookahead,
+    sibilHold,
     count
 };
 

@@ -70,6 +70,26 @@ bool BlockChainProcessor::setStateInformation(const void* data, const int sizeIn
 
     auto restoredState = juce::ValueTree::fromXml(*xmlState);
 
+    // Preserve the previous SBL timing when these controls are absent.
+    if (restoredState.hasType(valueTreeState.state.getType()))
+        for (size_t range = 0; range < numRanges; ++range)
+        {
+            const auto removedId = ava::crossover::parameters::makeRangeParameterId(range, "sibil.edge-detect");
+            if (const auto removed = restoredState.getChildWithProperty("id", removedId); removed.hasType("PARAM"))
+                restoredState.removeChild(removed, nullptr);
+            const auto addDefault = [&](const char* suffix, double value)
+            {
+                const auto id = ava::crossover::parameters::makeRangeParameterId(range, suffix);
+                if (restoredState.getChildWithProperty("id", id).isValid()) return;
+                juce::ValueTree parameter("PARAM");
+                parameter.setProperty("id", id, nullptr);
+                parameter.setProperty("value", value, nullptr);
+                restoredState.addChild(parameter, -1, nullptr);
+            };
+            addDefault(ava::modules::sibil::lookaheadId, 0.0);
+            addDefault(ava::modules::sibil::holdId, ava::modules::sibil::defaultHoldMs);
+        }
+
     if (!isCurrentState(restoredState, valueTreeState))
         return false;
 

@@ -73,7 +73,7 @@ void AvaAudioProcessorEditor::timerCallback()
             unitSampleRateLabel->setText(value, juce::dontSendNotification);
     }
     if (unitDockSizeControl != nullptr)
-        unitDockSizeControl->setSelectedChoiceIndex(shell_editor_ui::dockControlCount(getRootWindowState()) - 1, false);
+        unitDockSizeControl->setSelectedChoiceIndex(shell_editor_ui::dockControlCount(getRootWindowState()), false);
     if (unitZoomControl != nullptr)
     {
         const auto zoom = shell_editor_ui::zoomChoiceIndex(shell_editor_ui::zoomStep(getRootWindowState()));

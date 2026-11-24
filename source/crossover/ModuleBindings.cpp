@@ -228,10 +228,10 @@ std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeBlockRangeContro
         parameterControl("sibil.gain-s", "GAIN\nS", 2),
         []{CrossoverControlSpec spec;spec.kind=ControlKind::custom;spec.suffix="sibil.sync";spec.label="SYNC";return spec;}(),
         startControlRow(parameterControl("sibil.level", "LEVEL\nDETECT", 2)),
-        parameterControl("sibil.brightness", "BRIGHT\nDETECT", 2),
-        parameterControl("sibil.noise", "NOISINS\nDETECT", 2),
+        parameterControl("sibil.brightness", "SENS", 2),
+        parameterControl("sibil.lookahead", "LOOK\nAHEAD", 2),
+        parameterControl("sibil.hold", "HOLD", 2),
         parameterControl("sibil.fade", "CROSS\nFADE", 2),
-        parameterControl("sibil.edge-detect", "EDGE\nDETECT", 2),
     };
 }
 

@@ -258,8 +258,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     instanceContent.onBackgroundClick = eqlContent.onBackgroundClick;
     slotsContent.collapseBlockInitially("SLOTS");
     slotsContent.bindCollapseState(unitState, "shell.unit.slots");
-    // Only UNIT, INSTANCE and MODULES start expanded. Stored user choices
-    // take precedence over these defaults, as with other collapse states.
+    unitContent.collapseBlockInitially("UNIT");
     unitContent.bindCollapseState(unitState, "shell.unit");
     mainContent.collapseBlockInitially("MAIN");
     mainContent.bindCollapseState(valueTreeState, "shell.main");
@@ -365,17 +364,16 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     unitReceiveIndicator.setTooltip("RECEIVE: receiving changes from linked units");
     unitSendIndicator.setInterceptsMouseClicks(true, false);
     unitReceiveIndicator.setInterceptsMouseClicks(true, false);
-    unitNumberLabel.setFont(makeUiFont());
     unitNumberLabel.setColour(juce::Label::textColourId, uiWhite);
     unitNumberLabel.setJustificationType(juce::Justification::centred);
     unitNumberLabel.setBorderSize({});
     unitNumberLabel.setInterceptsMouseClicks(false, false);
-    for (auto* component : std::array<juce::Component*, 3> {
-            &unitNumberLabel, &unitSendIndicator, &unitReceiveIndicator })
-    {
-        component->getProperties().set("foregroundOccluder", true);
-        addChildComponent(*component);
-    }
+    unitSyncPlate.getProperties().set("foregroundOccluder", true);
+    unitSyncPlate.setInterceptsMouseClicks(false, true);
+    addChildComponent(unitSyncPlate);
+    unitSyncPlate.addAndMakeVisible(unitNumberLabel);
+    unitSyncPlate.addAndMakeVisible(unitSendIndicator);
+    unitSyncPlate.addAndMakeVisible(unitReceiveIndicator);
     addChildComponent(dockSortOverlay);
     // The search is a fixed overlay, not a child of the scrolling canvas.
     // Its space is still reserved by layoutUnifiedBlocks().
@@ -597,8 +595,15 @@ void AvaAudioProcessorEditor::refreshInstanceLinkControls()
     if (sendControl == nullptr || receiveControl == nullptr || linksCountControl == nullptr) return;
     auto& registry = InstanceLinkRegistry::instance();
     const auto source = audioProcessor.getRoutingOwner().getLinkSessionId();
-    sendControl->setSelectedChoiceIndex(registry.isSendEnabled(source) ? 1 : 0, false);
-    receiveControl->setSelectedChoiceIndex(registry.isReceiveEnabled(source) ? 1 : 0, false);
+    const bool sending = registry.isSendEnabled(source);
+    const bool receiving = registry.isReceiveEnabled(source);
+    sendControl->setSelectedChoiceIndex(int(sending), false);
+    receiveControl->setSelectedChoiceIndex(int(receiving), false);
+    if (unitSyncActive != (sending || receiving))
+    {
+        unitSyncActive = sending || receiving;
+        if (!layingOutEditor && getWidth() > 0) resized();
+    }
     const auto traffic = registry.activity(source);
     const auto now = juce::Time::getMillisecondCounter();
     constexpr uint32_t activityReleaseMs = 100;

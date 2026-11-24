@@ -117,7 +117,8 @@ inline constexpr std::array<ParameterSlot, numParameterSlots> parameterOrder {{
     ParameterSlot::sibilGainS, ParameterSlot::sibilGainRest,
     ParameterSlot::sibilSoloS, ParameterSlot::sibilSoloRest,
     ParameterSlot::sibilBypass, ParameterSlot::sibilHidden,
-    ParameterSlot::sibilEdgeDetect,
+    ParameterSlot::sibilLookahead,
+    ParameterSlot::sibilHold,
 }};
 
 static_assert(parameterOrder.size() == numParameterSlots);

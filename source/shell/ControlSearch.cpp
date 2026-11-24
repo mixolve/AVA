@@ -269,10 +269,7 @@ void ControlSearchPanel::refreshMatches()
 
 void ControlSearchPanel::resized()
 {
-    // Match the white block headers exactly: their width is viewport width
-    // minus the standard right gap. TextEditor's inset must not shrink the
-    // visible search header a second time.
-    const auto width = juce::jmax(0, getWidth() - uiGap);
+    const auto width = getWidth();
     frame = {0, 0, width, getHeight()};
 
     // Keep the full-size native editing field: caret and selection geometry

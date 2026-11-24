@@ -36,7 +36,7 @@ inline juce::StringArray zoomChoices()
 
 inline int dockControlCount(const juce::ValueTree& state)
 {
-    return juce::jlimit(1, 16, int(state.getProperty(key("dock_count"), viewportControlColumns)));
+    return juce::jlimit(0, 16, int(state.getProperty(key("dock_count"), 0)));
 }
 
 // True when this plugin window has keyboard focus. Realtime modifier polls must
@@ -113,7 +113,7 @@ inline std::optional<bool> validate(const juce::Identifier& property, const juce
     }
     if (property == key("pin_routing") || property == key("search_visible"))
         return crossover_ui::hasExactBooleanValue(value);
-    if (property == key("dock_count")) return crossover_ui::hasExactIntegerValue(value, 1, 16);
+    if (property == key("dock_count")) return crossover_ui::hasExactIntegerValue(value, 0, 16);
     if (property == key("zoom_step"))
     {
         for (const auto step : zoomSteps)

@@ -146,10 +146,11 @@ ava::modules::chain::dsp::DspCore::Parameters BlockChainProcessor::readCrossover
     parameters.sibil.soloS=loadBool(ParameterSlot::sibilSoloS);
     parameters.sibil.soloRest=loadBool(ParameterSlot::sibilSoloRest);
     parameters.sibil.level=loadFloat(ParameterSlot::sibilLevel);
-    parameters.sibil.brightness=loadFloat(ParameterSlot::sibilBrightness);
+    parameters.sibil.sensitivity=loadFloat(ParameterSlot::sibilBrightness);
     parameters.sibil.noise=loadFloat(ParameterSlot::sibilNoise);
     parameters.sibil.fade=loadFloat(ParameterSlot::sibilFade);
-    parameters.sibil.edgeDetect=loadFloat(ParameterSlot::sibilEdgeDetect);
+    parameters.sibil.lookaheadMs=loadFloat(ParameterSlot::sibilLookahead);
+    parameters.sibil.holdMs=loadFloat(ParameterSlot::sibilHold);
     parameters.sibil.gainS=loadFloat(ParameterSlot::sibilGainS);
     parameters.sibil.gainRest=loadFloat(ParameterSlot::sibilGainRest);
     return parameters;

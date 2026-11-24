@@ -475,9 +475,14 @@ private:
     DockSortToggle dockCollapseToggle;
     DockSortToggle dockVerticalToggle;
     StatusIndicator dockClipIndicator;
+    struct UnitSyncPlate final : juce::Component
+    {
+        void paint(juce::Graphics& g) override { g.fillAll(uiGreyDark); }
+    } unitSyncPlate;
     StatusIndicator unitSendIndicator;
     StatusIndicator unitReceiveIndicator;
     juce::Label unitNumberLabel;
+    bool unitSyncActive = false;
     DockSortOverlay dockSortOverlay;
     int dockDragSource = -1;
     int dockDropTarget = -1;

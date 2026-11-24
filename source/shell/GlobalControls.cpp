@@ -109,14 +109,15 @@ void AvaAudioProcessorEditor::setupShellControls()
     };
     unitMainContent.addAndMakeVisible(*unitZoomControl);
     juce::StringArray dockSizes;
-    for (int size = 1; size <= 16; ++size) dockSizes.add(juce::String(size));
+    for (int size = 0; size <= 16; ++size) dockSizes.add(juce::String(size));
     unitDockSizeControl = std::make_unique<LocalChoiceControl>("DOCK\nSIZE", dockSizes,
-        shell_editor_ui::dockControlCount(getRootWindowState()) - 1);
+        shell_editor_ui::dockControlCount(getRootWindowState()));
     unitDockSizeControl->setBottomIndicatorsVisible(false, false);
     unitDockSizeControl->onValueChanged = [this]
     {
-        getRootWindowState().setProperty(shell_editor_ui::key("dock_count"),
-            unitDockSizeControl->getSelectedChoiceIndex() + 1, nullptr);
+        const auto size = unitDockSizeControl->getSelectedChoiceIndex();
+        if (size == 0) setDockOnly(false);
+        getRootWindowState().setProperty(shell_editor_ui::key("dock_count"), size, nullptr);
     };
     unitMainContent.addAndMakeVisible(*unitDockSizeControl);
 

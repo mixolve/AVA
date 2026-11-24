@@ -164,10 +164,8 @@ void AvaAudioProcessorEditor::refreshPinnedRoutingStrip()
     const int gap = getUiGap(*this);
     const int side = getSquareControlSize(*this);
     const int tileHeight = getPinnedRoutingTileHeight(*this);
-    // The ribbon tiles share the dock's global grid, but changing that grid's
-    // origin must reposition existing tiles, not destroy/recreate them.
-    const int firstX = juce::jmax(0, quickAccessStrip.getX() + quickAccessViewport.getX()
-                                     - pinnedRoutingViewport.getX());
+    const auto firstColumnX = 3 * gap + 2 * controlBlockFrameThickness;
+    const int firstX = juce::jmax(0, firstColumnX - pinnedRoutingViewport.getX());
     juce::String signature = juce::String(shell_editor_ui::zoomStep(getRootWindowState()));
     for (const auto id : orderedIds)
         signature << "|" << id << ":" << ava::routing::getDisplayName(topology, id);

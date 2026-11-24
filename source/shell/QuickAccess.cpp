@@ -401,8 +401,24 @@ void AvaAudioProcessorEditor::toggleControlManualSelection(juce::Component& comp
 void AvaAudioProcessorEditor::layoutQuickAccessStrip()
 {
     const auto gap = getUiGap(*this);
-    const auto inset = gap;
+    const auto configuredCount = shell_editor_ui::dockControlCount(getRootWindowState());
+    const bool showDock = configuredCount > 0;
+    for (juce::Component* component : std::array<juce::Component*, 4>{
+             &quickAccessStrip, &dockSortToggle, &dockCollapseToggle, &dockVerticalToggle})
+        component->setVisible(showDock);
+    dockSortOverlay.setVisible(showDock && dockSortToggle.getToggleState());
     const auto side = getSquareControlSize(*this);
+    const auto toggleSize = RangeIndicator::bottomControlSize(*this, {0, 0, side, side});
+    if (!showDock)
+    {
+        // The content viewport uses the strip's top edge as its lower bound.
+        quickAccessStrip.setBounds(0, getHeight() - gap, 0, 0);
+        dockClipIndicator.setBounds(getWidth() - gap - toggleSize, getHeight() - gap - toggleSize,
+                                    toggleSize, toggleSize);
+        return;
+    }
+
+    const auto inset = gap;
     const auto height = side + 2 * inset;
     const bool vertical = isDockOnly() && bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_vertical"), false));
     // Use the horizontal dock as the single layout reference. In vertical
@@ -413,11 +429,8 @@ void AvaAudioProcessorEditor::layoutQuickAccessStrip()
     {
         return vertical ? juce::Rectangle<int>(layoutHeight - r.getBottom(), r.getX(), r.getHeight(), r.getWidth()) : r;
     };
-    const auto toggleSize = RangeIndicator::bottomControlSize(*this, {0, 0, side, side});
-    // Reserve exactly six control slots in both collapsed dock orientations,
-    // even when fewer controls are pinned. The service buttons are always one
-    // standard gap after the sixth slot, never after the last occupied slot.
-    const auto count = isDockOnly() ? shell_editor_ui::dockControlCount(getRootWindowState()) : viewportControlColumns;
+    // Reserve the configured slots in a collapsed dock, even when fewer are pinned.
+    const auto count = isDockOnly() ? configuredCount : viewportControlColumns;
     const auto visibleLength = count * side + (count - 1) * gap;
     const auto expandedStripX = 2 * (gap + controlBlockFrameThickness);
     const auto stripX = vertical ? gap : (isDockOnly() ? 0 : expandedStripX);
@@ -441,8 +454,7 @@ void AvaAudioProcessorEditor::layoutQuickAccessStrip()
         dockBounds.getBottom() - toggleSize, toggleSize, toggleSize}));
     dockVerticalToggle.setEnabled(isDockOnly());
     dockSortOverlay.setBounds(rotate(dockBounds));
-    const auto slotCount = juce::jmax(int(quickAccessItems.size()),
-        shell_editor_ui::dockControlCount(getRootWindowState()));
+    const auto slotCount = juce::jmax(int(quickAccessItems.size()), configuredCount);
     const auto step = side + gap;
     std::vector<juce::Rectangle<int>> emptySlots;
     for (int index = int(quickAccessItems.size()); index < slotCount; ++index)

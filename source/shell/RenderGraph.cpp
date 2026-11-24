@@ -156,10 +156,12 @@ int AvaAudioProcessor::getMaximumChainLatencySamples() const noexcept
 {
     if (renderingOwner == this && renderingGraph != nullptr) return renderingGraph->maximumLatency;
     if (currentSampleRate <= 0.0) return 0;
-    // Block chain: negative delay, phase/COMB, Rubber Band and the largest VARISPEED fragment.
+    const auto sibilMaximum = int(std::ceil(currentSampleRate * 0.001 * ava::modules::sibil::maximumLookaheadMs));
+    // The block chain can run negative delay, PHASE/COMB, SHIFT, VSPEED and SBL in series.
     int maximum = 0;
     if (const auto* chain = getBlockChainProcessor())
-        maximum = int(std::ceil(currentSampleRate * 0.25)) + 576 + chain->getShiftLatencySamples() + chain->getMaximumVarispeedLatencySamples() + int(std::ceil(currentSampleRate * 0.25)) + 32768;
+        maximum = int(std::ceil(currentSampleRate * 0.25)) + 576 + chain->getShiftLatencySamples()
+            + chain->getMaximumVarispeedLatencySamples() + sibilMaximum;
     if (getDynModuleProcessor() != nullptr) maximum += 16383 + int(std::ceil(currentSampleRate * 0.03));
     if (const auto* bank = getEqlProcessorBank()) {
         int filters = 0;
@@ -184,7 +186,7 @@ int AvaAudioProcessor::getMaximumChainLatencySamples() const noexcept
                     case 3: case 9: path += 576; break; // PHASE / COMB
                     case 10: path += copy.blocks->getShiftLatencySamples(); break;
                     case 11: path += copy.blocks->getMaximumVarispeedLatencySamples(); break;
-                    case module_order::sibil: path += int(std::ceil(currentSampleRate * 0.25)) + 32768; break;
+                    case module_order::sibil: path += sibilMaximum; break;
                     default: break;
                 }
             } else if (copy.dyn) {

@@ -260,8 +260,10 @@ void AvaAudioProcessorEditor::syncMainScrollBar()
         mainScrollBar.repaint();
     }
     const auto gap = getUiGap(*this);
+    const auto scrollBottom = shell_editor_ui::dockControlCount(getRootWindowState()) == 0
+        ? juce::jmin(filterViewport.getBottom(), dockClipIndicator.getY() - gap) : filterViewport.getBottom();
     mainScrollBar.setBounds(getWidth() - gap - editorScrollBarWidth, 2 * gap,
-                            editorScrollBarWidth, juce::jmax(0, filterViewport.getBottom() - 2 * gap));
+                            editorScrollBarWidth, juce::jmax(0, scrollBottom - 2 * gap));
     mainScrollBar.setVisible(!isDockOnly() && filterViewport.isVisible() && !aboutExpanded
                             && activeInstanceEditor == nullptr);
     const auto visible = filterViewport.getHeight();
@@ -277,7 +279,9 @@ void AvaAudioProcessorEditor::scrollBarMoved(juce::ScrollBar* bar, double positi
 
 bool AvaAudioProcessorEditor::isDockOnly() const
 {
-    return bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_only"), false));
+    const auto& state = getRootWindowState();
+    return shell_editor_ui::dockControlCount(state) > 0
+        && bool(state.getProperty(shell_editor_ui::key("dock_only"), false));
 }
 
 int AvaAudioProcessorEditor::getMinimumEditorHeight() const

@@ -131,7 +131,9 @@ void AvaAudioProcessorEditor::valueTreePropertyChanged(juce::ValueTree& treeWhos
     {
         juce::MessageManager::callAsync([safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
         {
-            if (safe != nullptr) safe->resized();
+            if (safe == nullptr) return;
+            safe->resized();
+            if (safe->activeInstanceEditor != nullptr) safe->activeInstanceEditor->resized();
         });
     }
     if (!isEditorViewProperty(property)) scheduleHistorySnapshot();

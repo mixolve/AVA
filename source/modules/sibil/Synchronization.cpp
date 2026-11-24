@@ -10,7 +10,9 @@
 #include <numeric>
 
 namespace {
-constexpr std::array<const char*,5> suffixes {"sibil.level","sibil.brightness","sibil.noise","sibil.fade","sibil.edge-detect"};
+constexpr std::array<const char*,6> suffixes {
+    "sibil.level", "sibil.brightness", "sibil.noise", "sibil.fade",
+    ava::modules::sibil::lookaheadId, ava::modules::sibil::holdId};
 using Values=std::array<float,suffixes.size()>;
 struct Endpoint {
     int node=0,uid=-1;size_t band=0;
