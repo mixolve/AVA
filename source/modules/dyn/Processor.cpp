@@ -28,6 +28,7 @@ void DynModuleProcessor::prepareToPlay(const double sampleRate, const int sample
     processorBank.prepare(sampleRate, samplesPerBlock, ownerProcessor.getTotalNumOutputChannels());
     syncParameters(true);
     processorBank.reset();
+    lastTruePeakFactors = {};
     spectralSampleRate = sampleRate;
     spectralBlockSize = samplesPerBlock;
     for (size_t range = 0; range < numRanges; ++range)
@@ -52,6 +53,7 @@ void DynModuleProcessor::releaseResources()
 void DynModuleProcessor::resetProcessingState() noexcept
 {
     processorBank.reset();
+    lastTruePeakFactors = {};
     for (auto& spectral : spectralProcessors)
         if (spectral != nullptr) spectral->resetProcessingState();
 }
@@ -70,9 +72,13 @@ dyn::dsp::ProcessorBank::RangeLatencies DynModuleProcessor::getRangeLatencies() 
 {
     auto latencies = processorBank.getRangeLatencies();
     for (size_t range = 0; range < getCreatedRangeCount(); ++range)
+    {
         if (isSpectralRange(range) && spectralProcessors[range] != nullptr)
             latencies[range] = spectralProcessors[range]->getLatencySamples(juce::roundToInt(
                 spectralSampleRate * loadParameter(range, dyn::parameters::ParameterSlot::lookahead) * 0.001));
+        if (truePeakFactor(range) != 0)
+            latencies[range] += dyn::dsp::TruePeakLimiter::delaySamples;
+    }
     return latencies;
 }
 
@@ -132,6 +138,7 @@ void DynModuleProcessor::processRange(const size_t rangeIndex, juce::AudioBuffer
     if (spectral)
     {
         processSpectralRange(rangeIndex, buffer, sidechain, sidechainOffset);
+        limitRangeOutput(rangeIndex, buffer);
         return;
     }
     auto* core = processorBank.getProcessor(rangeIndex);
@@ -151,6 +158,35 @@ void DynModuleProcessor::processRange(const size_t rangeIndex, juce::AudioBuffer
         left[sample] = static_cast<float>(result.left);
         if (right != nullptr)
             right[sample] = static_cast<float>(result.right);
+    }
+    limitRangeOutput(rangeIndex, buffer);
+}
+
+int DynModuleProcessor::truePeakFactor(const size_t rangeIndex) const noexcept
+{
+    using Slot = dyn::parameters::ParameterSlot;
+    if (loadParameter(rangeIndex, Slot::truePeak) < 0.5f) return 0;
+    return 4 << juce::jlimit(0, 2, juce::roundToInt(loadParameter(rangeIndex, Slot::truePeakRate)));
+}
+
+void DynModuleProcessor::limitRangeOutput(const size_t rangeIndex, juce::AudioBuffer<float>& buffer) noexcept
+{
+    const auto factor = truePeakFactor(rangeIndex);
+    auto& lastFactor = lastTruePeakFactors[rangeIndex];
+    auto& limiter = truePeakLimiters[rangeIndex];
+    if (factor != 0 && lastFactor == 0)
+        limiter.reset();
+    lastFactor = factor;
+    if (factor == 0) return;
+
+    auto* left = buffer.getWritePointer(0);
+    auto* right = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : nullptr;
+    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+    {
+        const auto result = limiter.process({left[sample], right != nullptr ? right[sample] : left[sample]}, factor);
+        left[sample] = static_cast<float>(result[0]);
+        if (right != nullptr)
+            right[sample] = static_cast<float>(result[1]);
     }
 }
 

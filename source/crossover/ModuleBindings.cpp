@@ -313,6 +313,16 @@ std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeDynRangeControls
     {
         return !dyn::parameters::getControlPolicy(processor.getValueTreeState(), rangeIndex, control.suffix).visible;
     });
+    {
+        const auto rowEnd = processor.isSpectralRange(rangeIndex) ? (correlationMode ? "corr-slope" : "spectral-slope")
+            : processor.isTransientSustainRange(rangeIndex) ? "corr-impact" : "clip-knee";
+        const auto position = std::find_if(controls.begin(), controls.end(), [rowEnd](const auto& control)
+        {
+            return juce::String(control.suffix) == rowEnd;
+        });
+        if (position != controls.end())
+            controls.insert(std::next(position), toggleControl("true-peak", "TRUE\nPEAK"));
+    }
     const auto modeControl = std::find_if(controls.begin(), controls.end(),
         [] (const auto& control) { return juce::String(control.suffix) == "mode"; });
     if (modeControl != controls.end() && std::next(modeControl) != controls.end())

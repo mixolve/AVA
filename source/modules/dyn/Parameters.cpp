@@ -91,6 +91,8 @@ inline constexpr auto parameterOrder = std::to_array<ParameterOrderEntry>({
     { ParameterSlot::clipKnee, "PROCESSOR / CLIP-KNEE" },
     { ParameterSlot::lookaheadCurve, "PROCESSOR / LOOKAHEAD-CURVE" },
     { ParameterSlot::clipEql, "PROCESSOR / CLIP-EQL" },
+    { ParameterSlot::truePeak, "PROCESSOR / TRUE PEAK" },
+    { ParameterSlot::truePeakRate, "PROCESSOR / TRUE PEAK RATE" },
 });
 
 static_assert(parameterOrder.size() == numParameterSlots);
@@ -141,6 +143,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                                                          : entry.slot == ParameterSlot::domain ? juce::StringArray { "TIME", "SPECTRAL" }
                                                          : entry.slot == ParameterSlot::fftSize ? juce::StringArray { "1024", "2048", "4096", "8192", "16384" }
                                                          : entry.slot == ParameterSlot::fftOverlap ? juce::StringArray { "8", "16", "32" }
+                                                         : entry.slot == ParameterSlot::truePeakRate ? juce::StringArray { "04", "08", "16" }
                                                          : juce::String(spec.suffix).endsWith("-mode") ? juce::StringArray { "MS", "NOTE" }
                                                          : ava::modules::parameters::getTimeNoteChoices(),
                                                      juce::roundToInt(spec.defaultValue)));

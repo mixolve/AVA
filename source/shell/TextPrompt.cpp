@@ -149,7 +149,8 @@ public:
             // visible, so HOST/BYPASS and embedded actions can still paint and
             // receive hover/click events during text editing.
             if (auto* field = anchorComponent != nullptr
-                    ? anchorComponent->findParentComponentOfClass<ParameterField>() : nullptr)
+                    ? anchorComponent->findParentComponentOfClass<ParameterField>() : nullptr;
+                field != nullptr && field->hasBottomInternalControls())
             {
                 const auto valueArea = getLocalArea(anchorComponent.getComponent(), anchorComponent->getLocalBounds());
                 // Indicator hover outlines extend 1px ABOVE the bottom strip.

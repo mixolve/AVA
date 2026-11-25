@@ -132,6 +132,28 @@ CrossoverRangePage::ToggleRow::ToggleRow(CrossoverRangePage& pageIn,
     const auto auxiliaryId = policy.metadata.auxiliarySuffix[0] != '\0'
         ? owner.config.makeRangeParameterId(page.rangeIndex, policy.metadata.auxiliarySuffix) : juce::String {};
     bindAuxiliary(*control, owner.valueTreeState, auxiliaryId, policy);
+    if (suffix == "true-peak")
+    {
+        control->setBottomIndicatorsVisible(false, false);
+        const auto rateId = owner.config.makeRangeParameterId(page.rangeIndex, "true-peak-rate");
+        if (auto* rate = owner.valueTreeState.getParameter(rateId))
+        {
+            const auto select = [this, rate](int index)
+            {
+                rate->beginChangeGesture();
+                rate->setValueNotifyingHost(rate->convertTo0to1(float(index)));
+                rate->endChangeGesture();
+                control->repaint();
+            };
+            const auto active = [rate](int index) { return juce::roundToInt(rate->convertFrom0to1(rate->getValue())) == index; };
+            control->setBottomActions({
+                {"04", [select] { select(0); }, [active] { return active(0); }},
+                {"08", [select] { select(1); }, [active] { return active(1); }},
+                {"16", [select] { select(2); }, [active] { return active(2); }},
+            });
+            page.listenToParameter(rateId);
+        }
+    }
     refreshExternalState();
 }
 
@@ -144,6 +166,11 @@ void CrossoverRangePage::ToggleRow::refreshExternalState()
 {
     const auto enabled = owner.config.getControlPolicy(page.rangeIndex, suffix).enabled;
     control->setInteractionEnabled(enabled);
+    if (suffix == "true-peak")
+    {
+        for (const auto* label : {"04", "08", "16"}) control->setBottomActionEnabled(label, enabled);
+        for (auto* child : control->getChildren()) child->repaint();
+    }
     if (auxiliaryIndicator != nullptr) auxiliaryIndicator->setEnabled(enabled);
 }
 

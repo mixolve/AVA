@@ -5,6 +5,7 @@
 #include "SampleProcessor.h"
 #include "Parameters.h"
 #include "SpectralProcessor.h"
+#include "TruePeakLimiter.h"
 #include "../shared/ParameterHost.h"
 
 #include <array>
@@ -65,6 +66,10 @@ private:
     juce::AudioProcessorValueTreeState valueTreeState;
     dyn::dsp::ProcessorBank processorBank;
     std::array<std::unique_ptr<DynSpectralProcessor>, numRanges> spectralProcessors;
+    int truePeakFactor(size_t rangeIndex) const noexcept;
+    void limitRangeOutput(size_t rangeIndex, juce::AudioBuffer<float>& buffer) noexcept;
+    std::array<dyn::dsp::TruePeakLimiter, numRanges> truePeakLimiters;
+    std::array<int, numRanges> lastTruePeakFactors {};
     int processingInputChannel = 0;
     std::array<int, numRanges> processingSidechainChannel {};
     std::array<bool, numRanges> processingSpectral {};

@@ -86,6 +86,8 @@ enum class ParameterSlot : size_t
     corrPeakCrest,
     lookaheadCurve,
     clipEql,
+    truePeak,
+    truePeakRate,
     count
 };
 
@@ -193,6 +195,8 @@ inline constexpr auto parameterSpecs = std::to_array<ParameterSpec>({
     { "corr-peak-crest", ParameterType::floating, -2.0f, 2.0f, 0.01f, 0.0f, "" },
     { "lookahead-curve", ParameterType::floating, -100.0f, 100.0f, 0.01f, 0.0f, "" },
     { "clip-qual", ParameterType::boolean, 0.0f, 1.0f, 1.0f, 0.0f, "" },
+    { "true-peak", ParameterType::boolean, 0.f, 1.f, 1.f, 0.f, "" },
+    { "true-peak-rate", ParameterType::choice, 0.f, 2.f, 1.f, 0.f, "" },
 });
 
 static_assert(parameterSpecs.size() == numParameterSlots);

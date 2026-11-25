@@ -162,7 +162,9 @@ int AvaAudioProcessor::getMaximumChainLatencySamples() const noexcept
     if (const auto* chain = getBlockChainProcessor())
         maximum = int(std::ceil(currentSampleRate * 0.25)) + 576 + chain->getShiftLatencySamples()
             + chain->getMaximumVarispeedLatencySamples() + sibilMaximum;
-    if (getDynModuleProcessor() != nullptr) maximum += 16383 + int(std::ceil(currentSampleRate * 0.03));
+    const auto dynMaximum = 16383 + int(std::ceil(currentSampleRate * 0.03))
+        + dyn::dsp::TruePeakLimiter::delaySamples;
+    if (getDynModuleProcessor() != nullptr) maximum += dynMaximum;
     if (const auto* bank = getEqlProcessorBank()) {
         int filters = 0;
         for (size_t band = 0; band < bank->getCreatedRangeCount(); ++band)
@@ -190,7 +192,7 @@ int AvaAudioProcessor::getMaximumChainLatencySamples() const noexcept
                     default: break;
                 }
             } else if (copy.dyn) {
-                path += 16383 + int(std::ceil(currentSampleRate * 0.03));
+                path += dynMaximum;
             } else if (copy.eql && band < copy.eql->getCreatedRangeCount()) {
                 const auto* eql = copy.eql->getProcessor(band);
                 if (eql != nullptr) path += eql->getActiveFilterCount() * 4096;

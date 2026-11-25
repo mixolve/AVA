@@ -83,6 +83,17 @@ bool DynModuleProcessor::setStateInformation(const void* data, const int sizeInB
         return false;
 
     auto restoredState = juce::ValueTree::fromXml(*xmlState);
+    if (restoredState.hasType(valueTreeState.state.getType()))
+        for (size_t range = 0; range < dyn::dsp::ProcessorBank::numRanges; ++range)
+            for (const auto* suffix : {"true-peak", "true-peak-rate"})
+            {
+                const auto id = ava::crossover::parameters::makeRangeParameterId(range, suffix);
+                if (restoredState.getChildWithProperty("id", id).isValid()) continue;
+                juce::ValueTree parameter("PARAM");
+                parameter.setProperty("id", id, nullptr);
+                parameter.setProperty("value", 0.0, nullptr);
+                restoredState.addChild(parameter, -1, nullptr);
+            }
 
     if (!isCurrentState(restoredState, valueTreeState))
         return false;
