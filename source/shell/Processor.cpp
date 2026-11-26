@@ -202,7 +202,9 @@ void AvaAudioProcessor::synchronizeRouting()
                                          linkTargetsStateKey,
                                          linkCountStateKey,
                                          linkSendStateKey,
-                                         linkReceiveStateKey })
+                                         linkReceiveStateKey,
+                                         linkPausedStateKey,
+                                         linkUnitNumberStateKey })
                 {
                     if (currentState.hasProperty(key))
                         promotedState.setProperty(key, currentState.getProperty(key), nullptr);

@@ -56,7 +56,8 @@ bool AvaAudioProcessor::applyHistoryStateInformation(const void* data, const int
 
 bool AvaAudioProcessor::restoreStateInformation(const void* data,
                                                 const int sizeInBytes,
-                                                const bool includeABCompareState)
+                                                const bool includeABCompareState,
+                                                const bool restoreHostSlotValues)
 {
     // Offline freeze can restore a headless plugin from a render worker.
     // There are no GUI components to protect when no editor is attached, and
@@ -373,7 +374,7 @@ bool AvaAudioProcessor::restoreStateInformation(const void* data,
     // setValue() during state restoration runs with notifications suppressed.
     // REAPER is not required to resend unchanged envelope values afterwards;
     // apply the restored exposed slot values on the next safe sync instead.
-    if (!routingInstance) queueCurrentHostSlotValues();
+    if (!routingInstance && restoreHostSlotValues) queueCurrentHostSlotValues();
     if (restoredABCompareState.has_value())
         shell_state_serialization::restoreABCompareState(*this, *restoredABCompareState);
     updateShellLatency();

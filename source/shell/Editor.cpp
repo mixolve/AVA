@@ -216,7 +216,12 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     routingPanel->setOnRenameRequest([this] (int id, const juce::String& currentName, juce::Component& anchor)
     {
         showTextPrompt(currentName,
-            [this, id] (const juce::String& name) { return ava::routing::renameInstance(audioProcessor.getRoutingOwner().getValueTreeState().state, id, name); },
+            [this, id] (const juce::String& name)
+            {
+                return InstanceLinkRegistry::instance().editRouting(audioProcessor,
+                    [name](juce::ValueTree& tree, int first, int)
+                    { return ava::routing::renameInstance(tree, first, name); }, id);
+            },
             getLocalArea(&anchor, anchor.getLocalBounds()), {}, {}, true);
         if (auto* prompt = dynamic_cast<PromptComponent*>(textPromptOverlay.get())) prompt->followAnchor(anchor);
     });
@@ -334,11 +339,9 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     };
     dockSortOverlay.onGesture = [this](const juce::MouseEvent& event, int phase) { dragDockControl(event, phase); };
     dockSortOverlay.onScroll = quickAccessStrip.onScroll;
-    dockCollapseToggle.setName("dock-collapse");
     dockCollapseToggle.onClick = [this] { setDockOnly(dockCollapseToggle.getToggleState()); };
     addAndMakeVisible(dockSortToggle);
     addAndMakeVisible(dockCollapseToggle);
-    dockVerticalToggle.setName("dock-vertical");
     dockVerticalToggle.onClick = [this]
     {
         auto* root = this;
@@ -360,20 +363,39 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     addAndMakeVisible(dockClipIndicator);
     unitSendIndicator.setName("unit-send");
     unitReceiveIndicator.setName("unit-receive");
-    unitSendIndicator.setTooltip("SEND: sending changes to linked units");
-    unitReceiveIndicator.setTooltip("RECEIVE: receiving changes from linked units");
-    unitSendIndicator.setInterceptsMouseClicks(true, false);
-    unitReceiveIndicator.setInterceptsMouseClicks(true, false);
     unitNumberLabel.setColour(juce::Label::textColourId, uiWhite);
     unitNumberLabel.setJustificationType(juce::Justification::centred);
     unitNumberLabel.setBorderSize({});
-    unitNumberLabel.setInterceptsMouseClicks(false, false);
-    unitSyncPlate.getProperties().set("foregroundOccluder", true);
+    unitNumberLabel.setInterceptsMouseClicks(true, false);
+    unitNumberLabel.setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+    unitNumberLabel.onDrop = [this](juce::Point<int> screen)
+    {
+        auto* hit = juce::Desktop::getInstance().findComponentAt(screen);
+        if (hit == nullptr) return;
+        auto* recipient = dynamic_cast<AvaAudioProcessorEditor*>(hit);
+        if (recipient == nullptr) recipient = hit->findParentComponentOfClass<AvaAudioProcessorEditor>();
+        if (recipient == nullptr) return;
+        const auto from = audioProcessor.getRoutingOwner().getLinkSessionId();
+        const auto to = recipient->audioProcessor.getRoutingOwner().getLinkSessionId();
+        if (InstanceLinkRegistry::instance().linkDraggedUnit(from, to))
+        {
+            refreshInstanceLinkControls();
+            recipient->refreshInstanceLinkControls();
+        }
+    };
     unitSyncPlate.setInterceptsMouseClicks(false, true);
     addChildComponent(unitSyncPlate);
     unitSyncPlate.addAndMakeVisible(unitNumberLabel);
     unitSyncPlate.addAndMakeVisible(unitSendIndicator);
     unitSyncPlate.addAndMakeVisible(unitReceiveIndicator);
+    unitSyncPauseToggle.setButtonText("Pause unit sync");
+    unitSyncPauseToggle.onClick = [this]
+    {
+        const auto unit = audioProcessor.getRoutingOwner().getLinkSessionId();
+        InstanceLinkRegistry::instance().setPaused(unit, unitSyncPauseToggle.getToggleState());
+        refreshInstanceLinkControls();
+    };
+    unitSyncPlate.addAndMakeVisible(unitSyncPauseToggle);
     addChildComponent(dockSortOverlay);
     // The search is a fixed overlay, not a child of the scrolling canvas.
     // Its space is still reserved by layoutUnifiedBlocks().
@@ -408,6 +430,19 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     mainScrollBar.setSingleStepSize(uiGap);
     mainScrollBar.addListener(this);
     addAndMakeVisible(mainScrollBar);
+
+    juce::StringArray unitNumbers;
+    for (int number = 1; number <= InstanceLinkRegistry::maxUnitNumber; ++number)
+        unitNumbers.add(InstanceLinkRegistry::formatUnitNumber(number));
+    unitNumberControl = std::make_unique<LocalChoiceControl>("UNIT\nNUMBER", unitNumbers, 0);
+    unitNumberControl->setBottomIndicatorsVisible(false, false);
+    unitNumberControl->onValueChanged = [this]
+    {
+        const auto unit = audioProcessor.getRoutingOwner().getLinkSessionId();
+        InstanceLinkRegistry::instance().setUnitNumber(unit, unitNumberControl->getSelectedChoiceIndex() + 1);
+        refreshInstanceLinkControls();
+    };
+    unitSyncContent.addAndMakeVisible(*unitNumberControl);
 
     sendControl = std::make_unique<LocalChoiceControl>(
         "SEND", juce::StringArray { "OFF", "ON" }, 0);
@@ -592,18 +627,17 @@ juce::ValueTree& AvaAudioProcessorEditor::getRootWindowState() const
 
 void AvaAudioProcessorEditor::refreshInstanceLinkControls()
 {
-    if (sendControl == nullptr || receiveControl == nullptr || linksCountControl == nullptr) return;
+    if (unitNumberControl == nullptr || sendControl == nullptr || receiveControl == nullptr || linksCountControl == nullptr) return;
     auto& registry = InstanceLinkRegistry::instance();
     const auto source = audioProcessor.getRoutingOwner().getLinkSessionId();
+    const auto number = registry.unitNumber(source);
+    unitNumberControl->setSelectedChoiceIndex(number - 1, false);
+    unitNumberLabel.setText(InstanceLinkRegistry::formatUnitNumber(number), juce::dontSendNotification);
+    unitSyncPauseToggle.setToggleState(registry.isPaused(source), juce::dontSendNotification);
     const bool sending = registry.isSendEnabled(source);
     const bool receiving = registry.isReceiveEnabled(source);
     sendControl->setSelectedChoiceIndex(int(sending), false);
     receiveControl->setSelectedChoiceIndex(int(receiving), false);
-    if (unitSyncActive != (sending || receiving))
-    {
-        unitSyncActive = sending || receiving;
-        if (!layingOutEditor && getWidth() > 0) resized();
-    }
     const auto traffic = registry.activity(source);
     const auto now = juce::Time::getMillisecondCounter();
     constexpr uint32_t activityReleaseMs = 100;

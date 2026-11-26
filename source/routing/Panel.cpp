@@ -2,6 +2,7 @@
 #include "State.h"
 #include "../shell/Controls.h"
 #include "../shell/Editor.h"
+#include "../shell/InstanceLink.h"
 #include "../shell/ChoiceControl.h"
 #include "../shell/EditorStateSchema.h"
 #include "../shell/Style.h"
@@ -441,7 +442,7 @@ public:
             instance.name->getProperties().set("preserveCtrlClick", true);
             instance.name->setDragRequiresControl(false);
             const auto bindSwitch = [this, id, tile = instance.name.get()]
-                (int index, const char* parameterId, const char* label)
+                (int index, const char* parameterId, const char* caption)
             {
                 const auto targetId = ava::routing::parameterTargetId(id, parameterId);
                 tile->setBottomIndicator(index, {
@@ -456,14 +457,14 @@ public:
                             parameter->endChangeGesture();
                         }
                     }
-                }, label);
+                }, caption);
             };
             bindSwitch(0, AvaAudioProcessor::paramSoloInstanceId, "S");
             bindSwitch(1, AvaAudioProcessor::paramInstanceMuteId, "MT");
             bindSwitch(2, AvaAudioProcessor::paramGlobalBypassId, "BP");
             const auto removeAction = [this, id]
             {
-                if (ava::routing::removeInstance(state.state, id))
+                if (editRouting(ava::routing::removeInstance, id))
                 {
                     if (moveSourceId == id)
                         clearMove();
@@ -505,7 +506,7 @@ public:
                 if (moveSourceId != 0)
                 {
                     if (moveSourceId != id
-                        && ava::routing::moveInstanceSerialAfter(state.state, moveSourceId, id))
+                        && editRouting(ava::routing::moveInstanceSerialAfter, moveSourceId, id))
                     {
                         clearMove();
                         notifyTopologyChanged();
@@ -573,10 +574,10 @@ public:
                     {
                         switch (index)
                         {
-                            case 0: changed = ava::routing::moveInstanceBeforeGroup(state.state, moveSourceId, id); break;
-                            case 1: changed = ava::routing::moveInstanceAfterGroup(state.state, moveSourceId, id); break;
-                            case 2: changed = ava::routing::moveParallelOutsideGroup(state.state, moveSourceId, id, true); break;
-                            case 3: changed = ava::routing::moveParallelOutsideGroup(state.state, moveSourceId, id, false); break;
+                            case 0: changed = editRouting(ava::routing::moveInstanceBeforeGroup, moveSourceId, id); break;
+                            case 1: changed = editRouting(ava::routing::moveInstanceAfterGroup, moveSourceId, id); break;
+                            case 2: changed = editRouting(ava::routing::moveParallelOutsideGroup, moveSourceId, id, true); break;
+                            case 3: changed = editRouting(ava::routing::moveParallelOutsideGroup, moveSourceId, id, false); break;
                         }
                         if (changed) clearMove();
                     }
@@ -587,10 +588,10 @@ public:
                         pendingOrigin = SlideOrigin {id, true, petal.getSide(), getLocalArea(&petal, petal.getLocalBounds())};
                         switch (index)
                         {
-                            case 0: changed = ava::routing::insertInstanceBeforeGroup(state.state, id); break;
-                            case 1: changed = ava::routing::insertInstanceAfterGroup(state.state, id); break;
-                            case 2: changed = ava::routing::insertParallelOutsideGroup(state.state, id, true); break;
-                            case 3: changed = ava::routing::insertParallelOutsideGroup(state.state, id, false); break;
+                            case 0: changed = editRouting(ava::routing::insertInstanceBeforeGroup, id); break;
+                            case 1: changed = editRouting(ava::routing::insertInstanceAfterGroup, id); break;
+                            case 2: changed = editRouting(ava::routing::insertParallelOutsideGroup, id, true); break;
+                            case 3: changed = editRouting(ava::routing::insertParallelOutsideGroup, id, false); break;
                         }
                     }
                     if (changed) notifyTopologyChanged();
@@ -851,10 +852,10 @@ private:
             {
                 if (moveSourceId != id)
                     changed = serial
-                        ? (before ? ava::routing::moveInstanceSerialBefore(state.state, moveSourceId, id)
-                                  : ava::routing::moveInstanceSerialAfter(state.state, moveSourceId, id))
-                        : (before ? ava::routing::moveInstanceParallelBefore(state.state, moveSourceId, id)
-                                  : ava::routing::moveInstanceParallelTo(state.state, moveSourceId, id));
+                        ? (before ? editRouting(ava::routing::moveInstanceSerialBefore, moveSourceId, id)
+                                  : editRouting(ava::routing::moveInstanceSerialAfter, moveSourceId, id))
+                        : (before ? editRouting(ava::routing::moveInstanceParallelBefore, moveSourceId, id)
+                                  : editRouting(ava::routing::moveInstanceParallelTo, moveSourceId, id));
                 if (changed) clearMove();
             }
             else
@@ -862,10 +863,10 @@ private:
                 pendingDirection = directionFor(serial, before);
                 pendingOrigin = SlideOrigin {id, false, petal.getSide(), getLocalArea(&petal, petal.getLocalBounds())};
                 changed = serial
-                    ? (before ? ava::routing::insertSerialInstanceBefore(state.state, id)
-                              : ava::routing::insertSerialInstance(state.state, id))
-                    : (before ? ava::routing::insertParallelInstanceBefore(state.state, id)
-                              : ava::routing::insertParallelInstance(state.state, id));
+                    ? (before ? editRouting(ava::routing::insertSerialInstanceBefore, id)
+                              : editRouting(ava::routing::insertSerialInstance, id))
+                    : (before ? editRouting(ava::routing::insertParallelInstanceBefore, id)
+                              : editRouting(ava::routing::insertParallelInstance, id));
             }
             if (changed) notifyTopologyChanged();
             else { pendingDirection.reset(); pendingOrigin.reset(); }
@@ -1444,6 +1445,31 @@ private:
         updateControlDragHover(nullptr);
         moveSourceId = 0;
         updateMoveTargets();
+    }
+
+    bool editRouting(bool (*edit)(juce::ValueTree&, int), int id)
+    {
+        return InstanceLinkRegistry::instance().editRouting(processor,
+            [edit](juce::ValueTree& tree, int first, int) { return edit(tree, first); }, id);
+    }
+
+    bool editRouting(bool (*edit)(juce::ValueTree&, int, int), int first, int second)
+    {
+        return InstanceLinkRegistry::instance().editRouting(processor, edit, first, second);
+    }
+
+    template <typename... Args>
+    bool editRouting(bool (*edit)(juce::ValueTree&, int, Args...), int first, Args... args)
+    {
+        return InstanceLinkRegistry::instance().editRouting(processor,
+            [edit, args...](juce::ValueTree& tree, int id, int) { return edit(tree, id, args...); }, first);
+    }
+
+    bool editRouting(bool (*edit)(juce::ValueTree&, int, int, bool), int first, int second, bool before)
+    {
+        return InstanceLinkRegistry::instance().editRouting(processor,
+            [edit, before](juce::ValueTree& tree, int from, int to) { return edit(tree, from, to, before); },
+            first, second);
     }
 
     void notifyTopologyChanged()

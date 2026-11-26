@@ -1,6 +1,6 @@
 #pragma once
 namespace ava::modules::sibil {
-inline constexpr float maximumLookaheadMs = 10.0f;
+inline constexpr float maximumLookaheadMs = 30.0f;
 inline constexpr auto lookaheadId = "sibil.lookahead";
 inline constexpr float maximumHoldMs = 100.0f;
 inline constexpr float defaultHoldMs = 2.0f;

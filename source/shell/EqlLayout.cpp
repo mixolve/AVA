@@ -39,9 +39,7 @@ void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& view
             ? controlSearchPanel->getDisplayedHeight() + gap : 0;
         const auto pinnedHeight = bool(getRootWindowState().getProperty(shell_editor_ui::key("pin_routing"), true))
             ? getPinnedRoutingTileHeight(*this) + gap : 0;
-        const auto statusHeight = unitSyncActive && !searchEnabled
-            ? controlBlockHeaderHeight + gap : 0;
-        const auto top = searchTop + searchHeight + statusHeight + pinnedHeight;
+        const auto top = searchTop + searchHeight + pinnedHeight;
         const auto bottom = quickAccessStrip.getY();
         viewportBounds = {viewportBounds.getX(), top, viewportBounds.getWidth(),
                           juce::jmax(0, bottom - top)};
@@ -217,7 +215,7 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         const auto oscHeight = oscPanel->getPreferredHeight();
         const auto syncCollapsed = unitSyncContent.isBlockCollapsed("SYNC");
         const auto slotsCollapsed = slotsContent.isBlockCollapsed("SLOTS");
-        std::vector<ControlGridCell> syncCells {{receiveControl.get()}, {sendControl.get()}, {linksCountControl.get()}};
+        std::vector<ControlGridCell> syncCells {{unitNumberControl.get()}, {receiveControl.get()}, {sendControl.get()}, {linksCountControl.get()}};
         for (int index = 0; index < linkDestinationCount; ++index)
             syncCells.push_back({linkToControls[size_t(index)].get()});
         const auto syncHeight = syncCollapsed ? controlBlockHeaderHeight
@@ -285,6 +283,7 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         oscPanel->setBounds(instanceInset, blockY, innerBlockWidth, oscHeight);
         blockY += oscHeight + unitGap;
         unitSyncContent.setBounds(instanceInset, blockY, innerBlockWidth, syncHeight);
+        unitNumberControl->setVisible(!syncCollapsed);
         sendControl->setVisible(!syncCollapsed);
         receiveControl->setVisible(!syncCollapsed);
         linksCountControl->setVisible(!syncCollapsed);
@@ -300,6 +299,7 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
                  innerBlockWidth - 2 * paddingUnit, squareSize}, syncCells);
         else
         {
+            unitNumberControl->setBounds({});
             sendControl->setBounds({});
             receiveControl->setBounds({});
             linksCountControl->setBounds({});
@@ -648,10 +648,6 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
     const auto searchHeight = visibleEditor->controlSearchPanel != nullptr
         ? visibleEditor->controlSearchPanel->getDisplayedHeight()
         : controlSearchPanel->getDisplayedHeight();
-    const bool reserveStatus = showingEditor && visibleEditor->unitSyncActive
-        && (!searchEnabled || searchHeight == controlBlockHeaderHeight);
-    const bool showUnitStatus = reserveStatus && activeInstanceEditor == nullptr;
-    unitSyncPlate.setVisible(showUnitStatus);
 
     // PIN ROUTING belongs to UNIT. Keep a single visible strip on the root
     // editor as INSTANCE editors are created and destroyed. Nested editors
@@ -660,6 +656,9 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
         && bool(getRootWindowState().getProperty(shell_editor_ui::key("pin_routing"), true));
     const bool reserveRouting = routingEnabled;
     const bool showRootRouting = reserveRouting && routingInstanceId == 0;
+    const bool showUnitStatus = showRootRouting
+        && (!searchEnabled || searchHeight == controlBlockHeaderHeight);
+    unitSyncPlate.setVisible(showUnitStatus);
     if (!showRootRouting) pinnedRoutingViewport.setVisible(false);
     if (!showingEditor) return;
 
@@ -668,43 +667,45 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
     const auto x = visibleEditor->filterViewport.getX();
     const auto width = visibleEditor->filterViewport.getWidth();
     const auto unitWidth = juce::jmax(0, width - gap);
-    int searchInset = 0;
+    const auto routingTop = searchTop + (searchEnabled ? searchHeight + gap : 0);
+    const auto tileHeight = getPinnedRoutingTileHeight(*this);
+    int routingInset = 0;
     if (showUnitStatus)
     {
-        const auto number = juce::String(int(audioProcessor.getRoutingOwner().getLinkSessionId())).paddedLeft('0', 2);
-        unitNumberLabel.setText(number, juce::dontSendNotification);
         const auto side = getSquareControlSize(*this);
         const auto indicatorSize = RangeIndicator::bottomControlSize(*this, {0, 0, side, side});
         const auto baseFont = makeUiFont().withHeight(float(indicatorSize));
-        unitNumberLabel.setFont(baseFont.withPointHeight(baseFont.getHeightInPoints() + 4.0f));
-        const auto numberWidth = getTextPixelWidth(unitNumberLabel.getFont(), number) + 2;
-        const auto groupWidth = 2 * (indicatorSize + gap) + numberWidth;
-        unitSyncPlate.setBounds(x, searchTop, groupWidth + 2 * gap, controlBlockHeaderHeight);
-        searchInset = unitSyncPlate.getWidth() + gap;
-        const auto firstX = (unitSyncPlate.getWidth() - groupWidth) / 2;
-        const auto indicatorY = (controlBlockHeaderHeight - indicatorSize) / 2;
-        unitReceiveIndicator.setBounds(firstX, indicatorY, indicatorSize, indicatorSize);
-        unitSendIndicator.setBounds(unitReceiveIndicator.getRight() + gap, indicatorY, indicatorSize, indicatorSize);
-        unitNumberLabel.setBounds(unitSendIndicator.getRight() + gap + 2, -1, numberWidth, controlBlockHeaderHeight);
+        const auto lineHeight = juce::jmin(tileHeight / 4, tileHeight - 3 * indicatorSize);
+        const auto numberFont = baseFont.withPointHeight(baseFont.getHeightInPoints() + 4.0f);
+        unitNumberLabel.setFont(numberFont.withHeight(juce::jmin(float(lineHeight), numberFont.getHeight())));
+        const auto columnWidth = juce::jmax(indicatorSize, getTextPixelWidth(unitNumberLabel.getFont(), "88") + 2);
+        unitSyncPlate.setBounds(x, routingTop, columnWidth, tileHeight);
+        routingInset = columnWidth + gap;
+        const auto freeHeight = tileHeight - 3 * indicatorSize - lineHeight;
+        const auto spacing = [freeHeight](int gaps) { return juce::roundToInt(freeHeight * gaps / 3.0); };
+        const auto square = [&](int y)
+        {
+            return juce::Rectangle<int>((columnWidth - indicatorSize) / 2, y, indicatorSize, indicatorSize);
+        };
+        unitReceiveIndicator.setBounds(square(0));
+        unitSendIndicator.setBounds(square(indicatorSize + spacing(1)));
+        unitNumberLabel.setBounds(0, 2 * indicatorSize + spacing(2), columnWidth, lineHeight);
+        unitSyncPauseToggle.setBounds(square(tileHeight - indicatorSize));
     }
     if (showSearch)
     {
         controlSearchPanel->setPinned(filterViewport.getViewPositionY() > 0);
-        controlSearchPanel->setBounds(x + searchInset, searchTop,
-                                      juce::jmax(0, unitWidth - searchInset), searchHeight);
+        controlSearchPanel->setBounds(x, searchTop, unitWidth, searchHeight);
     }
-
-    const auto routingTop = searchTop + (searchEnabled ? searchHeight + gap
-        : reserveStatus ? controlBlockHeaderHeight + gap : 0);
     if (showRootRouting)
     {
-        pinnedRoutingViewport.setBounds(x, routingTop, juce::jmax(0, width - gap),
-                                        getPinnedRoutingTileHeight(*this));
+        pinnedRoutingViewport.setBounds(x + routingInset, routingTop, juce::jmax(0, unitWidth - routingInset), tileHeight);
         // Never expose a previously hidden ribbon at stale coordinates.
         pinnedRoutingViewport.setVisible(true);
         pinnedRoutingViewport.toFront(false);
     }
     else pinnedRoutingViewport.setBounds({});
+    if (showUnitStatus) unitSyncPlate.toFront(false);
 
     if (activeInstanceEditor != nullptr) return;
     const auto top = routingTop + (reserveRouting ? getPinnedRoutingTileHeight(*this) + gap : 0);
@@ -713,6 +714,5 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
     if (filterViewport.getBounds() != visibleBounds)
         filterViewport.setBounds(visibleBounds);
     if (showSearch) controlSearchPanel->toFront(false);
-    if (showUnitStatus) unitSyncPlate.toFront(false);
     if (showRootRouting) pinnedRoutingViewport.toFront(false);
 }

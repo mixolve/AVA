@@ -87,10 +87,10 @@ public:
     }
 };
 
-class DockSortToggle final : public juce::Button
+class SquareToggleButton final : public juce::Button
 {
 public:
-    DockSortToggle() : juce::Button("dock-sort")
+    explicit SquareToggleButton(const juce::String& name) : juce::Button(name)
     {
         setClickingTogglesState(true);
         setWantsKeyboardFocus(false);
@@ -103,7 +103,7 @@ public:
     }
 };
 
-class StatusIndicator final : public juce::Component, public juce::SettableTooltipClient
+class StatusIndicator final : public juce::Component
 {
 public:
     StatusIndicator() { setName("status-indicator"); setInterceptsMouseClicks(false, false); }
@@ -427,6 +427,7 @@ private:
     std::vector<ObservedModuleParameterListeners> observedModuleParameterListeners;
     std::unique_ptr<AvaLookAndFeel> lookAndFeel;
     std::unique_ptr<juce::Component> windowDragHandle;
+    std::unique_ptr<LocalChoiceControl> unitNumberControl;
     std::unique_ptr<LocalChoiceControl> sendControl;
     std::unique_ptr<LocalChoiceControl> receiveControl;
     std::unique_ptr<LocalChoiceControl> linksCountControl;
@@ -471,18 +472,28 @@ private:
     int mainScrollPosition = 0;
     BackgroundClickComponent moduleContent;
     QuickAccessStrip quickAccessStrip;
-    DockSortToggle dockSortToggle;
-    DockSortToggle dockCollapseToggle;
-    DockSortToggle dockVerticalToggle;
+    SquareToggleButton dockSortToggle {"dock-sort"};
+    SquareToggleButton dockCollapseToggle {"dock-collapse"};
+    SquareToggleButton dockVerticalToggle {"dock-vertical"};
     StatusIndicator dockClipIndicator;
-    struct UnitSyncPlate final : juce::Component
-    {
-        void paint(juce::Graphics& g) override { g.fillAll(uiGreyDark); }
-    } unitSyncPlate;
+    juce::Component unitSyncPlate;
     StatusIndicator unitSendIndicator;
     StatusIndicator unitReceiveIndicator;
-    juce::Label unitNumberLabel;
-    bool unitSyncActive = false;
+    SquareToggleButton unitSyncPauseToggle {"unit-sync-pause"};
+    struct UnitNumberLabel final : juce::Label
+    {
+        std::function<void(juce::Point<int>)> onDrop;
+        bool dragging = false;
+        void mouseDown(const juce::MouseEvent&) override { dragging = false; }
+        void mouseDrag(const juce::MouseEvent& event) override
+        {
+            dragging |= event.mods.isLeftButtonDown() && event.mouseWasDraggedSinceMouseDown();
+        }
+        void mouseUp(const juce::MouseEvent& event) override
+        {
+            if (std::exchange(dragging, false) && onDrop != nullptr) onDrop(event.getScreenPosition());
+        }
+    } unitNumberLabel;
     DockSortOverlay dockSortOverlay;
     int dockDragSource = -1;
     int dockDropTarget = -1;

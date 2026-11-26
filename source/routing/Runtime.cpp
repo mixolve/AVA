@@ -44,7 +44,8 @@ void Runtime::synchronize(const juce::ValueTree& state)
 
     for (auto it = instances.begin(); it != instances.end();)
     {
-        if (required.contains(it->first))
+        const auto* next = findStateNode(nextTopology.nodes, it->first);
+        if (required.contains(it->first) && (it->second.processor != nullptr) == !next->container)
             ++it;
         else
             it = instances.erase(it);

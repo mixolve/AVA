@@ -44,6 +44,8 @@ public:
     inline static constexpr auto linkCountStateKey = "ava.link.count";
     inline static constexpr auto linkSendStateKey = "ava.link.send";
     inline static constexpr auto linkReceiveStateKey = "ava.link.receive";
+    inline static constexpr auto linkPausedStateKey = "ava.link.paused";
+    inline static constexpr auto linkUnitNumberStateKey = "ava.link.unit_number";
     inline static constexpr auto activeModuleStateKey = "ava.active_module";
     inline static constexpr auto moduleStackStateKey = "ava.module_stacks_v1";
     inline static constexpr auto eqlModuleStateKey = "ava.eql_state";
@@ -304,7 +306,7 @@ private:
     void clearLoadedModuleStateListeners();
     void writeStateInformation(juce::MemoryBlock& destData, bool includeABCompareState);
     bool restoreStateInformation(const void* data, int sizeInBytes,
-                                 bool includeABCompareState);
+                                 bool includeABCompareState, bool restoreHostSlotValues = true);
     void parameterChanged(const juce::String& parameterID, float newValue) override;
     void valueTreePropertyChanged(juce::ValueTree& treeWhosePropertyHasChanged,
                                   const juce::Identifier& property) override;

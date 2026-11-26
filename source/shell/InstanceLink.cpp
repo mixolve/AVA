@@ -1,8 +1,9 @@
 #include "InstanceLink.h"
 #include "Processor.h"
+#include "Editor.h"
 #include "../routing/State.h"
-#include "EditorStateSchema.h"
-#include "UnitSyncRoutingMap.h"
+#include "ABCompareSerialization.h"
+#include "UnitSyncDelta.h"
 #include "../modules/shared/BlockChainProcessor.h"
 #include "../modules/sibil/Synchronization.h"
 #include "../modules/dyn/Processor.h"
@@ -16,9 +17,7 @@
 #include <limits>
 #include <mutex>
 #include <set>
-#include <array>
-#include <string>
-#include <optional>
+#include <utility>
 
 namespace
 {
@@ -38,19 +37,6 @@ struct ParameterValue
     float normalized = 0.0f;
 };
 
-struct RoutedSwitches
-{
-    std::array<float, 3> values {};
-    std::array<bool, 3> available {};
-    bool operator==(const RoutedSwitches&) const = default;
-};
-
-struct DockPin
-{
-    juce::String key, metadata;
-    bool operator==(const DockPin&) const = default;
-};
-
 struct Snapshot
 {
     std::map<juce::String, ParameterValue> values;
@@ -62,10 +48,6 @@ struct Snapshot
         ava::modules::chain::gain::Order gains;
     };
     std::map<ModuleKey, ChainOrder> chainOrders;
-    ava::routing::State routing;
-    std::map<int, RoutedSwitches> routingSwitches;
-    juce::String pinnedOrder;
-    std::vector<DockPin> dockPins;
 };
 
 void appendParameters(Snapshot& result, juce::AudioProcessorValueTreeState& state,
@@ -82,108 +64,6 @@ void appendParameters(Snapshot& result, juce::AudioProcessorValueTreeState& stat
         result.values.emplace(prefix + id, ParameterValue {owner, key, id, parameter->getValue()});
     }
 }
-
-juce::String fromHex(const juce::String& hex)
-{
-    if (hex.isEmpty() || (hex.length() % 2) != 0
-        || !hex.containsOnly("0123456789abcdefABCDEF")) return {};
-    std::string utf8;
-    utf8.reserve(size_t(hex.length() / 2));
-    for (int i = 0; i < hex.length(); i += 2)
-        utf8.push_back(char(hex.substring(i, i + 2).getHexValue32()));
-    return juce::String::fromUTF8(utf8.data(), int(utf8.size()));
-}
-
-juce::String toHex(const juce::String& utf8)
-{
-    return juce::String::toHexString(utf8.toRawUTF8(),
-                                   int(utf8.getNumBytesAsUTF8()), 0);
-}
-
-// The routing position is mapped first, then the module's semantic identity
-// (band, type, creation serial); copied module UIDs are never interchangeable.
-int correspondingModuleUid(AvaAudioProcessor& from, AvaAudioProcessor& to,
-                           int sourceUid, int band)
-{
-    if (sourceUid < 0 || band < 0) return sourceUid;
-    return ava::unit_sync::matchingModuleUid(
-        from.getModuleStackForRange(size_t(band)),
-        to.getModuleStackForRange(size_t(band)), sourceUid);
-}
-
-// Metadata carries the same identity as the hex-encoded selected.* key. Map
-// both, otherwise the dock may render a control from the wrong routing node.
-std::optional<DockPin> mappedDockPin(const DockPin& pin, AvaAudioProcessor& source,
-                                     AvaAudioProcessor& dest,
-                                     const std::map<int, int>& nodeMap)
-{
-    auto metadata = juce::JSON::parse(pin.metadata);
-    if (metadata.isVoid() || metadata.getDynamicObject() == nullptr) return {};
-    const auto kind = metadata.getProperty("kind", {}).toString();
-    // Actions have local editor callbacks; only parameter-bound pins can be
-    // reconstructed safely in a different UNIT.
-    if (kind != "parameter" && kind != "choice" && kind != "accessory") return {};
-    const auto id = metadata.getProperty("id", {}).toString();
-    if (id.isEmpty() || id.startsWith("filter-")) return {};
-    auto identity = fromHex(pin.key);
-    if (identity.isEmpty()) return {};
-    const auto fromTopology = ava::routing::readState(source.getValueTreeState().state);
-    const auto fromId = int(metadata.getProperty("instance", fromTopology.rootInstanceId));
-    const auto node = nodeMap.find(fromId);
-    if (node == nodeMap.end()) return {};
-    if (fromId != fromTopology.rootInstanceId && !identity.startsWith("routing-instance:"))
-        return {};
-    const int toId = node->second;
-    if (identity.startsWith("routing-instance:"))
-    {
-        const auto oldPrefix = "routing-instance:" + juce::String(fromId) + ":";
-        if (!identity.startsWith(oldPrefix)) return {};
-        identity = "routing-instance:" + juce::String(toId) + ":" + identity.substring(oldPrefix.length());
-    }
-    const auto sourceUid = int(metadata.getProperty("uid", -1));
-    const auto band = int(metadata.getProperty("band", -1));
-    if (sourceUid >= 0)
-    {
-        auto* fromProcessor = &source;
-        auto* toProcessor = &dest;
-        auto fromHandle = fromId == fromTopology.rootInstanceId
-            ? std::shared_ptr<AvaAudioProcessor>() : source.getRoutingInstanceHandle(fromId);
-        auto toHandle = toId == ava::routing::readState(dest.getValueTreeState().state).rootInstanceId
-            ? std::shared_ptr<AvaAudioProcessor>() : dest.getRoutingInstanceHandle(toId);
-        if (fromId != fromTopology.rootInstanceId && !fromHandle) return {};
-        if (toId != ava::routing::readState(dest.getValueTreeState().state).rootInstanceId && !toHandle) return {};
-        if (fromHandle) fromProcessor = fromHandle.get();
-        if (toHandle) toProcessor = toHandle.get();
-        const int newUid = correspondingModuleUid(*fromProcessor, *toProcessor, sourceUid, band);
-        if (newUid < 0) return {};
-        if (newUid != sourceUid)
-        {
-            const auto before = "module-uid:" + juce::String(sourceUid) + ":band:";
-            const auto after  = "module-uid:" + juce::String(newUid) + ":band:";
-            identity = identity.replace(before, after);
-        }
-        metadata.getDynamicObject()->setProperty("uid", newUid);
-    }
-    metadata.getDynamicObject()->setProperty("instance", toId);
-    return DockPin {toHex(identity), juce::JSON::toString(metadata, false)};
-}
-
-std::vector<DockPin> readDockPins(const juce::ValueTree& state)
-{
-    const auto tokens = juce::StringArray::fromTokens(
-        state.getProperty(shell_editor_ui::key("quick_access")).toString(), "|", "");
-    std::vector<DockPin> pins;
-    std::set<juce::String> seen;
-    for (const auto& id : tokens)
-    {
-        if (!seen.insert(id).second) continue;
-        if (!bool(state.getProperty(shell_editor_ui::key("selected." + id), false))) continue;
-        const auto metadata = state.getProperty(shell_editor_ui::key("dock.meta." + id)).toString();
-        if (metadata.isNotEmpty()) pins.push_back({id, metadata});
-    }
-    return pins;
-}
-
 }
 
 // The access shim is the only part of LINK allowed to inspect processor-owned
@@ -192,11 +72,212 @@ class InstanceLinkAccess
 {
 public:
     static Snapshot capture(AvaAudioProcessor&);
+    static juce::ValueTree captureUnit(AvaAudioProcessor&);
+    static bool applyUnit(AvaAudioProcessor&, const juce::ValueTree&);
     static juce::AudioProcessorValueTreeState* destinationState(
         AvaAudioProcessor&, const ParameterValue&, const std::map<ModuleKey, int>&);
     static EqlModuleProcessor* destinationEql(
         AvaAudioProcessor&, const ModuleKey&, const std::map<ModuleKey, int>&);
 };
+
+namespace
+{
+constexpr const char* unitSyncProperties[] {
+    AvaAudioProcessor::linkUuidStateKey, AvaAudioProcessor::linkCountStateKey,
+    AvaAudioProcessor::linkTargetsStateKey, AvaAudioProcessor::linkSendStateKey,
+    AvaAudioProcessor::linkReceiveStateKey, AvaAudioProcessor::linkPausedStateKey,
+    AvaAudioProcessor::linkUnitNumberStateKey,
+    "ava.editor.ui.collapsed.shell.unit.sync.sync"
+};
+
+int readUnitNumber(const juce::ValueTree& state)
+{
+    return juce::jlimit(1, InstanceLinkRegistry::maxUnitNumber,
+                        int(state.getProperty(AvaAudioProcessor::linkUnitNumberStateKey, 1)));
+}
+
+bool canTransfer(const juce::ValueTree& state, const char* direction)
+{
+    return bool(state.getProperty(direction, false))
+        && !bool(state.getProperty(AvaAudioProcessor::linkPausedStateKey, false));
+}
+}
+
+juce::ValueTree InstanceLinkAccess::captureUnit(AvaAudioProcessor& processor)
+{
+    juce::MemoryBlock data;
+    processor.getStateInformation(data);
+    const auto xml = juce::AudioProcessor::getXmlFromBinary(data.getData(), static_cast<int>(data.getSize()));
+    if (xml == nullptr) return {};
+    auto state = juce::ValueTree::fromXml(*xml);
+    for (const auto* key : unitSyncProperties) state.removeProperty(key, nullptr);
+    shell_state_serialization::removeABCompareStateProperties(state);
+    return state;
+}
+
+bool InstanceLinkAccess::applyUnit(AvaAudioProcessor& target, const juce::ValueTree& state)
+{
+    const auto xml = state.createXml();
+    if (xml == nullptr) return false;
+    juce::MemoryBlock data;
+    juce::AudioProcessor::copyXmlToBinary(*xml, data);
+    return target.restoreStateInformation(data.getData(), static_cast<int>(data.getSize()), false, false);
+}
+
+namespace
+{
+using NodeMap = std::map<int, int>;
+using RoutingState = ava::routing::State;
+
+NodeMap matchRouting(const RoutingState& from, const RoutingState& to)
+{
+    NodeMap result {{from.rootInstanceId, to.rootInstanceId}};
+    NodeMap byPosition;
+    const auto match = [&](const auto& self, int source, int target) -> bool
+    {
+        if (source == 0 || target == 0) return source == target;
+        const auto* a = ava::routing::findStateNode(from.nodes, source);
+        const auto* b = ava::routing::findStateNode(to.nodes, target);
+        if (a == nullptr || b == nullptr || a->container != b->container) return false;
+        byPosition.emplace(source, target);
+        return self(self, a->serialNext, b->serialNext)
+            && self(self, a->parallelNext, b->parallelNext)
+            && self(self, a->groupNext, b->groupNext);
+    };
+    if (match(match, from.entryInstanceId, to.entryInstanceId)
+        && byPosition.at(from.rootInstanceId) == to.rootInstanceId)
+        return byPosition;
+
+    // A name is a useful identity across differently arranged units only
+    // when it identifies exactly one node in each of them.
+    for (const auto& [id, name] : from.names)
+    {
+        if (id == from.rootInstanceId
+            || std::count_if(from.names.begin(), from.names.end(),
+                [&](const auto& node) { return node.second == name; }) != 1)
+            continue;
+        int candidate = 0;
+        for (const auto& [local, localName] : to.names)
+            if (localName == name)
+            {
+                if (candidate != 0) { candidate = 0; break; }
+                candidate = local;
+            }
+        if (candidate != 0 && candidate != to.rootInstanceId) result.emplace(id, candidate);
+    }
+    return result;
+}
+
+int nodeOnTarget(const NodeMap& mapping, const RoutingState& from, const RoutingState& to, int id)
+{
+    if (id == 0) return 0;
+    if (const auto found = mapping.find(id); found != mapping.end()
+        && ava::routing::findStateNode(to.nodes, found->second) != nullptr) return found->second;
+    const auto* node = ava::routing::findStateNode(from.nodes, id);
+    if (node == nullptr || !node->container) return 0;
+    const auto child = nodeOnTarget(mapping, from, to, node->serialNext);
+    for (const auto& local : to.nodes)
+        if (local.container && local.serialNext == child) return local.id;
+    return 0;
+}
+
+int findNamedInstance(const RoutingState& state, const juce::String& name)
+{
+    if (name.isEmpty()) return 0;
+    int result = 0;
+    for (const auto& node : state.nodes)
+        if (!node.container && ava::routing::getDisplayName(state, node.id) == name)
+        {
+            if (result != 0) return 0;
+            result = node.id;
+        }
+    return result;
+}
+
+int namedRoutingTarget(const RoutingState& from, const RoutingState& to, int id)
+{
+    const auto* node = ava::routing::findStateNode(from.nodes, id);
+    if (node == nullptr) return 0;
+    if (!node->container)
+        return findNamedInstance(to, ava::routing::getDisplayName(from, id));
+    const auto child = namedRoutingTarget(from, to, node->serialNext);
+    for (const auto& candidate : to.nodes)
+        if (candidate.container && candidate.serialNext == child) return candidate.id;
+    return 0;
+}
+
+juce::ValueTree routingProcessors(const juce::ValueTree& unit)
+{
+    const auto xml = juce::XmlDocument::parse(unit.getProperty(ava::routing::processorStatesKey).toString());
+    return xml != nullptr ? juce::ValueTree::fromXml(*xml) : juce::ValueTree("routing_processors");
+}
+
+bool isLocalUnitProperty(const juce::Identifier& key)
+{
+    const auto name = key.toString();
+    return name.startsWith("ava.routing.") || name.startsWith("ava.link.")
+        || name.startsWith("ava.host_slot.") || name.startsWith("ava.editor.ui.collapsed.shell.unit.sync.");
+}
+
+juce::ValueTree processorSettings(const juce::ValueTree& unit, const juce::ValueTree& children, int id, int root)
+{
+    auto state = id == root ? unit.createCopy() : ava::unit_sync::decode(
+        children.getChildWithProperty("id", juce::String(id)).getProperty("state").toString());
+    if (!state.isValid()) return {};
+    for (int i = state.getNumProperties(); --i >= 0;)
+        if (const auto name = state.getPropertyName(i); isLocalUnitProperty(name))
+            state.removeProperty(name, nullptr);
+    shell_state_serialization::removeABCompareStateProperties(state);
+    for (int i = state.getNumChildren(); --i >= 0;)
+        if (state.getChild(i).getProperty("id").toString().startsWith(AvaAudioProcessor::paramHostSlotPrefix))
+            state.removeChild(i, nullptr);
+    return state;
+}
+
+bool mergeUnit(const juce::ValueTree& before, const juce::ValueTree& after,
+               juce::ValueTree& target, const NodeMap& mapping)
+{
+    const auto previous = ava::routing::readState(before);
+    const auto fresh = ava::routing::readState(after);
+    const auto local = ava::routing::readState(target);
+    const auto oldChildren = routingProcessors(before);
+    const auto newChildren = routingProcessors(after);
+    auto localChildren = routingProcessors(target);
+    bool changed = false;
+    bool childrenChanged = false;
+    for (const auto& [id, dest] : mapping)
+    {
+        const auto* oldNode = ava::routing::findStateNode(previous.nodes, id);
+        const auto* nextNode = ava::routing::findStateNode(fresh.nodes, id);
+        const auto* localNode = ava::routing::findStateNode(local.nodes, dest);
+        if (oldNode == nullptr || nextNode == nullptr || localNode == nullptr
+            || oldNode->container || nextNode->container || localNode->container) continue;
+
+        const auto oldState = processorSettings(before, oldChildren, id, previous.rootInstanceId);
+        const auto newState = processorSettings(after, newChildren, id, fresh.rootInstanceId);
+        if (dest == local.rootInstanceId)
+            changed |= ava::unit_sync::merge(oldState, newState, target);
+        else
+        {
+            auto item = localChildren.getChildWithProperty("id", juce::String(dest));
+            if (!item.isValid()) continue;
+            auto state = ava::unit_sync::decode(item.getProperty("state").toString());
+            if (ava::unit_sync::merge(oldState, newState, state))
+            {
+                item.setProperty("state", ava::unit_sync::encode(state), nullptr);
+                childrenChanged = true;
+            }
+        }
+    }
+    if (childrenChanged)
+        if (const auto xml = localChildren.createXml())
+        {
+            target.setProperty(ava::routing::processorStatesKey, xml->toString(), nullptr);
+            changed = true;
+        }
+    return changed;
+}
+}
 
 Snapshot InstanceLinkAccess::capture(AvaAudioProcessor& p)
 {
@@ -259,38 +340,6 @@ Snapshot InstanceLinkAccess::capture(AvaAudioProcessor& p)
         }
     }
     } // Release DSP/module lock before accessing routing handles and editor UI.
-    if (!p.isRoutingInstance())
-    {
-        const auto& state = p.getValueTreeState().state;
-        snapshot.routing = ava::routing::readState(state);
-        snapshot.pinnedOrder = state.getProperty(shell_editor_ui::key("pinned_routing_order")).toString();
-        snapshot.dockPins = readDockPins(state);
-        for (const auto& node : snapshot.routing.nodes)
-        {
-            if (node.container) continue;
-            RoutedSwitches switches;
-            const std::array<const char*, 3> ids {
-                AvaAudioProcessor::paramSoloInstanceId,
-                AvaAudioProcessor::paramInstanceMuteId,
-                AvaAudioProcessor::paramGlobalBypassId
-            };
-            bool any = false;
-            for (int i = 0; i < 3; ++i)
-            {
-                // Use the SAME target as the S/MT/BP indicators in PINNED
-                // INSTS. Root-node BP is a delegated routing-bypass proxy,
-                // not the UNIT's separate global BYPASS parameter.
-                const auto targetId = ava::routing::parameterTargetId(node.id, ids[size_t(i)]);
-                if (auto* parameter = p.findHostSlotTarget(targetId))
-                {
-                    switches.values[size_t(i)] = parameter->getValue();
-                    switches.available[size_t(i)] = true;
-                    any = true;
-                }
-            }
-            if (any) snapshot.routingSwitches[node.id] = switches;
-        }
-    }
     return snapshot;
 }
 
@@ -353,7 +402,6 @@ struct InstanceLinkRegistry::Impl
     {
         AvaAudioProcessor* processor = nullptr;
         std::shared_ptr<RootLifetime> lifetime;
-        juce::String name;
         uint64_t observedRevision = 0;
         uint64_t observedViewRevision = 0;
         int quietTicks = 0;
@@ -371,13 +419,22 @@ struct InstanceLinkRegistry::Impl
             // Each source filter index maps to its own position in the
             // recipient. Existing, unmatched recipient filters are untouched.
             std::map<ModuleKey, std::map<int, int>> eqlFilterIndices;
-            struct DockBinding { juce::String recipient; bool created = false; };
-            std::map<juce::String, DockBinding> dockBindings;
+            juce::ValueTree unitBaseline;
+            NodeMap nodes;
+            struct PendingRoutingEdit
+            {
+                RoutingEdit edit;
+                RoutingState before;
+                int first = 0, second = 0, added = 0;
+                bool removed = false;
+                juce::String addedName;
+            };
+            std::vector<PendingRoutingEdit> routingEdits;
         };
         std::map<uint64_t, Destination> linked;
     };
     mutable std::mutex mutex;
-    uint64_t nextId = 1; // External UNITs use sequential display numbers.
+    uint64_t nextId = 1;
     uint64_t nextInternalId = uint64_t(1) << 62; // Never consume UNIT numbers.
     std::map<uint64_t, Entry> entries;
 };
@@ -421,7 +478,6 @@ uint64_t InstanceLinkRegistry::attach(AvaAudioProcessor& processor)
     entry.processor = &processor;
     entry.lifetime = std::make_shared<Impl::RootLifetime>();
     entry.lifetime->processor = &processor;
-    entry.name = "AVA " + juce::String(int(id)).paddedLeft('0', 2);
     impl->entries.emplace(id, std::move(entry));
     if (!isTimerRunning()) startTimerHz(60);
     return id;
@@ -465,8 +521,11 @@ std::vector<InstanceLinkRegistry::Peer> InstanceLinkRegistry::peers(uint64_t sou
     if (sender == impl->entries.end()) return result;
     for (const auto& [id, entry] : impl->entries)
         if (id != source && !entry.internal)
-            result.push_back({id, entry.name, sender->second.linked.contains(id),
-                entry.processor->getValueTreeState().state.getProperty(AvaAudioProcessor::linkUuidStateKey).toString()});
+        {
+            const auto& state = entry.processor->getValueTreeState().state;
+            result.push_back({id, formatUnitNumber(readUnitNumber(state)), sender->second.linked.contains(id),
+                state.getProperty(AvaAudioProcessor::linkUuidStateKey).toString()});
+        }
     return result;
 }
 
@@ -560,6 +619,68 @@ bool InstanceLinkRegistry::setUnitLinkTarget(uint64_t source, int index, uint64_
     return true;
 }
 
+bool InstanceLinkRegistry::linkDraggedUnit(uint64_t source, uint64_t target)
+{
+    if (!impl || source == target) return false;
+    std::lock_guard lock(impl->mutex);
+    reconcileSavedLinks();
+    const auto from = impl->entries.find(source), to = impl->entries.find(target);
+    if (from == impl->entries.end() || to == impl->entries.end() || from->second.internal || to->second.internal)
+        return false;
+    auto& senderState = from->second.processor->parameters.state;
+    auto& receiverState = to->second.processor->parameters.state;
+    const auto uuid = receiverState.getProperty(AvaAudioProcessor::linkUuidStateKey).toString();
+    auto targets = sizedUnitLinkTargets(senderState, readUnitLinkCount(senderState));
+    if (!targets.contains(uuid))
+    {
+        const auto free = targets.indexOf(juce::String());
+        if (free >= 0) targets.set(free, uuid);
+        else if (targets.size() < maxUnitLinks) targets.add(uuid);
+        else return false;
+        senderState.setProperty(AvaAudioProcessor::linkCountStateKey, targets.size(), nullptr);
+        senderState.setProperty(AvaAudioProcessor::linkTargetsStateKey, targets.joinIntoString(";"), nullptr);
+    }
+    const bool newSend = !bool(senderState.getProperty(AvaAudioProcessor::linkSendStateKey, false));
+    const bool newReceive = !bool(receiverState.getProperty(AvaAudioProcessor::linkReceiveStateKey, false));
+    senderState.setProperty(AvaAudioProcessor::linkSendStateKey, true, nullptr);
+    receiverState.setProperty(AvaAudioProcessor::linkReceiveStateKey, true, nullptr);
+    reconcileSavedLinks();
+    if (newSend || newReceive)
+        for (auto& [id, entry] : impl->entries)
+        {
+            if (entry.internal) continue;
+            for (auto& [destination, relation] : entry.linked)
+                if ((newSend && id == source) || (newReceive && destination == target))
+                    if (const auto peer = impl->entries.find(destination);
+                        peer != impl->entries.end() && !peer->second.internal)
+                    {
+                        relation.unitBaseline = InstanceLinkAccess::captureUnit(*entry.processor);
+                        relation.routingEdits.clear();
+                    }
+        }
+    return true;
+}
+
+bool InstanceLinkRegistry::editRouting(AvaAudioProcessor& processor, RoutingEdit edit, int first, int second)
+{
+    auto& root = processor.getRoutingOwner();
+    auto& tree = root.getValueTreeState().state;
+    const auto before = ava::routing::readState(tree);
+    if (!edit(tree, first, second)) return false;
+    const auto after = ava::routing::readState(tree);
+    const auto added = after.nextInstanceId != before.nextInstanceId ? before.nextInstanceId : 0;
+    const bool removed = ava::routing::findStateNode(after.nodes, first) == nullptr;
+    const auto addedName = added != 0 ? ava::routing::getDisplayName(after, added) : juce::String {};
+    std::lock_guard lock(impl->mutex);
+    const auto entry = impl->entries.find(root.getLinkSessionId());
+    if (entry != impl->entries.end() && canTransfer(tree, AvaAudioProcessor::linkSendStateKey))
+        for (auto& [id, relation] : entry->second.linked)
+            if (const auto target = impl->entries.find(id); target != impl->entries.end() && !target->second.internal
+                && canTransfer(target->second.processor->parameters.state, AvaAudioProcessor::linkReceiveStateKey))
+                relation.routingEdits.push_back({edit, before, first, second, added, removed, addedName});
+    return true;
+}
+
 bool InstanceLinkRegistry::isSendEnabled(uint64_t unit)
 {
     if (!impl) return false;
@@ -582,20 +703,13 @@ void InstanceLinkRegistry::setSendEnabled(uint64_t unit, bool enabled)
     if (bool(state.getProperty(AvaAudioProcessor::linkSendStateKey, false)) == enabled) return;
     state.setProperty(AvaAudioProcessor::linkSendStateKey, enabled, nullptr);
     if (enabled)
-    {
-        std::vector<uint64_t> recipients;
-        for (const auto& [id, relation] : entry.linked)
-        {
-            juce::ignoreUnused(relation);
-            const auto receiver = impl->entries.find(id);
-            if (receiver != impl->entries.end() && !receiver->second.internal) recipients.push_back(id);
-        }
-        for (auto receiver : recipients)
-        {
-            entry.linked.erase(receiver);
-            linkUnlocked(unit, receiver);
-        }
-    }
+        for (auto& [id, relation] : entry.linked)
+            if (const auto receiver = impl->entries.find(id);
+                receiver != impl->entries.end() && !receiver->second.internal)
+            {
+                relation.unitBaseline = InstanceLinkAccess::captureUnit(*entry.processor);
+                relation.routingEdits.clear();
+            }
 }
 
 InstanceLinkRegistry::Activity InstanceLinkRegistry::activity(uint64_t unit)
@@ -627,15 +741,72 @@ void InstanceLinkRegistry::setReceiveEnabled(uint64_t unit, bool enabled)
     if (bool(state.getProperty(AvaAudioProcessor::linkReceiveStateKey, false)) == enabled) return;
     state.setProperty(AvaAudioProcessor::linkReceiveStateKey, enabled, nullptr);
     if (enabled)
-    {
-        // Only this recipient gets a fresh baseline. Other recipients must
-        // still receive any sender edits pending when RECEIVE was enabled.
         for (auto& [source, sender] : impl->entries)
-            if (!sender.internal && sender.linked.contains(unit))
-            {
-                sender.linked.erase(unit);
-                linkUnlocked(source, unit);
-            }
+            if (!sender.internal)
+                if (const auto relation = sender.linked.find(unit); relation != sender.linked.end())
+                {
+                    relation->second.unitBaseline = InstanceLinkAccess::captureUnit(*sender.processor);
+                    relation->second.routingEdits.clear();
+                }
+}
+
+int InstanceLinkRegistry::unitNumber(uint64_t unit)
+{
+    std::lock_guard lock(impl->mutex);
+    const auto it = impl->entries.find(unit);
+    return it != impl->entries.end() && !it->second.internal
+        ? readUnitNumber(it->second.processor->parameters.state) : 1;
+}
+
+juce::String InstanceLinkRegistry::formatUnitNumber(int number)
+{
+    return juce::String(number).paddedLeft('0', 2);
+}
+
+void InstanceLinkRegistry::setUnitNumber(uint64_t unit, int number)
+{
+    std::lock_guard lock(impl->mutex);
+    const auto it = impl->entries.find(unit);
+    if (it == impl->entries.end() || it->second.internal) return;
+    auto& state = it->second.processor->parameters.state;
+    const auto next = juce::jlimit(1, maxUnitNumber, number);
+    if (readUnitNumber(state) != next)
+        state.setProperty(AvaAudioProcessor::linkUnitNumberStateKey, next, nullptr);
+}
+
+bool InstanceLinkRegistry::isPaused(uint64_t unit)
+{
+    std::lock_guard lock(impl->mutex);
+    const auto it = impl->entries.find(unit);
+    return it != impl->entries.end() && !it->second.internal
+        && bool(it->second.processor->parameters.state.getProperty(AvaAudioProcessor::linkPausedStateKey, false));
+}
+
+void InstanceLinkRegistry::setPaused(uint64_t unit, bool paused)
+{
+    std::lock_guard lock(impl->mutex);
+    reconcileSavedLinks();
+    const auto it = impl->entries.find(unit);
+    if (it == impl->entries.end() || it->second.internal) return;
+    auto& state = it->second.processor->parameters.state;
+    if (bool(state.getProperty(AvaAudioProcessor::linkPausedStateKey, false)) == paused) return;
+    state.setProperty(AvaAudioProcessor::linkPausedStateKey, paused, nullptr);
+    it->second.activity = {};
+    // Drop changes across both sides of the pause boundary, including edits
+    // made between the last registry tick and an immediate resume.
+    for (auto& [source, entry] : impl->entries)
+    {
+        if (entry.internal) continue;
+        juce::ValueTree baseline;
+        for (auto& [destination, relation] : entry.linked)
+        {
+            if (source != unit && destination != unit) continue;
+            const auto peer = impl->entries.find(destination);
+            if (peer == impl->entries.end() || peer->second.internal) continue;
+            if (!baseline.isValid()) baseline = InstanceLinkAccess::captureUnit(*entry.processor);
+            relation.unitBaseline = baseline;
+            relation.routingEdits.clear();
+        }
     }
 }
 
@@ -644,6 +815,14 @@ void InstanceLinkRegistry::linkUnlocked(uint64_t source, uint64_t target)
     auto from = impl->entries.find(source), to = impl->entries.find(target);
     if (from == impl->entries.end() || to == impl->entries.end()
         || from->second.linked.contains(target)) return;
+    if (!from->second.internal && !to->second.internal)
+    {
+        auto& relation = from->second.linked[target];
+        relation.unitBaseline = InstanceLinkAccess::captureUnit(*from->second.processor);
+        relation.nodes = matchRouting(ava::routing::readState(from->second.processor->parameters.state),
+                                      ava::routing::readState(to->second.processor->parameters.state));
+        return;
+    }
     // Baseline once when the destination becomes available, so reloading a
     // project never replays stale values from the sender's loaded preset.
     const auto baselineTarget = InstanceLinkAccess::capture(*to->second.processor);
@@ -872,39 +1051,129 @@ void InstanceLinkRegistry::poll(uint64_t source)
     const auto sender = impl->entries.find(source);
     if (sender == impl->entries.end() || sender->second.processor == nullptr) return;
     if (sender->second.linked.empty()) return;
-    const auto revision = sender->second.processor->getStateRevision();
-    const auto viewRevision = sender->second.processor->getRoutingOwner()
-        .viewStateRevision.load(std::memory_order_relaxed);
-    // MODULES tile visibility is an editor-only setting, so it advances the
-    // view revision rather than the audio/Undo revision. UNIT sync must watch
-    // both or these edits silently disappear from the outgoing snapshot.
-    if (revision == sender->second.observedRevision
-        && viewRevision == sender->second.observedViewRevision
-        && ++sender->second.quietTicks < 12)
+    auto& entry = sender->second;
+    const auto revision = entry.processor->getStateRevision();
+    const auto viewRevision = entry.processor->getRoutingOwner().viewStateRevision.load(std::memory_order_relaxed);
+    const bool audioChanged = revision != entry.observedRevision;
+    const bool viewEdited = viewRevision != entry.observedViewRevision;
+    const bool pending = std::any_of(entry.linked.begin(), entry.linked.end(),
+        [] (const auto& link) { return !link.second.routingEdits.empty(); });
+    if (!audioChanged && !viewEdited && !pending && ++entry.quietTicks < 12)
         return;
-    sender->second.observedRevision = revision;
-    sender->second.observedViewRevision = viewRevision;
-    sender->second.quietTicks = 0;
-    const auto freshBaseline = std::make_shared<Snapshot>(InstanceLinkAccess::capture(*sender->second.processor));
-    const auto& fresh = *freshBaseline;
-    if (sender->second.linked.empty()) return;
+    entry.observedRevision = revision;
+    entry.observedViewRevision = viewRevision;
+    entry.quietTicks = 0;
 
-    for (auto& [receiverId, relation] : sender->second.linked)
+    std::shared_ptr<const Snapshot> freshBaseline;
+    juce::ValueTree unitSnapshot;
+    for (auto& [receiverId, relation] : entry.linked)
     {
         const auto receiver = impl->entries.find(receiverId);
         if (receiver == impl->entries.end() || !receiver->second.processor) continue;
-        const auto previousBaseline = std::move(relation.baseline);
-        relation.baseline = freshBaseline;
+        auto& recipient = receiver->second;
+        if (!entry.internal && !recipient.internal)
+        {
+            if (!audioChanged && !viewEdited && relation.routingEdits.empty()) continue;
+            if (!unitSnapshot.isValid()) unitSnapshot = InstanceLinkAccess::captureUnit(*entry.processor);
+            if (!unitSnapshot.isValid()) continue;
+            const auto previous = std::exchange(relation.unitBaseline, unitSnapshot);
+            auto routingEdits = std::exchange(relation.routingEdits, {});
+            if (!canTransfer(entry.processor->parameters.state, AvaAudioProcessor::linkSendStateKey)
+                || !canTransfer(recipient.processor->parameters.state, AvaAudioProcessor::linkReceiveStateKey))
+                continue;
+
+            auto& target = *recipient.processor;
+            bool routingChanged = false;
+            for (const auto& action : routingEdits)
+            {
+                auto& tree = target.parameters.state;
+                const auto local = ava::routing::readState(tree);
+                if (action.added != 0)
+                    if (const auto existing = findNamedInstance(local, action.addedName); existing != 0)
+                    {
+                        relation.nodes[action.added] = existing;
+                        continue;
+                    }
+                const auto resolve = [&](int id)
+                {
+                    return action.added != 0 || action.removed
+                        ? namedRoutingTarget(action.before, local, id)
+                        : nodeOnTarget(relation.nodes, action.before, local, id);
+                };
+                const auto first = resolve(action.first);
+                const auto second = resolve(action.second);
+                if (first == 0 || (second == 0 && action.second != 0)) continue;
+                if (!action.edit(tree, first, second)) continue;
+                routingChanged = true;
+                if (action.removed) relation.nodes.erase(action.first);
+                if (action.added != 0)
+                {
+                    relation.nodes[action.added] = local.nextInstanceId;
+                    ava::routing::renameInstance(tree, local.nextInstanceId, action.addedName, true);
+                }
+                target.synchronizeRouting();
+                if (auto* editor = target.getContentEditor()) editor->requestStructureRestoreResync();
+            }
+
+            if (previous.isValid())
+            {
+                const auto oldRouting = ava::routing::readState(previous);
+                const auto newRouting = ava::routing::readState(unitSnapshot);
+                if (oldRouting.rootBypassed != newRouting.rootBypassed)
+                {
+                    const auto root = nodeOnTarget(relation.nodes, newRouting,
+                        ava::routing::readState(target.parameters.state), newRouting.rootInstanceId);
+                    if (root != 0)
+                        target.setRoutingInstanceBypassValue(root, newRouting.rootBypassed);
+                }
+                if (routingEdits.empty())
+                    for (const auto& node : newRouting.nodes)
+                    {
+                        const auto* old = ava::routing::findStateNode(oldRouting.nodes, node.id);
+                        if (old == nullptr || old->compensated == node.compensated) continue;
+                        const auto local = nodeOnTarget(relation.nodes, newRouting,
+                            ava::routing::readState(target.parameters.state), node.id);
+                        if (local != 0)
+                            routingChanged |= ava::routing::setGroupCompensated(target.parameters.state, local, node.compensated);
+                    }
+                if (routingChanged && routingEdits.empty()) target.synchronizeRouting();
+            }
+
+            auto merged = InstanceLinkAccess::captureUnit(target);
+            // Capture omits local SYNC settings for comparison. Restore them
+            // from the recipient before passing the merged result to APVTS.
+            for (const auto* key : unitSyncProperties)
+                if (target.parameters.state.hasProperty(key))
+                    merged.setProperty(key, target.parameters.state.getProperty(key), nullptr);
+            const bool stateChanged = mergeUnit(previous, unitSnapshot, merged, relation.nodes);
+            if (stateChanged && InstanceLinkAccess::applyUnit(target, merged))
+            {
+                if (audioChanged) target.notifyHostOfStateChange();
+                else target.notifyHostOfViewChange();
+            }
+            if (routingChanged || stateChanged)
+            {
+                const auto now = juce::Time::getMillisecondCounter();
+                entry.activity.sentAt = now;
+                recipient.activity.receivedAt = now;
+                if (routingChanged)
+                    for (auto& [id, node] : impl->entries)
+                        if (node.internal && node.rootSessionId == receiverId)
+                        {
+                            recipient.linked.erase(id);
+                            node.linked.clear();
+                        }
+                rebaseRecipient(receiverId);
+            }
+            continue;
+        }
+
+        if (freshBaseline == nullptr)
+            freshBaseline = std::make_shared<Snapshot>(InstanceLinkAccess::capture(*entry.processor));
+        const auto& fresh = *freshBaseline;
+        const auto previousBaseline = std::exchange(relation.baseline, freshBaseline);
         if (!previousBaseline) continue;
         const auto& previous = *previousBaseline;
-        // RECEIVE gates incoming host UNIT changes only. Internal routing
-        // INSTANCE links retain their independent behaviour.
-        const bool unitTransfer = !sender->second.internal && !receiver->second.internal;
-        if (unitTransfer
-            && (!bool(sender->second.processor->getValueTreeState().state
-                    .getProperty(AvaAudioProcessor::linkSendStateKey, false))
-                || !bool(receiver->second.processor->getValueTreeState().state
-                    .getProperty(AvaAudioProcessor::linkReceiveStateKey, false)))) continue;
         auto& target = *receiver->second.processor;
         auto& mapping = relation.mapping;
         auto& filterMappings = relation.eqlFilterIndices;
@@ -950,150 +1219,7 @@ void InstanceLinkRegistry::poll(uint64_t source)
                 }
             }
 
-        if (unitTransfer)
-        {
-            const auto destTopology = ava::routing::readState(target.getValueTreeState().state);
-            const auto nodeMap = ava::unit_sync::matchingNodes(fresh.routing, destTopology);
-            // Root switches can be mirrored even when the two routing graphs
-            // differ. Nested switches and navigation require matching graphs.
-            std::map<int, int> switchMap = nodeMap;
-            if (switchMap.empty())
-                switchMap[fresh.routing.rootInstanceId] = destTopology.rootInstanceId;
-            const std::array<const char*, 3> switchIds {
-                AvaAudioProcessor::paramSoloInstanceId,
-                AvaAudioProcessor::paramInstanceMuteId,
-                AvaAudioProcessor::paramGlobalBypassId
-            };
-            for (const auto& [sourceId, switches] : fresh.routingSwitches)
-            {
-                const auto mapped = switchMap.find(sourceId);
-                if (mapped == switchMap.end()) continue;
-                const auto old = previous.routingSwitches.find(sourceId);
-                for (size_t i = 0; i < switchIds.size(); ++i)
-                {
-                    if (!switches.available[i]) continue;
-                    if (old != previous.routingSwitches.end() && old->second.available[i]
-                        && std::abs(old->second.values[i] - switches.values[i]) < 1.0e-7f)
-                        continue;
-                    const auto targetId = ava::routing::parameterTargetId(mapped->second, switchIds[i]);
-                    auto* parameter = target.findHostSlotTarget(targetId);
-                    if (parameter == nullptr
-                        || std::abs(parameter->getValue() - switches.values[i]) < 1.0e-7f) continue;
-                    parameter->beginChangeGesture();
-                    parameter->setValueNotifyingHost(switches.values[i]);
-                    parameter->endChangeGesture();
-                    changed = true;
-                }
-            }
-
-            auto& uiState = target.getValueTreeState().state;
-            if (!nodeMap.empty() && fresh.pinnedOrder != previous.pinnedOrder)
-            {
-                std::vector<int> sourceOrder;
-                const auto saved = juce::StringArray::fromTokens(fresh.pinnedOrder, "|", "");
-                for (const auto& id : saved) sourceOrder.push_back(id.getIntValue());
-                const auto remapped = ava::unit_sync::remapPinned(sourceOrder, nodeMap);
-                juce::StringArray remappedText;
-                for (const auto id : remapped) remappedText.add(juce::String(id));
-                const auto next = remappedText.joinIntoString("|");
-                if (next != uiState.getProperty(shell_editor_ui::key("pinned_routing_order")).toString())
-                {
-                    uiState.setProperty(shell_editor_ui::key("pinned_routing_order"), next, nullptr);
-                    viewChanged = true;
-                }
-            }
-
-            // Incremental dock transfer: pins that predated a link stay local
-            // until edited. Never wipe unrelated recipient pins. Each imported
-            // pin is remapped to the recipient's routing node and module UID.
-            if (fresh.dockPins != previous.dockPins)
-            {
-                auto& bindings = relation.dockBindings;
-                std::map<juce::String, DockPin> before, after;
-                for (const auto& pin : previous.dockPins) before.emplace(pin.key, pin);
-                for (const auto& pin : fresh.dockPins) after.emplace(pin.key, pin);
-                auto current = juce::StringArray::fromTokens(
-                    uiState.getProperty(shell_editor_ui::key("quick_access")).toString(), "|", "");
-                for (const auto& [key, pin] : before)
-                    if (!after.contains(key))
-                    {
-                        const auto it = bindings.find(key);
-                        if (it == bindings.end()) continue;
-                        if (it->second.created)
-                        {
-                            uiState.removeProperty(shell_editor_ui::key("selected." + it->second.recipient), nullptr);
-                            uiState.removeProperty(shell_editor_ui::key("dock.meta." + it->second.recipient), nullptr);
-                            current.removeString(it->second.recipient);
-                            viewChanged = true;
-                        }
-                        bindings.erase(it);
-                    }
-                std::vector<juce::String> moved;
-                for (const auto& pin : fresh.dockPins)
-                {
-                    const auto existed = before.find(pin.key);
-                    const bool updated = existed == before.end() || existed->second.metadata != pin.metadata;
-                    const auto bound = bindings.find(pin.key);
-                    if (nodeMap.empty()) continue;
-                    const auto destPin = mappedDockPin(pin, *sender->second.processor, target, nodeMap);
-                    if (!destPin) continue;
-                    // Reorder existing recipient pins without importing untouched
-                    // source pins that the recipient never selected.
-                    if (!updated && bound == bindings.end()
-                        && !bool(uiState.getProperty(
-                            shell_editor_ui::key("selected." + destPin->key), false)))
-                        continue;
-                    if (bound != bindings.end() && bound->second.recipient != destPin->key)
-                    {
-                        if (bound->second.created)
-                        {
-                            uiState.removeProperty(shell_editor_ui::key("selected." + bound->second.recipient), nullptr);
-                            uiState.removeProperty(shell_editor_ui::key("dock.meta." + bound->second.recipient), nullptr);
-                            current.removeString(bound->second.recipient);
-                        }
-                        bindings.erase(bound);
-                        viewChanged = true;
-                    }
-                    if (!bindings.contains(pin.key))
-                    {
-                        const bool alreadyPresent = bool(uiState.getProperty(
-                            shell_editor_ui::key("selected." + destPin->key), false));
-                        bindings.emplace(pin.key, Impl::Entry::Destination::DockBinding {destPin->key, !alreadyPresent});
-                    }
-                    const auto& binding = bindings.at(pin.key);
-                    if (binding.created || updated)
-                    {
-                        const auto metadataKey = shell_editor_ui::key("dock.meta." + destPin->key);
-                        if (!bool(uiState.getProperty(shell_editor_ui::key("selected." + destPin->key), false))
-                            || (binding.created && uiState.getProperty(metadataKey).toString() != destPin->metadata))
-                        {
-                            uiState.setProperty(shell_editor_ui::key("selected." + destPin->key), true, nullptr);
-                            if (binding.created)
-                                uiState.setProperty(metadataKey, destPin->metadata, nullptr);
-                            viewChanged = true;
-                        }
-                    }
-                    moved.push_back(destPin->key);
-                }
-                // Reorder only linked dock tiles; unlinked destination tiles
-                // retain their relative positions and are never overwritten.
-                std::set<juce::String> linkedKeys(moved.begin(), moved.end());
-                size_t next = 0;
-                for (int index = 0; index < current.size(); ++index)
-                    if (linkedKeys.contains(current[index]) && next < moved.size())
-                        current.set(index, moved[next++]);
-                while (next < moved.size())
-                    current.add(moved[next++]);
-                const auto reordered = current.joinIntoString("|");
-                if (reordered != uiState.getProperty(shell_editor_ui::key("quick_access")).toString())
-                {
-                    uiState.setProperty(shell_editor_ui::key("quick_access"), reordered, nullptr);
-                    viewChanged = true;
-                }
-            }
-        }
-
-        // UNIT sync mirrors both per-module states. MODULES `shown` controls
+        // INSTANCE links mirror both per-module states. MODULES `shown` controls
         // processing activation and editor display; BP stays independent.
         for (const auto& [key, newSlot] : fresh.slots)
         {
@@ -1227,7 +1353,7 @@ void InstanceLinkRegistry::poll(uint64_t source)
             if (value.owner == 0
                 && (value.id == AvaAudioProcessor::paramSoloInstanceId
                     || value.id == AvaAudioProcessor::paramInstanceMuteId
-                    || (!unitTransfer && value.id == AvaAudioProcessor::paramSoloChannelId))) continue;
+                    || value.id == AvaAudioProcessor::paramSoloChannelId)) continue;
             // The root's BP is the global plugin bypass; a nested node's BP
             // bypasses only that node. Never equate the two during routing sync.
             if (value.owner == 0 && value.id == AvaAudioProcessor::paramGlobalBypassId
@@ -1267,24 +1393,35 @@ void InstanceLinkRegistry::poll(uint64_t source)
         // A target that also drives other targets must not echo changes back.
         if (changed || viewChanged)
         {
-            if (unitTransfer)
-            {
-                const auto now = juce::Time::getMillisecondCounter();
-                sender->second.activity.sentAt = now;
-                receiver->second.activity.receivedAt = now;
-            }
-            // Do not generate a DAW Undo entry for a display-only change.
             if (changed) target.notifyHostOfStateChange();
-            const auto receivedBaseline = std::make_shared<Snapshot>(InstanceLinkAccess::capture(target));
-            for (auto& [outgoingId, outgoing] : receiver->second.linked)
-            {
-                juce::ignoreUnused(outgoingId);
-                outgoing.baseline = receivedBaseline;
-            }
-            receiver->second.observedRevision = target.getStateRevision();
-            receiver->second.observedViewRevision = target.getRoutingOwner()
-                .viewStateRevision.load(std::memory_order_relaxed);
-            receiver->second.quietTicks = 0;
+            rebaseRecipient(receiverId);
         }
     }
+}
+
+void InstanceLinkRegistry::rebaseRecipient(uint64_t recipient)
+{
+    auto& entry = impl->entries.at(recipient);
+    auto& target = *entry.processor;
+    std::shared_ptr<const Snapshot> localSnapshot;
+    juce::ValueTree unitSnapshot;
+    for (auto& [outgoingId, outgoing] : entry.linked)
+    {
+        const auto destination = impl->entries.find(outgoingId);
+        if (destination == impl->entries.end()) continue;
+        if (!entry.internal && !destination->second.internal)
+        {
+            if (!unitSnapshot.isValid()) unitSnapshot = InstanceLinkAccess::captureUnit(target);
+            outgoing.unitBaseline = unitSnapshot;
+        }
+        else
+        {
+            if (localSnapshot == nullptr)
+                localSnapshot = std::make_shared<Snapshot>(InstanceLinkAccess::capture(target));
+            outgoing.baseline = localSnapshot;
+        }
+    }
+    entry.observedRevision = target.getStateRevision();
+    entry.observedViewRevision = target.getRoutingOwner().viewStateRevision.load(std::memory_order_relaxed);
+    entry.quietTicks = 0;
 }

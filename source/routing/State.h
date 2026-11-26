@@ -98,5 +98,6 @@ bool moveInstanceSerialBefore(juce::ValueTree& tree, int instanceId, int targetI
 bool moveInstanceParallelBefore(juce::ValueTree& tree, int instanceId, int targetInstanceId);
 bool moveInstanceSerialAfter(juce::ValueTree& tree, int instanceId, int targetInstanceId);
 bool moveInstanceParallelTo(juce::ValueTree& tree, int instanceId, int targetInstanceId);
-bool renameInstance(juce::ValueTree& tree, int instanceId, const juce::String& name);
+bool renameInstance(juce::ValueTree& tree, int instanceId, const juce::String& name,
+                    bool allowAutomaticName = false);
 }

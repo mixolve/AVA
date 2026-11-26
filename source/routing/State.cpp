@@ -516,9 +516,14 @@ juce::String getDisplayName(const State& state, const int instanceId)
     auto number = 1;
     for (const auto id : ids)
     {
-        const auto name = "INS-" + juce::String(number++);
-        if (id == instanceId)
-            return name;
+        if (state.names.contains(id)) { ++number; continue; }
+        juce::String name;
+        do
+        {
+            name = "INS-" + juce::String(number++);
+        } while (std::any_of(state.names.begin(), state.names.end(),
+                            [&](const auto& custom) { return custom.second == name; }));
+        if (id == instanceId) return name;
     }
     return {};
 }
@@ -882,7 +887,8 @@ bool moveInstanceParallelTo(juce::ValueTree& tree, const int instanceId, const i
     return moveParallelAtInstance(tree, instanceId, targetInstanceId, false);
 }
 
-bool renameInstance(juce::ValueTree& tree, const int instanceId, const juce::String& name)
+bool renameInstance(juce::ValueTree& tree, const int instanceId, const juce::String& name,
+                    bool allowAutomaticName)
 {
     State state;
     if (! decode(tree, state) || findNode(state, instanceId) == nullptr)
@@ -892,7 +898,7 @@ bool renameInstance(juce::ValueTree& tree, const int instanceId, const juce::Str
         return true;
     if (! isValidOscInstanceName(normalized))
         return false;
-    if (normalized.startsWith("INS-")
+    if (!allowAutomaticName && normalized.startsWith("INS-")
             && normalized.substring(4).isNotEmpty()
             && normalized.substring(4).containsOnly("0123456789"))
         return false;
