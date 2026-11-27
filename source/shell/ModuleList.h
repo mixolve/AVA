@@ -30,12 +30,12 @@ public:
           catalogOrder(shell_editor_ui::inactiveModulesOrder(viewState))
     {
         getProperties().set("disableDockSelection", true);
-        inactiveBlock.bindCollapseState(state, "shell.instance.modules");
-        activeBlock.bindCollapseState(state, "shell.instance.modules");
         addAndMakeVisible(inactiveBlock);
         catalogRow.attach("modules-inactive");
+        catalogRow.setScrollLabel("MODULES\nSCROLL");
         addAndMakeVisible(activeBlock);
         chainRow.attach("modules-active");
+        chainRow.setScrollLabel("MODACT\nSCROLL");
         for (const auto& type : module_order::descriptions)
             catalogTiles[size_t(type.id)] = makeTile(type.id, type.name, true);
         refreshItemsIfChanged();
@@ -69,13 +69,9 @@ public:
         layoutChain();
     }
 
-    int getContentHeight() const
+    static int getContentHeight(const juce::Component& layout)
     {
-        const auto gap = getUiGap(*this);
-        const auto body = getSquareControlSize(*this) + 2 * (controlBlockPadding + controlBlockFrameThickness);
-        return 2 * controlBlockHeaderHeight + gap
-            + (inactiveBlock.isBlockCollapsed("MODULES INACTIVE") ? 0 : body)
-            + (activeBlock.isBlockCollapsed("MODULES ACTIVE") ? 0 : body);
+        return 2 * getSquareControlSize(layout) + getUiGap(layout);
     }
 
     void resized() override
@@ -128,7 +124,8 @@ private:
         std::array<juce::Component*, module_order::descriptions.size()> tiles {};
         for (size_t index = 0; index < catalogOrder.size(); ++index)
             tiles[index] = catalogTiles[size_t(catalogOrder[index])].get();
-        catalogRow.layout({0, 0, getWidth(), controlBlockHeaderHeight}, tiles);
+        inactiveBlock.setBounds(0, 0, getWidth(), getSquareControlSize(*this));
+        catalogRow.layoutInline(inactiveBlock.getLocalBounds(), tiles);
     }
 
     void layoutChain()
@@ -147,10 +144,12 @@ private:
         }
         if (insertion)
             tiles.insert(tiles.begin() + std::ptrdiff_t(*insertion), nullptr);
-        else if (tiles.empty())
-            tiles.push_back(nullptr);
-        chainRow.layout({0, inactiveBlock.getBottom() + getUiGap(*this), getWidth(),
-                         controlBlockHeaderHeight}, tiles);
+        const auto side = getSquareControlSize(*this);
+        const auto gap = getUiGap(*this);
+        activeBlock.setBounds(0, inactiveBlock.getBottom() + gap, getWidth(), side);
+        const auto tileWidth = juce::jmax(0, getWidth() - side - gap);
+        tiles.resize(juce::jmax(tiles.size(), size_t(chainRow.content.countFittingSlots(tileWidth))), nullptr);
+        chainRow.layoutInline(activeBlock.getLocalBounds(), tiles);
     }
 
     void handleDrag(int id, bool fromCatalog, BoxTextButton& button, const juce::MouseEvent& event, bool released)
@@ -226,8 +225,8 @@ private:
     juce::ValueTree& viewState;
     module_order::CatalogOrder catalogOrder;
     BackgroundClickComponent inactiveBlock, activeBlock;
-    HeaderControlRow catalogRow {inactiveBlock, "MODULES INACTIVE"};
-    HeaderControlRow chainRow {activeBlock, "MODULES ACTIVE"};
+    HeaderControlRow catalogRow {inactiveBlock};
+    HeaderControlRow chainRow {activeBlock};
     std::vector<std::unique_ptr<BoxTextButton>> chainTiles;
     std::array<std::unique_ptr<BoxTextButton>, module_order::descriptions.size()> catalogTiles;
     std::vector<ModuleListItem> chainItems;

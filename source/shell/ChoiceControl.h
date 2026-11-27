@@ -82,10 +82,33 @@ public:
     void setSelectedChoiceIndex(int index, bool sendNotification);
     void setChoiceEnabled(int index, bool enabled) { setDisplayItemEnabled(index, enabled); }
     void setAlwaysUseChoiceList(bool enabled) { alwaysUseChoiceList = enabled; valueBox->setAlwaysUseChoiceList(enabled); }
+    void setLiveDiscreteDrag(bool enabled) { valueBox->setLiveDiscreteDrag(enabled); }
     bool usesChoiceListWithTwoOptions() const noexcept { return alwaysUseChoiceList; }
     void setChoices(const juce::StringArray& choices);
 private:
     bool alwaysUseChoiceList = false;
+};
+
+// A UI-only continuous parameter. The existing ValueBox / RangeIndicator handles
+// unbounded pointer dragging; without discrete choices the value is clamped,
+// never wrapped to the opposite end.
+class LocalContinuousControl final : public ParameterField
+{
+public:
+    explicit LocalContinuousControl(const juce::String& title);
+    ~LocalContinuousControl() override;
+    juce::String getTitleText() const override { return titleText; }
+    void setTitleText(const juce::String& text);
+    double getValue() const noexcept { return slider.getValue(); }
+    void setValue(double normalized, bool sendNotification = false);
+    void setInteractionEnabled(bool enabled);
+    void resized() override;
+    std::function<void()> onValueChanged;
+
+private:
+    juce::String titleText;
+    juce::Slider slider;
+    std::unique_ptr<ValueBoxComponent> valueBox;
 };
 
 class PushControl final : public ChoiceField

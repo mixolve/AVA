@@ -1,7 +1,9 @@
 #include "Editor.h"
+#include "ChoiceControl.h"
 #include "FilterSection.h"
 #include "../crossover/Editor.h"
 #include "Metrics.h"
+#include "ModuleList.h"
 #include "EditorSetup.h"
 #include "PresetSection.h"
 #include "../routing/Panel.h"
@@ -88,25 +90,41 @@ void AvaAudioProcessorEditor::applyPromptVisibility()
     }
 }
 
+void AvaAudioProcessorEditor::raisePinnedControls()
+{
+    for (auto* component : std::array<juce::Component*, 4>{
+             controlSearchPanel.get(), &pinnedRoutingViewport,
+             pinnedRoutingScrollControl.get(), pinnedVerticalScrollControl.get()})
+    {
+        if (component == nullptr || !component->isVisible()) continue;
+        if (textPromptOverlay != nullptr && textPromptOverlay->isVisible()
+            && textPromptOverlay->getParentComponent() == this)
+            component->toBehind(textPromptOverlay.get());
+        else
+            component->toFront(false);
+    }
+}
+
 void AvaAudioProcessorEditor::finalizeLayout() noexcept
 {
     applyPromptVisibility();
     applyDockVisibility();
-    syncMainScrollBar();
+    syncVerticalScrollControl();
     // Keep the fixed quick-access row in front of the scrolling page but
     // behind prompts and the active nested editor.
     quickAccessStrip.toFront(false);
-    dockSortToggle.toFront(false);
-    dockCollapseToggle.toFront(false);
-    dockVerticalToggle.toFront(false);
-    dockClipIndicator.toFront(false);
     dockSortOverlay.toFront(false);
     updatePinnedSearchPosition();
     // Clear the previous positions when controls move or pages change.
     repaint();
     if (crossoverEditor != nullptr && !hasUnitPage())
         crossoverEditor->toFront(false);
-    if (pinnedRoutingViewport.isVisible()) pinnedRoutingViewport.toFront(false);
+    if (activeInstanceEditor != nullptr)
+    {
+        activeInstanceEditor->setBounds(getLocalBounds());
+        activeInstanceEditor->toFront(false);
+    }
+    raisePinnedControls();
     if (windowDragHandle != nullptr) windowDragHandle->toFront(false);
     for (auto& prompt : suspendedPromptOverlays)
     {
@@ -118,14 +136,6 @@ void AvaAudioProcessorEditor::finalizeLayout() noexcept
         textPromptOverlay->setBounds(getLocalBounds());
         textPromptOverlay->toFront(false);
     }
-
-    if (activeInstanceEditor != nullptr)
-    {
-        activeInstanceEditor->setBounds(getLocalBounds());
-        activeInstanceEditor->toFront(false);
-    }
-    if (routingInstanceId == 0 && pinnedRoutingViewport.isVisible())
-        pinnedRoutingViewport.toFront(false);
 
     storeEditorStateToValueTree();
 }
@@ -164,7 +174,7 @@ void AvaAudioProcessorEditor::resized()
     const auto editorInsetBottom = getEditorContentInset(*this);
 
     bounds.removeFromLeft(getUiGap(*this));
-    bounds.removeFromRight(getUiGap(*this) + editorScrollBarArea);
+    bounds.removeFromRight(getUiGap(*this));
 
     bounds.removeFromBottom(editorInsetBottom);
     bounds.removeFromTop(editorInsetTop);
@@ -176,13 +186,13 @@ void AvaAudioProcessorEditor::resized()
         .withHeight(canvas.getHeight() - editorInsetTop - editorInsetBottom);
     if (hasUnitPage())
     {
-        const auto popupBounds = unitPage == UnitPage::about ? bounds.withBottom(getHeight())
-            : canvas.withTrimmedTop(editorInsetTop).withTrimmedBottom(getUiGap(*this)).reduced(getUiGap(*this), 0);
+        const auto popupBounds = canvas.withTrimmedTop(editorInsetTop)
+            .withTrimmedBottom(getUiGap(*this)).reduced(getUiGap(*this), 0);
         layoutUnitPage(popupBounds);
         finalizeLayout();
         return;
     }
-    bounds.setRight(canvas.getRight() - editorScrollBarArea);
+    bounds.setRight(canvas.getRight() - getUiGap(*this));
     layoutCrossoverSection(bounds);
 
     layoutUnifiedBlocks(bounds);
@@ -198,6 +208,8 @@ void AvaAudioProcessorEditor::resized()
 
 void AvaAudioProcessorEditor::layoutUnitPage(juce::Rectangle<int> bounds)
 {
+    const auto dockBottomLimit = quickAccessStrip.getY();
+    bounds.setBottom(juce::jmax(bounds.getY(), juce::jmin(bounds.getBottom(), dockBottomLimit)));
     if (unitPage == UnitPage::about)
     {
         if (aboutPanel != nullptr) aboutPanel->setBounds(bounds);
@@ -205,26 +217,29 @@ void AvaAudioProcessorEditor::layoutUnitPage(juce::Rectangle<int> bounds)
     }
     if (unitPage == UnitPage::routing)
     {
-        routingPanel->setLayoutBounds(bounds, getMainScrollBarBounds().getHeight(),
+        routingPanel->setLayoutBounds(bounds, bounds.getHeight(),
                                       getLocalBounds().getCentreY() - bounds.getY());
         return;
     }
 
-    slotsViewport.setBounds(bounds);
     const auto side = getSquareControlSize(*this);
+    const auto gap = getUiGap(*this);
+    const auto scrollRow = bounds.removeFromTop(juce::jmin(side, bounds.getHeight()));
+    slotsVerticalScrollControl->setBounds(scrollRow.withTrimmedLeft(juce::jmax(0, scrollRow.getWidth() - side)));
+    bounds.removeFromTop(juce::jmin(gap, bounds.getHeight()));
+    slotsViewport.setBounds(bounds);
     const auto count = static_cast<int>(hostSlotButtons.size());
     const auto step = side + getUiRowGap(*this);
     const auto height = count * step - getUiRowGap(*this);
-    const auto width = bounds.getWidth() - (height > bounds.getHeight() ? slotsViewport.getScrollBarThickness() : 0);
+    const auto width = bounds.getWidth();
     slotsContent.setSize(width, juce::jmax(height, bounds.getHeight()));
-    const auto gap = getUiGap(*this);
     const auto labelX = side + gap;
-    const auto labelRight = width - (height > bounds.getHeight() ? gap : 0);
+    syncSlotsVerticalScrollControl();
     for (int index = 0; index < count; ++index)
     {
         const auto y = index * step;
         hostSlotNameFields[size_t(index)]->setBounds(0, y, side, side);
-        hostSlotButtons[size_t(index)]->setBounds(labelX, y, labelRight - labelX, side);
+        hostSlotButtons[size_t(index)]->setBounds(labelX, y, juce::jmax(0, width - labelX), side);
     }
 }
 
@@ -285,40 +300,40 @@ juce::Rectangle<int> AvaAudioProcessorEditor::getModuleViewportBounds() const
     return filterViewport.getBounds();
 }
 
-juce::Rectangle<int> AvaAudioProcessorEditor::getMainScrollBarBounds() const
+namespace
 {
-    const auto gap = getUiGap(*this);
-    const auto bottom = quickAccessStrip.getY();
-    const auto scrollBottom = shell_editor_ui::dockControlCount(getRootWindowState()) == 0
-        ? juce::jmin(bottom, dockClipIndicator.getY() - gap) : bottom;
-    return {getWidth() - gap - editorScrollBarWidth, 2 * gap,
-            editorScrollBarWidth, juce::jmax(0, scrollBottom - 2 * gap)};
+void syncVerticalControl(LocalContinuousControl& control, const UiScrollViewport& viewport)
+{
+    const auto* content = viewport.getViewedComponent();
+    const auto maximum = content != nullptr ? juce::jmax(0, content->getHeight() - viewport.getHeight()) : 0;
+    const auto position = juce::jlimit(0, maximum, viewport.getViewPositionY());
+    control.setValue(maximum > 0 ? double(position) / double(maximum) : 0.0, false);
+    control.setInteractionEnabled(control.isVisible() && viewport.isVisible() && maximum > 0);
+}
 }
 
-void AvaAudioProcessorEditor::syncMainScrollBar()
+void AvaAudioProcessorEditor::syncVerticalScrollControl()
 {
-    const auto position = filterViewport.getViewPositionY();
-    if (position != mainScrollPosition)
-    {
-        mainScrollPosition = position;
-        mainScrollBar.getProperties().set("scrollActiveUntil", juce::Time::getMillisecondCounterHiRes() + 50.0);
-        mainScrollBar.repaint();
-    }
-    mainScrollBar.setBounds(getMainScrollBarBounds());
-    const auto visible = filterViewport.getHeight();
-    const auto total = moduleContent.getHeight();
-    mainScrollBar.setRangeLimits(0.0, double(juce::jmax(visible, total)), juce::dontSendNotification);
-    mainScrollBar.setCurrentRange(double(position), double(visible), juce::dontSendNotification);
-    mainScrollBar.setVisible(visible > 0 && total > visible && !isDockOnly() && filterViewport.isVisible()
-                            && !hasUnitPage() && activeInstanceEditor == nullptr);
+    if (pinnedVerticalScrollControl == nullptr) return;
+    const auto* visibleEditor = activeInstanceEditor != nullptr ? activeInstanceEditor.get() : this;
+    syncVerticalControl(*pinnedVerticalScrollControl, visibleEditor->filterViewport);
+}
+
+void AvaAudioProcessorEditor::syncSlotsVerticalScrollControl()
+{
+    if (slotsVerticalScrollControl != nullptr)
+        syncVerticalControl(*slotsVerticalScrollControl, slotsViewport);
+}
+
+HeaderControlRow::HeaderControlRow(ControlBlockComponent& blockIn)
+    : block(blockIn)
+{
 }
 
 HeaderControlRow::~HeaderControlRow()
 {
-    block.removeComponentListener(this);
     viewport.onViewChanged = {};
     viewport.setViewedComponent(nullptr, false);
-    scrollbar.removeListener(this);
 }
 
 void HeaderControlRow::attach(const juce::String& name)
@@ -329,136 +344,133 @@ void HeaderControlRow::attach(const juce::String& name)
     viewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     viewport.setWantsKeyboardFocus(false);
     block.addAndMakeVisible(viewport);
-    viewport.onViewChanged = [this] { syncScrollBar(); };
+    viewport.onViewChanged = [this] { syncScrollControl(); };
 
-    scrollbar.setName(name + "-scrollbar");
-    scrollbar.setAutoHide(false);
-    scrollbar.setWantsKeyboardFocus(false);
-    scrollbar.setSingleStepSize(getUiGap(block));
-    scrollbar.headerRegions = [this]
-    {
-        const auto header = scrollbar.getLocalBounds();
-        const auto frame = std::find_if(block.controlBlockFrames.begin(), block.controlBlockFrames.end(),
-            [this](const auto& item) { return item.title == title; });
-        const auto& caption = frame != block.controlBlockFrames.end() && frame->displayTitle.isNotEmpty()
-            ? frame->displayTitle : title;
-        const bool hasBypass = frame != block.controlBlockFrames.end() && frame->colour == uiGreyDark
-            && block.hasModuleNameplateBypass();
-        return CursorDragScrollBar::HeaderRegions {getControlBlockTitleZone(header, caption),
-            hasBypass ? moduleNameplateBypassBounds(header) : juce::Rectangle<int>{},
-            block.isExpandedNameHover(title)};
-    };
-    scrollbar.addListener(this);
-    block.addComponentListener(this);
-    componentParentHierarchyChanged(block);
+    // A permanently pinned, non-wrapping continuous scroll tile (00–99).
+    // It occupies the first slot even when the row fits the viewport.
+    scrollControl = std::make_unique<LocalContinuousControl>("SCROLL");
+    scrollControl->setName("scroll");
+    scrollControl->setComponentID(name + "-scroll");
+    scrollControl->getProperties().set("disableDockSelection", true);
+    scrollControl->onValueChanged = [this] { scrollToPosition(); };
+    block.addAndMakeVisible(*scrollControl);
 }
 
-int HeaderControlRow::getPreferredHeight() const
+void HeaderControlRow::setScrollLabel(const juce::String& label)
 {
-    constexpr auto padding = controlBlockPadding + controlBlockFrameThickness;
-    return block.isBlockCollapsed(title) ? controlBlockHeaderHeight
-        : controlBlockHeaderHeight + 2 * padding + getSquareControlSize(block);
+    if (scrollControl == nullptr) return;
+    scrollControl->setTitleText(label);
+    scrollControl->setName(label.replaceCharacter('\n', ' ').toLowerCase());
 }
 
-void HeaderControlRow::layout(juce::Rectangle<int> header, std::span<juce::Component* const> controls)
+void HeaderControlRow::setModuleBypass(const std::function<bool()>& isBypassed,
+                                       const std::function<void()>& toggle)
 {
-    block.setBounds(header.withHeight(getPreferredHeight()));
-    block.controlBlockFrames = {{block.getLocalBounds(), title, uiGreyDark}};
-    layoutContents(controls);
+    if (scrollControl != nullptr)
+        scrollControl->setBottomActions({{"BP", toggle, isBypassed}});
 }
 
-void HeaderControlRow::layoutContents(std::span<juce::Component* const> controls)
+void HeaderControlRow::enableModuleClipboard()
 {
-    const auto collapsed = block.isBlockCollapsed(title);
+    copyButton = std::make_unique<PushControl>("COPY");
+    pasteButton = std::make_unique<PushControl>("PASTE");
+    copyButton->setComponentID("module-copy-settings");
+    pasteButton->setComponentID("module-paste-settings");
+    copyButton->setBottomIndicatorsVisible(false, false);
+    pasteButton->setBottomIndicatorsVisible(false, false);
+}
+
+void HeaderControlRow::setModuleClipboardActions(const std::function<void()>& copy,
+                                                const std::function<void()>& paste)
+{
+    copyButton->onTrigger = copy;
+    pasteButton->onTrigger = paste;
+}
+
+void HeaderControlRow::layoutModuleControls(juce::Rectangle<int> bounds,
+                                          std::vector<juce::Component*>& controls,
+                                          std::span<const int> columnSpans)
+{
+    const std::array divider {int(controls.size())};
+    controls.push_back(copyButton.get());
+    controls.push_back(pasteButton.get());
+    layoutInline(bounds, controls, true, columnSpans, divider);
+}
+
+void HeaderControlRow::layoutInline(juce::Rectangle<int> bounds,
+                                    std::span<juce::Component* const> controls,
+                                    bool visible, std::span<const int> columnSpans,
+                                    std::span<const int> groupBreaks)
+{
+    layoutRow(bounds, controls, visible, columnSpans, groupBreaks);
+}
+
+void HeaderControlRow::layoutRow(juce::Rectangle<int> bounds,
+                                 std::span<juce::Component* const> controls,
+                                 bool visible, std::span<const int> columnSpans,
+                                 std::span<const int> groupBreaks)
+{
     const auto side = getSquareControlSize(block);
     const auto gap = getUiGap(block);
-    constexpr auto padding = controlBlockPadding + controlBlockFrameThickness;
     const auto step = side + gap;
-    content.setSize(juce::jmax(0, int(controls.size()) * step - gap), side);
+    int contentWidth = 0;
+    for (size_t index = 0; index < controls.size(); ++index)
+    {
+        contentWidth += juce::jmax(1, index < columnSpans.size() ? columnSpans[index] : 1) * step;
+    }
+    content.setSize(juce::jmax(0, contentWidth - (controls.empty() ? 0 : gap)), side);
     for (int index = content.getNumChildComponents(); --index >= 0;)
         if (std::find(controls.begin(), controls.end(), content.getChildComponent(index)) == controls.end())
             content.removeChildComponent(index);
     std::vector<juce::Rectangle<int>> emptySlots;
+    std::vector<juce::Rectangle<int>> separators;
+    int x = 0;
     for (size_t index = 0; index < controls.size(); ++index)
     {
+        if (index > 0 && std::find(groupBreaks.begin(), groupBreaks.end(), int(index)) != groupBreaks.end())
+            separators.emplace_back(x - (gap + 2) / 2, 0, 2, side);
+        const int columns = juce::jmax(1, index < columnSpans.size() ? columnSpans[index] : 1);
+        const juce::Rectangle<int> cell {x, 0, columns * step - gap, side};
         auto* control = controls[index];
-        const juce::Rectangle<int> bounds {int(index) * step, 0, side, side};
-        if (control == nullptr)
+        if (control == nullptr) emptySlots.push_back(cell);
+        else
         {
-            emptySlots.push_back(bounds);
-            continue;
+            if (control->getParentComponent() != &content) content.addAndMakeVisible(*control);
+            control->setBounds(cell);
         }
-        if (control->getParentComponent() != &content) content.addAndMakeVisible(*control);
-        control->setBounds(bounds);
+        x += columns * step;
     }
     content.setEmptySlots(std::move(emptySlots));
-    const auto frame = getFrameBounds();
-    viewport.setBounds(frame.getX() + padding, frame.getY() + controlBlockHeaderHeight + padding,
-                       juce::jmax(0, frame.getWidth() - 2 * padding), side);
-    viewport.setVisible(!collapsed);
-    componentMovedOrResized(block, true, false);
-    syncScrollBar();
-}
-
-void HeaderControlRow::syncScrollBar()
-{
-    const auto visible = viewport.getWidth();
-    const auto total = content.getWidth();
-    const auto position = viewport.getViewPositionX();
-    if (juce::roundToInt(scrollbar.getCurrentRangeStart()) != position)
+    content.setGroupSeparators(std::move(separators));
+    // The first tile belongs to SCROLL unconditionally. It remains visible,
+    // disabled when the following viewport has no horizontal overflow.
+    scrollControl->setBounds(bounds.getX(), bounds.getY(), side, side);
+    scrollControl->setVisible(visible);
+    viewport.setBounds(bounds.getX() + step, bounds.getY(),
+        juce::jmax(0, bounds.getWidth() - step), side);
+    viewport.setVisible(visible);
+    if (content.getWidth() <= viewport.getWidth()) viewport.setViewPosition(0, 0);
+    syncScrollControl();
+    if (visible)
     {
-        scrollbar.getProperties().set("scrollActiveUntil", juce::Time::getMillisecondCounterHiRes() + 50.0);
-        scrollbar.repaint();
+        viewport.toFront(false);
+        scrollControl->toFront(false);
     }
-    scrollbar.setRangeLimits(0.0, double(juce::jmax(visible, total)), juce::dontSendNotification);
-    scrollbar.setCurrentRange(double(position), double(visible), juce::dontSendNotification);
-    const auto showScrollbar = block.isVisible() && !block.isBlockCollapsed(title) && total > visible && visible > 0;
-    block.getProperties().set("headerScrollbarVisible", showScrollbar);
-    scrollbar.setVisible(showScrollbar);
 }
 
-juce::Rectangle<int> HeaderControlRow::getFrameBounds() const
+void HeaderControlRow::scrollToPosition()
 {
-    const auto frame = std::find_if(block.controlBlockFrames.begin(), block.controlBlockFrames.end(),
-        [this](const auto& item) { return item.title == title; });
-    return frame != block.controlBlockFrames.end() ? frame->bounds : block.getLocalBounds();
+    const auto maximum = juce::jmax(0, content.getWidth() - viewport.getWidth());
+    viewport.setViewPosition(juce::roundToInt(scrollControl->getValue() * double(maximum)), 0);
 }
 
-void HeaderControlRow::componentMovedOrResized(juce::Component&, bool moved, bool)
+void HeaderControlRow::syncScrollControl()
 {
-    if (moved)
-        scrollbar.setBounds(getFrameBounds().withHeight(controlBlockHeaderHeight)
-                                .translated(block.getX(), block.getY()));
-}
-
-void HeaderControlRow::componentParentHierarchyChanged(juce::Component&)
-{
-    auto* parent = block.getParentComponent();
-    if (parent == scrollbar.getParentComponent()) return;
-    // The block paints its header over its children, so the scrollbar is a sibling.
-    if (parent != nullptr)
-    {
-        parent->addChildComponent(scrollbar);
-        componentMovedOrResized(block, true, false);
-    }
-    else if (auto* previous = scrollbar.getParentComponent()) previous->removeChildComponent(&scrollbar);
-    syncScrollBar();
-}
-
-void HeaderControlRow::componentVisibilityChanged(juce::Component&)
-{
-    syncScrollBar();
-}
-
-void HeaderControlRow::scrollBarMoved(juce::ScrollBar*, double position)
-{
-    viewport.setViewPosition(juce::roundToInt(position), 0);
-}
-
-void AvaAudioProcessorEditor::scrollBarMoved(juce::ScrollBar* bar, double position)
-{
-    if (bar == &mainScrollBar)
-        filterViewport.setViewPosition(filterViewport.getViewPositionX(), juce::roundToInt(position));
+    if (scrollControl == nullptr) return;
+    const auto maximum = juce::jmax(0, content.getWidth() - viewport.getWidth());
+    const auto position = juce::jlimit(0, maximum, viewport.getViewPositionX());
+    scrollControl->setValue(maximum > 0 ? double(position) / double(maximum) : 0.0, false);
+    scrollControl->setInteractionEnabled(scrollControl->isVisible() && maximum > 0);
 }
 
 bool AvaAudioProcessorEditor::isDockOnly() const
@@ -468,9 +480,36 @@ bool AvaAudioProcessorEditor::isDockOnly() const
         && bool(state.getProperty(shell_editor_ui::key("dock_only"), false));
 }
 
+int AvaAudioProcessorEditor::getMainViewportTop(int searchHeight) const noexcept
+{
+    // Search, then the fixed INSTS row, each followed by the standard gap.
+    return searchHeight + getSquareControlSize(*this) + 4 * getUiGap(*this);
+}
+
+int AvaAudioProcessorEditor::getDockStripHeight() const noexcept
+{
+    return getSquareControlSize(*this) + 2 * getUiGap(*this);
+}
+
+int AvaAudioProcessorEditor::getExpandedMinimumEditorHeight() const
+{
+    const auto gap = getUiGap(*this);
+    const auto rowStep = getSquareControlSize(*this) + gap;
+    // UNIT and INSTANCE, the two module-list rows, then space for one more tile row.
+    const auto mainHeight = 3 * rowStep + ModuleList::getContentHeight(*this);
+    // Use the main page's dock height even while ROUTING or SLOTS is open.
+    const auto bottomHeight = shell_editor_ui::dockControlCount(getRootWindowState()) > 0
+        ? getDockStripHeight() : gap;
+    return getMainViewportTop(controlBlockHeaderHeight) + mainHeight + bottomHeight;
+}
+
 int AvaAudioProcessorEditor::getMinimumEditorHeight() const
 {
-    return isDockOnly() ? (bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_vertical"), false)) ? getDockLength(true, shell_editor_ui::dockControlCount(getRootWindowState())) : getSquareControlSize(*this) + 3 * getUiGap(*this)) : getEditorWidth(*this);
+    if (!isDockOnly()) return getExpandedMinimumEditorHeight();
+    const auto& state = getRootWindowState();
+    return bool(state.getProperty(shell_editor_ui::key("dock_vertical"), false))
+        ? getDockLength(true, shell_editor_ui::dockControlCount(state))
+        : getSquareControlSize(*this) + 3 * getUiGap(*this);
 }
 
 int AvaAudioProcessorEditor::getMaximumEditorHeight() const
@@ -478,28 +517,33 @@ int AvaAudioProcessorEditor::getMaximumEditorHeight() const
     return isDockOnly() ? getMinimumEditorHeight() : maximumEditorHeight;
 }
 
+bool AvaAudioProcessorEditor::shouldShowDock() const
+{
+    return unitPage != UnitPage::routing && unitPage != UnitPage::slots
+        && shell_editor_ui::dockControlCount(getRootWindowState()) > 0;
+}
+
 void AvaAudioProcessorEditor::applyDockVisibility()
 {
-    dockCollapseToggle.setToggleState(isDockOnly(), juce::dontSendNotification);
-    dockVerticalToggle.setToggleState(bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_vertical"), false)), juce::dontSendNotification);
+    dockControls.collapse.setToggleState(isDockOnly(), juce::dontSendNotification);
+    dockControls.vertical.setToggleState(bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_vertical"), false)), juce::dontSendNotification);
     const auto dockOnly = isDockOnly();
-    const auto* visibleEditor = activeInstanceEditor != nullptr ? activeInstanceEditor.get() : this;
-    const auto showMainControls = dockOnly || !visibleEditor->hasUnitPage();
-    const auto showDock = showMainControls && shell_editor_ui::dockControlCount(getRootWindowState()) > 0;
-    for (juce::Component* component : std::array<juce::Component*, 4>{
-             &quickAccessStrip, &dockSortToggle, &dockCollapseToggle, &dockVerticalToggle})
-        component->setVisible(showDock);
-    dockSortOverlay.setVisible(showDock && dockSortToggle.getToggleState());
-    dockClipIndicator.setVisible(showMainControls);
+    const auto showDock = shouldShowDock();
+    quickAccessStrip.setVisible(showDock);
+    dockSortOverlay.setVisible(showDock && dockControls.sort.getToggleState());
+    if (quickAccessScrollControl != nullptr) quickAccessScrollControl->setVisible(showDock);
     if (!dockOnly) return;
     filterViewport.setVisible(false);
     if (controlSearchPanel != nullptr) controlSearchPanel->setVisible(false);
     pinnedRoutingViewport.setVisible(false);
+    if (pinnedRoutingScrollControl != nullptr) pinnedRoutingScrollControl->setVisible(false);
+    if (pinnedVerticalScrollControl != nullptr) pinnedVerticalScrollControl->setVisible(false);
     if (aboutPanel != nullptr) aboutPanel->setVisible(false);
     if (routingPanel != nullptr) routingPanel->setVisible(false);
     slotsViewport.setVisible(false);
+    if (slotsVerticalScrollControl != nullptr) slotsVerticalScrollControl->setVisible(false);
     if (crossoverEditor != nullptr) crossoverEditor->setVisible(false);
     if (blockChainModuleEditor != nullptr) blockChainModuleEditor->setVisible(false);
     if (dynModuleEditor != nullptr) dynModuleEditor->setVisible(false);
-    mainScrollBar.setVisible(false);
+    if (pinnedVerticalScrollControl != nullptr) pinnedVerticalScrollControl->setVisible(false);
 }

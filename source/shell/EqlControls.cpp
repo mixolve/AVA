@@ -279,8 +279,8 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
         normalizeOrderForType(filterIndex);
     }
 
-    addFilterButton = std::make_unique<PushControl>("ONE\nADD");
-    addFilterButton->getProperties().set("disableDockSelection", true);
+    addFilterButton = std::make_unique<PushControl>("ADD");
+    addFilterButton->setComponentID("eql-filter-add");
     addFilterButton->getProperties().set("foregroundOccluder", true);
     addFilterButton->setBottomIndicatorsVisible(false, false);
     addFilterButton->onTrigger = [this]
@@ -301,8 +301,8 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
         clearKeyboardFocus(*this);
     };
     filterContent.addAndMakeVisible(*addFilterButton);
-    copyFilterButton = std::make_unique<PushControl>("ONE\nCOPY");
-    copyFilterButton->getProperties().set("disableDockSelection", true);
+    copyFilterButton = std::make_unique<PushControl>("COPY");
+    copyFilterButton->setComponentID("eql-filter-copy");
     copyFilterButton->setBottomIndicatorsVisible(false, false);
     copyFilterButton->onTrigger = [this]
     {
@@ -317,8 +317,8 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
     };
     eqlContent.addChildComponent(*copyFilterButton);
 
-    pasteFilterButton = std::make_unique<PushControl>("ONE\nPASTE");
-    pasteFilterButton->getProperties().set("disableDockSelection", true);
+    pasteFilterButton = std::make_unique<PushControl>("PASTE");
+    pasteFilterButton->setComponentID("eql-filter-paste");
     pasteFilterButton->setBottomIndicatorsVisible(false, false);
     pasteFilterButton->onTrigger = [this]
     {
@@ -339,8 +339,8 @@ void AvaAudioProcessorEditor::setupEqlControls(juce::AudioProcessorValueTreeStat
     };
     eqlContent.addChildComponent(*pasteFilterButton);
 
-    deleteFilterButton = std::make_unique<PushControl>("ONE\nDELETE");
-    deleteFilterButton->getProperties().set("disableDockSelection", true);
+    deleteFilterButton = std::make_unique<PushControl>("DELETE");
+    deleteFilterButton->setComponentID("eql-filter-delete");
     deleteFilterButton->setBottomIndicatorsVisible(false, false);
     deleteFilterButton->onTrigger = [this]
     {

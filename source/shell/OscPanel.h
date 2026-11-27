@@ -1,14 +1,17 @@
 #pragma once
 
 #include "Controls.h"
+#include "Editor.h"
 #include "ChoiceControl.h"
 #include "TextControl.h"
 #include "OscSettings.h"
 
+#include <array>
 #include <functional>
 #include <memory>
 
-class OscPanel final : public ControlBlockComponent
+// Owns the OSC controls; their visible parent is the flat UNIT row.
+class OscPanel final : public juce::Component
 {
 public:
     struct Actions
@@ -19,9 +22,8 @@ public:
     };
 
     explicit OscPanel(Actions);
-    void resized() override;
     void refresh();
-    int getPreferredHeight() const noexcept;
+    std::array<juce::Component*, 5> getControls() const noexcept;
 
 private:
     Actions actions;

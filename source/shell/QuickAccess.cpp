@@ -398,85 +398,114 @@ void AvaAudioProcessorEditor::toggleControlManualSelection(juce::Component& comp
         });
 }
 
+void AvaAudioProcessorEditor::syncQuickAccessScrollControl()
+{
+    if (quickAccessScrollControl == nullptr) return;
+    const bool vertical = isDockOnly()
+        && bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_vertical"), false));
+    const auto maximum = juce::jmax(0, vertical
+        ? quickAccessContent.getHeight() - quickAccessViewport.getHeight()
+        : quickAccessContent.getWidth() - quickAccessViewport.getWidth());
+    const auto position = juce::jlimit(0, maximum, vertical
+        ? quickAccessViewport.getViewPositionY() : quickAccessViewport.getViewPositionX());
+    quickAccessScrollControl->setValue(maximum > 0 ? double(position) / double(maximum) : 0.0, false);
+    quickAccessScrollControl->setInteractionEnabled(quickAccessScrollControl->isVisible() && maximum > 0);
+}
+
+AvaAudioProcessorEditor::DockControls::DockControls()
+{
+    clip.setName("dock-clip");
+    sort.setTitle("Sort dock");
+    collapse.setTitle("Collapse or expand dock");
+    vertical.setTitle("Vertical dock");
+    addAndMakeVisible(clip);
+    addAndMakeVisible(sort);
+    addAndMakeVisible(collapse);
+    addAndMakeVisible(vertical);
+}
+
+void AvaAudioProcessorEditor::DockControls::resized()
+{
+    const auto bounds = getLocalBounds();
+    clip.setBounds(controlStripCell(bounds, 0, 4));
+    sort.setBounds(controlStripCell(bounds, 1, 4));
+    vertical.setBounds(controlStripCell(bounds, 2, 4));
+    collapse.setBounds(controlStripCell(bounds, 3, 4));
+}
+
 void AvaAudioProcessorEditor::layoutQuickAccessStrip()
 {
     const auto gap = getUiGap(*this);
     const auto configuredCount = shell_editor_ui::dockControlCount(getRootWindowState());
-    const bool showDock = configuredCount > 0;
     const auto side = getSquareControlSize(*this);
-    constexpr auto toggleSize = unitIndicatorSize;
-    if (!showDock)
+    if (!shouldShowDock())
     {
         // The content viewport uses the strip's top edge as its lower bound.
         quickAccessStrip.setBounds(0, getHeight() - gap, 0, 0);
-        dockClipIndicator.setBounds(getWidth() - gap - toggleSize, getHeight() - gap - toggleSize,
-                                    toggleSize, toggleSize);
+        if (quickAccessScrollControl != nullptr) quickAccessScrollControl->setVisible(false);
         return;
     }
 
     const auto inset = gap;
-    const auto height = side + 2 * inset;
+    const auto height = getDockStripHeight();
     const bool vertical = isDockOnly() && bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_vertical"), false));
-    // Use the horizontal dock as the single layout reference. In vertical
-    // mode every rectangle is rotated clockwise, including the clip indicator.
-    const auto layoutWidth = vertical ? getHeight() : getWidth();
     const auto layoutHeight = vertical ? side + 3 * gap : getHeight();
     const auto rotate = [vertical, layoutHeight](juce::Rectangle<int> r)
     {
-        return vertical ? juce::Rectangle<int>(layoutHeight - r.getBottom(), r.getX(), r.getHeight(), r.getWidth()) : r;
+        return vertical ? juce::Rectangle<int>(layoutHeight - r.getBottom(),
+                                              r.getX(), r.getHeight(), r.getWidth()) : r;
     };
     // Reserve the configured slots in a collapsed dock, even when fewer are pinned.
     const auto count = isDockOnly() ? configuredCount : shell_editor_ui::editorColumns(getRootWindowState());
-    const auto visibleLength = count * side + (count - 1) * gap;
-    const auto expandedStripX = 2 * (gap + controlBlockFrameThickness);
-    const auto stripX = vertical ? gap : (isDockOnly() ? 0 : expandedStripX);
+    const auto visibleSlots = count + (isDockOnly() ? 1 : 0);
+    const auto visibleLength = visibleSlots * side + (visibleSlots - 1) * gap;
+    const auto stripX = vertical ? gap : 0;
     const juce::Rectangle<int> strip(stripX, layoutHeight - height,
         visibleLength + 2 * inset, height);
     const auto dockBounds = strip.reduced(inset);
-    const auto rightButtonsX = isDockOnly()
-        ? dockBounds.getRight() + gap
-        : layoutWidth - gap - toggleSize;
     quickAccessStrip.setBounds(rotate(strip));
-    const auto viewportBounds = rotate(dockBounds);
-    quickAccessViewport.setBounds(viewportBounds.translated(-quickAccessStrip.getX(), -quickAccessStrip.getY()));
-    const auto serviceGap = juce::jmax(0, (dockBounds.getHeight() - 5 * toggleSize) / 3);
-    const auto firstY = dockBounds.getY();
-    dockClipIndicator.setBounds(rotate({rightButtonsX,
-        firstY, toggleSize, toggleSize}));
-    dockSortToggle.setBounds(rotate({rightButtonsX,
-        firstY + toggleSize + serviceGap, toggleSize, toggleSize}));
-    dockCollapseToggle.setBounds(rotate({rightButtonsX,
-        firstY + 2 * (toggleSize + serviceGap), toggleSize, toggleSize * 2}));
-    dockVerticalToggle.setBounds(rotate({rightButtonsX,
-        dockBounds.getBottom() - toggleSize, toggleSize, toggleSize}));
-    dockVerticalToggle.setEnabled(isDockOnly());
-    dockSortOverlay.setBounds(rotate(dockBounds));
-    const auto slotCount = juce::jmax(int(quickAccessItems.size()), configuredCount);
+    const auto scrollStep = side + gap;
+    const auto scrollBounds = rotate(dockBounds.withWidth(side));
+    const auto viewportBounds = rotate(dockBounds.withTrimmedLeft(scrollStep));
+    const auto toStrip = [this](juce::Rectangle<int> bounds)
+    {
+        return bounds.translated(-quickAccessStrip.getX(), -quickAccessStrip.getY());
+    };
+    quickAccessViewport.setBounds(toStrip(viewportBounds));
+    quickAccessScrollControl->setBounds(toStrip(scrollBounds));
+    quickAccessScrollControl->setVisible(true);
+
+    dockControls.vertical.setEnabled(isDockOnly());
+    dockSortOverlay.setBounds(viewportBounds);
+    quickAccessContent.layoutTrailingSlots(int(quickAccessItems.size()),
+        vertical ? viewportBounds.getHeight() : viewportBounds.getWidth(), configuredCount, vertical);
     const auto step = side + gap;
-    std::vector<juce::Rectangle<int>> emptySlots;
-    for (int index = int(quickAccessItems.size()); index < slotCount; ++index)
-        emptySlots.push_back(vertical ? juce::Rectangle<int>(0, index * step, side, side)
-                                     : juce::Rectangle<int>(index * step, 0, side, side));
-    quickAccessContent.setEmptySlots(std::move(emptySlots));
     if (vertical)
     {
-        quickAccessContent.setSize(side, juce::jmax(dockBounds.getWidth(), slotCount * step - gap));
         for (size_t i = 0; i < quickAccessItems.size(); ++i)
             if (auto* control = quickAccessItems[i].control.get()) control->setBounds(0, int(i) * step, side, side);
-        quickAccessViewport.setViewPosition(0, juce::jlimit(0, juce::jmax(0, quickAccessContent.getHeight() - quickAccessViewport.getHeight()), quickAccessViewport.getViewPositionY()));
+        const auto actualLength = juce::jmax(0, int(quickAccessItems.size()) * step - gap);
+        if (actualLength <= quickAccessViewport.getHeight()) quickAccessViewport.setViewPosition(0, 0);
+        else quickAccessViewport.setViewPosition(0, juce::jlimit(0,
+            juce::jmax(0, quickAccessContent.getHeight() - quickAccessViewport.getHeight()),
+            quickAccessViewport.getViewPositionY()));
+        syncQuickAccessScrollControl();
+        quickAccessScrollControl->toFront(false);
         return;
     }
 
-    const auto width = juce::jmax(quickAccessViewport.getWidth(),
-                                 slotCount * step - gap);
-    quickAccessContent.setSize(width, side);
+    const auto width = quickAccessContent.getWidth();
     for (size_t index = 0; index < quickAccessItems.size(); ++index)
         if (auto* control = quickAccessItems[index].control.get())
             control->setBounds(int(index) * step, 0, side, side);
 
+    const auto actualLength = juce::jmax(0, int(quickAccessItems.size()) * step - gap);
     quickAccessViewport.setViewPosition(
-        juce::jlimit(0, juce::jmax(0, width - quickAccessViewport.getWidth()),
-                     quickAccessViewport.getViewPositionX()), 0);
+        actualLength <= quickAccessViewport.getWidth() ? 0
+            : juce::jlimit(0, juce::jmax(0, width - quickAccessViewport.getWidth()),
+                          quickAccessViewport.getViewPositionX()), 0);
+    syncQuickAccessScrollControl();
+    quickAccessScrollControl->toFront(false);
 }
 
 void AvaAudioProcessorEditor::refreshQuickAccessControls()
@@ -1030,7 +1059,7 @@ void AvaAudioProcessorEditor::setDockOnly(bool dockOnly)
         ? root->expandedHeightBeforeDock
         : int(root->getRootWindowState().getProperty(
             AvaAudioProcessor::editorHeightStateKey, expandedWidth));
-    const auto expandedHeight = juce::jlimit(expandedWidth, maximumEditorHeight, savedHeight);
+    const auto expandedHeight = juce::jlimit(root->getExpandedMinimumEditorHeight(), maximumEditorHeight, savedHeight);
 
     dismissTextPrompt();
     if (root != this) root->dismissTextPrompt();

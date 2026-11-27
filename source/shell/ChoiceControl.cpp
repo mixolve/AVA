@@ -244,6 +244,78 @@ void LocalChoiceControl::setChoices(const juce::StringArray& choices)
     setDisplayIndex(index);
 }
 
+LocalContinuousControl::LocalContinuousControl(const juce::String& title)
+    : titleText(title)
+{
+    setWantsKeyboardFocus(false);
+    setMouseClickGrabsKeyboardFocus(false);
+    parameter_control_support::configureHiddenSlider(slider);
+    slider.setRange(0.0, 1.0, 0.0);
+    slider.setValue(0.0, juce::dontSendNotification);
+    valueBox = std::make_unique<ValueBoxComponent>(slider);
+    // Preserve the existing macOS cursor-hide/deferred-reveal path on scroll drags.
+    valueBox->setHideCursorOnDrag(true);
+    valueBox->setIdleTextProvider([this] { return titleText; });
+    valueBox->displayTextProvider = [this]
+    {
+        return juce::String::formatted("%02d",
+            juce::jlimit(0, 99, juce::roundToInt(valueBox->getDisplayedValue() * 99.0)));
+    };
+    valueBox->editorTextProvider = [this]
+    {
+        return juce::String::formatted("%02d",
+            juce::jlimit(0, 99, juce::roundToInt(slider.getValue() * 99.0)));
+    };
+    valueBox->textToValueParser = [](const juce::String& input)
+    {
+        return double(juce::jlimit(0, 99, input.getIntValue())) / 99.0;
+    };
+    valueBox->onResetRequested = [this] { setValue(0.0, true); };
+    slider.onValueChange = [this]
+    {
+        if (valueBox != nullptr) valueBox->repaint();
+        repaint();
+        if (onValueChanged) onValueChanged();
+    };
+    setBottomIndicatorsVisible(false, false);
+    // The fixed pinned strip is outside the scrolling content and must paint
+    // its continuous indicator locally rather than behind an overlay.
+    getProperties().set("paintRangeLocally", true);
+    addChildComponent(slider);
+    addAndMakeVisible(*valueBox);
+}
+
+LocalContinuousControl::~LocalContinuousControl() = default;
+
+void LocalContinuousControl::setTitleText(const juce::String& text)
+{
+    if (titleText == text) return;
+    titleText = text;
+    if (valueBox != nullptr) valueBox->repaint();
+}
+
+void LocalContinuousControl::setValue(double normalized, bool sendNotification)
+{
+    slider.setValue(juce::jlimit(0.0, 1.0, normalized),
+        sendNotification ? juce::sendNotificationSync : juce::dontSendNotification);
+    if (valueBox != nullptr) valueBox->repaint();
+}
+
+void LocalContinuousControl::setInteractionEnabled(bool enabled)
+{
+    if (valueBox != nullptr) valueBox->setInteractionEnabled(enabled);
+}
+
+void LocalContinuousControl::resized()
+{
+    if (valueBox != nullptr)
+    {
+        valueBox->setBounds(getLocalBounds());
+        slider.setBounds(valueBox->getBounds());
+        layoutBottomAccessory(valueBox->getBounds());
+    }
+}
+
 PushControl::PushControl(const juce::String& title, bool showStateIndicators) : ChoiceField(title)
 {
     setItems({ "OFF", "ON" });

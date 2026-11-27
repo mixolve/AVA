@@ -28,8 +28,10 @@ AvaAudioProcessorEditor::PresetsSection::PresetsSection()
     renameButton = makeSectionButton("PRESET\nRENAME");
     defaultButton = makeSectionButton("PRESET\nDEFAULT");
     deleteButton = makeSectionButton("PRESET\nDELETE");
-    copyFiltersButton = makeSectionButton("ALL\nCOPY");
-    pasteFilterButton = makeSectionButton("ALL\nPASTE");
+    copyFiltersButton = makeSectionButton("COPY");
+    copyFiltersButton->setComponentID("ALL\nCOPY");
+    pasteFilterButton = makeSectionButton("PASTE");
+    pasteFilterButton->setComponentID("ALL\nPASTE");
 
     presetChoice.onValueChanged = [this]
     {

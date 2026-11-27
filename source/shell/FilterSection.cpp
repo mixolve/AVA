@@ -28,6 +28,7 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
     // An EQL filter belongs to its selected band and can change identity when
     // filters are added, removed or reordered. Never allow any of its UI
     // controls (including its header and phase accessory) into the dock.
+    header->setBottomIndicatorsVisible(false, false);
     body.getProperties().set("disableDockSelection", true);
     for (auto* control : std::array<juce::Component*, 6> {
             header.get(), typeControl.get(), orderControl.get(),
@@ -39,14 +40,12 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
     phaseIndicator->getProperties().set("disableDockSelection", true);
     phaseIndicator->bindParameter(state, EqlModuleProcessor::getFilterPhaseParamId(filterIndex));
     typeControl->setBottomAccessory(phaseIndicator.get());
-    header->bindParameterIndicators(&state, EqlModuleProcessor::getFilterBypassParamId(filterIndex));
     cacheParameterPointers(state);
     refreshTypeDependentControls();
 }
 
 void AvaAudioProcessorEditor::FilterSection::detach() noexcept
 {
-    header->bindParameterIndicators(nullptr);
     if (typeControl != nullptr)
         typeControl->detach();
 
@@ -72,7 +71,6 @@ void AvaAudioProcessorEditor::FilterSection::detach() noexcept
 
 void AvaAudioProcessorEditor::FilterSection::rebind(juce::AudioProcessorValueTreeState& state)
 {
-    header->bindParameterIndicators(&state, EqlModuleProcessor::getFilterBypassParamId(filterIndex));
     typeControl->rebind(state);
 
     orderControl->rebind(state);

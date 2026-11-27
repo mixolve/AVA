@@ -18,11 +18,6 @@ inline module_order::CatalogOrder inactiveModulesOrder(const juce::ValueTree& st
     return order;
 }
 
-inline bool isSearchVisible(const juce::ValueTree& state)
-{
-    return bool(state.getProperty(key("search_visible"), false));
-}
-
 // Persist eighths of the base size: controls and gaps stay whole pixels.
 inline constexpr std::array<int, 8> zoomSteps { 6, 7, 8, 10, 12, 16, 20, 24 };
 inline constexpr int defaultZoomStep = 8;
@@ -59,7 +54,7 @@ inline int editorColumns(const juce::ValueTree& state)
 
 inline int dockControlCount(const juce::ValueTree& state)
 {
-    return juce::jlimit(0, 16, int(state.getProperty(key("dock_count"), 0)));
+    return juce::jlimit(1, 12, int(state.getProperty(key("dock_count"), 1)));
 }
 
 // True when this plugin window has keyboard focus. Realtime modifier polls must
@@ -139,11 +134,11 @@ inline std::optional<bool> validate(const juce::Identifier& property, const juce
         }
         return order.joinIntoString("|") == raw;
     }
-    if (property == key("pin_routing") || property == key("search_visible"))
+    if (property == key("pin_routing"))
         return crossover_ui::hasExactBooleanValue(value);
     if (property == key("editor_columns"))
         return crossover_ui::hasExactIntegerValue(value, minEditorColumns, maxEditorColumns);
-    if (property == key("dock_count")) return crossover_ui::hasExactIntegerValue(value, 0, 16);
+    if (property == key("dock_count")) return crossover_ui::hasExactIntegerValue(value, 1, 12);
     if (property == key("zoom_step"))
     {
         for (const auto step : zoomSteps)

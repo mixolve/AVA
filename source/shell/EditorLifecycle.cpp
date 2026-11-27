@@ -25,6 +25,8 @@ AvaAudioProcessorEditor::~AvaAudioProcessorEditor()
     unregisterParameterListeners();
     storeEditorStateToValueTree();
     stopTimer();
+    pinnedRoutingViewport.onViewChanged = {};
+    quickAccessViewport.onViewChanged = {};
     pinnedRoutingViewport.setViewedComponent(nullptr, false);
     slotsViewport.setViewedComponent(nullptr, false);
     setLookAndFeel(nullptr);
@@ -64,7 +66,7 @@ void AvaAudioProcessorEditor::timerCallback()
         unitWidthControl->setSelectedChoiceIndex(
             shell_editor_ui::editorColumns(getRootWindowState()) - shell_editor_ui::minEditorColumns, false);
     if (unitDockSizeControl != nullptr)
-        unitDockSizeControl->setSelectedChoiceIndex(shell_editor_ui::dockControlCount(getRootWindowState()), false);
+        unitDockSizeControl->setSelectedChoiceIndex(shell_editor_ui::dockControlCount(getRootWindowState()) - 1, false);
     if (unitZoomControl != nullptr)
     {
         const auto zoom = shell_editor_ui::zoomChoiceIndex(shell_editor_ui::zoomStep(getRootWindowState()));
@@ -90,7 +92,7 @@ void AvaAudioProcessorEditor::timerCallback()
     if (moduleStateChanged)
         resyncEditorFromProcessorState();
 
-    updateInstanceHeadings();
+    updateInstanceScrollLabel();
     if (moduleList != nullptr && filterViewport.isVisible())
         moduleList->refreshItemsIfChanged();
     const auto clipEventCount = audioProcessor.getGlobalClipEventCount();
@@ -113,7 +115,7 @@ void AvaAudioProcessorEditor::timerCallback()
         if (showClipIndicator != clipIndicatorShown)
         {
             clipIndicatorShown = showClipIndicator;
-            dockClipIndicator.setActive(showClipIndicator);
+            dockControls.clip.setActive(showClipIndicator);
         }
     }
 
@@ -156,8 +158,6 @@ bool AvaAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     if (activeInstanceEditor != nullptr && activeInstanceEditor->isShowing())
         return activeInstanceEditor->keyPressed(key);
 
-    if (!shell_editor_ui::isSearchVisible(getRootWindowState()))
-        return false;
     // Enter is a search shortcut on ALL and INFO alike; navigating
     // from another page first reveals the existing pinned search control.
     if (hasUnitPage()) showUnitPage(UnitPage::main);

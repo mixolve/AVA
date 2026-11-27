@@ -147,26 +147,14 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
         }
 }
 
-void CrossoverModuleComponent::setModuleDisplayTitle(const juce::String& title)
+void CrossoverModuleComponent::configureModuleScrollTile(const juce::String& title,
+                                                        const std::function<bool()>& isBypassed,
+                                                        const std::function<void()>& toggle,
+                                                        const std::function<void()>& copy,
+                                                        const std::function<void()>& paste)
 {
-    if (getProperties().getWithDefault("moduleDisplayTitle", juce::String()).toString() == title)
-        return;
-    getProperties().set("moduleDisplayTitle", title);
     for (const auto& page : rangePages)
-        if (page != nullptr)
-        {
-            for (auto& frame : page->controlBlockFrames)
-                if (frame.title == "DYN") frame.displayTitle = title;
-            page->repaint();
-        }
-}
-
-void CrossoverModuleComponent::setModuleNameplateBypass(std::function<bool()> isBypassed,
-                                                       std::function<void()> toggle)
-{
-    for (auto& page : rangePages)
-        if (page != nullptr)
-            page->setModuleNameplateBypass(isBypassed, toggle);
+        if (page != nullptr) CrossoverRangePage::configureModuleScrollTile(*page, title, isBypassed, toggle, copy, paste);
 }
 
 void CrossoverModuleComponent::setInstanceName(const juce::String& name)

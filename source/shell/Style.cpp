@@ -43,11 +43,11 @@ int getEditorContentInset(const juce::Component&) noexcept
 
 int getDockLength(const bool vertical, const int controls) noexcept
 {
-    // The collapsed dock has no editor scrollbar. Reserving its width here
-    // leaves a redundant 20 px after the service buttons (right/bottom).
-    return 2 * uiGap
-        + controls * squareControlSize + (controls - 1) * uiGap
-        + 2 * (controlBlockPadding + controlBlockFrameThickness) + (vertical ? uiGap : 0);
+    // The compact dock reserves one extra, always-visible SCROLL tile before
+    // the configured pinned controls. No window scrollbar area is needed.
+    const auto stripLength = 2 * uiGap + (controls + 1) * squareControlSize + controls * uiGap;
+    return vertical ? stripLength + uiGap + 2 * (controlBlockPadding + controlBlockFrameThickness)
+                    : stripLength;
 }
 
 int getEditorWidth(const juce::Component& component) noexcept
@@ -57,7 +57,8 @@ int getEditorWidth(const juce::Component& component) noexcept
         const auto& state = editor->getRootWindowState();
         if (editor->isDockOnly())
             return bool(state.getProperty(shell_editor_ui::key("dock_vertical"), false))
-                ? squareControlSize + 2 * uiGap : getDockLength(false, shell_editor_ui::dockControlCount(state));
+                ? squareControlSize + 2 * uiGap
+                : getDockLength(false, shell_editor_ui::dockControlCount(state));
         return getExpandedEditorWidth(shell_editor_ui::editorColumns(state));
     }
     return getExpandedEditorWidth();
@@ -65,13 +66,7 @@ int getEditorWidth(const juce::Component& component) noexcept
 
 int getExpandedEditorWidth(int columns) noexcept
 {
-    return editorScrollBarArea + 2 * uiGap
-        + columns * squareControlSize + (columns - 1) * uiGap
-        + 2 * (controlBlockPadding + controlBlockFrameThickness)
-        // The white INSTANCE frame contains dark control sections. Reserve
-        // a real standard gap on both sides instead of shrinking their paint.
-        + 2 * (uiGap + controlBlockFrameThickness);
-
+    return 2 * uiGap + columns * squareControlSize + (columns - 1) * uiGap;
 }
 
 int getEditorHeight(const juce::Component& component) noexcept

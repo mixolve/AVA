@@ -30,12 +30,16 @@ AvaAudioProcessorEditor::EqlCopyEditor::EqlCopyEditor(
 {
     getProperties().set("moduleCopyUid", uid);
     getProperties().set("moduleCopyBand", band);
-    collapseBlockInitially("EQL");
-    bindCollapseState(owner.valueTreeState,
-        "eql.band-" + juce::String(band + 1) + ".module.uid-" + juce::String(uid));
     displayOrder = shell_filter_order_state::makeIdentity(EqlModuleProcessor::maxFilterCount);
     restoreOrder();
     initializeControls();
+    for (size_t index = 0; index < scrollRows.size(); ++index)
+    {
+        scrollRows[index] = std::make_unique<HeaderControlRow>(*this);
+        scrollRows[index]->attach("eql-copy-" + juce::String(uid)
+            + "-row-" + juce::String(int(index) + 1));
+        scrollRows[index]->setScrollLabel(eqlScrollLabels[index]);
+    }
     refreshPresets();
 }
 
@@ -65,20 +69,21 @@ void AvaAudioProcessorEditor::EqlCopyEditor::initializeControls()
     presets->pasteFilterButton->onTrigger = [this] { pasteAllFilters(); };
 
     const auto makeButton = [this](std::unique_ptr<PushControl>& target,
-                                    const juce::String& label, std::function<void()> action)
+                                    const juce::String& label, const juce::String& id, std::function<void()> action)
     {
         target = std::make_unique<PushControl>(label);
+        target->setComponentID(id);
         target->setBottomIndicatorsVisible(false, false);
         target->getProperties().set("foregroundOccluder", true);
-        target->getProperties().set("disableDockSelection", true);
         target->onTrigger = std::move(action);
         addAndMakeVisible(*target);
     };
-    makeButton(sortButton, "ALL\nSORT", [this] { sortFilters(); });
-    makeButton(copyButton, "ONE\nCOPY", [this] { copyFilter(); });
-    makeButton(pasteButton, "ONE\nPASTE", [this] { pasteFilter(); });
-    makeButton(deleteButton, "ONE\nDELETE", [this] { deleteFilter(); });
-    makeButton(addButton, "ONE\nADD", [this] { addFilter(); });
+    makeButton(sortButton, "SORT", "eql-sort-all-filters", [this] { sortFilters(); });
+    sortButton->getProperties().set("disableDockSelection", true);
+    makeButton(copyButton, "COPY", "eql-filter-copy", [this] { copyFilter(); });
+    makeButton(pasteButton, "PASTE", "eql-filter-paste", [this] { pasteFilter(); });
+    makeButton(deleteButton, "DELETE", "eql-filter-delete", [this] { deleteFilter(); });
+    makeButton(addButton, "ADD", "eql-filter-add", [this] { addFilter(); });
 
     for (int i = 0; i < EqlModuleProcessor::maxFilterCount; ++i)
     {
@@ -87,12 +92,19 @@ void AvaAudioProcessorEditor::EqlCopyEditor::initializeControls()
         section->header->setDragAction(
             [this, i](const juce::MouseEvent& event, bool released)
             {
-                if (released) {
-                    const auto point = getLocalPoint(nullptr, event.getScreenPosition().toFloat());
+                if (scrollRows[2] == nullptr) return;
+                auto& rowViewport = scrollRows[2]->viewport;
+                const auto screen = event.getScreenPosition().toFloat();
+                const auto rowPoint = rowViewport.getLocalPoint(nullptr, screen);
+                const bool inRow = rowViewport.getLocalBounds().toFloat().contains(rowPoint);
+                if (!released && inRow)
+                    rowViewport.autoScroll(juce::roundToInt(rowPoint.x), juce::roundToInt(rowPoint.y),
+                        2 * getUiGap(*this), getUiGap(*this));
+                if (released && inRow) {
                     int destination = -1;
                     for (int j = 0; j < processor.getActiveFilterCount(); ++j)
                         if (filters[size_t(j)] != nullptr
-                            && filters[size_t(j)]->header->getBounds().toFloat().contains(point))
+                            && filters[size_t(j)]->header->getScreenBounds().toFloat().contains(screen))
                         { destination = j; break; }
                     if (destination >= 0 && destination != i) {
                         const auto count = processor.getActiveFilterCount();
@@ -203,51 +215,31 @@ void AvaAudioProcessorEditor::EqlCopyEditor::refreshFilterControls()
 
 void AvaAudioProcessorEditor::EqlCopyEditor::updateLayout(int width)
 {
-    currentWidth = width;
-    const auto gap = getUiGap(*this);
-    const auto inset = controlBlockPadding + controlBlockFrameThickness;
-    const auto frameWidth = juce::jmax(0, width - gap);
-    const auto collapsed = isBlockCollapsed("EQL");
     refreshFilterControls();
-    for (auto* button : {sortButton.get(), copyButton.get(), pasteButton.get(), deleteButton.get(), addButton.get()})
-        button->setVisible(!collapsed);
-    for (auto* control : std::array<juce::Component*, 8> {
-            &presets->presetChoice, presets->addButton.get(), presets->saveButton.get(),
-            presets->renameButton.get(), presets->defaultButton.get(), presets->deleteButton.get(),
-            presets->copyFiltersButton.get(), presets->pasteFilterButton.get()})
-        control->setVisible(!collapsed);
+    std::array<std::vector<juce::Component*>, eqlScrollLabels.size()> rows;
+    rows[0] = {&presets->presetChoice, presets->addButton.get(), presets->saveButton.get(),
+        presets->renameButton.get(), presets->defaultButton.get(), presets->deleteButton.get(),
+        sortButton.get(), presets->copyFiltersButton.get(), presets->pasteFilterButton.get()};
+    if (auto* selected = filters[size_t(currentFilter)].get())
+        rows[1] = {selected->typeControl.get(), selected->orderControl.get(),
+            selected->frequencyControl.get(), selected->bandwidthControl.get(), selected->gainControl.get()};
+    const auto filterActionStart = int(rows[1].size());
+    rows[1].insert(rows[1].end(), {addButton.get(), deleteButton.get(), copyButton.get(), pasteButton.get()});
 
-    std::array<std::vector<ControlGridCell>, 4> rows;
-    if (!collapsed)
-    {
-        rows[0] = {{&presets->presetChoice}, {presets->addButton.get()},
-            {presets->saveButton.get()}, {presets->renameButton.get()},
-            {presets->defaultButton.get()}, {presets->deleteButton.get()}};
-        rows[1] = {{presets->copyFiltersButton.get()},
-            {presets->pasteFilterButton.get()}, {sortButton.get()}};
-        auto* selected = filters[size_t(currentFilter)].get();
-        if (selected != nullptr)
-            rows[2] = {{selected->typeControl.get()}, {selected->orderControl.get()},
-                {selected->frequencyControl.get()}, {selected->bandwidthControl.get()},
-                {selected->gainControl.get()}};
-        rows[3] = {{copyButton.get()}, {pasteButton.get()},
-            {deleteButton.get()}, {addButton.get()}};
-    }
     const int count = processor.getActiveFilterCount();
     for (int position = 0; position < count; ++position)
     {
         const int i = displayOrder[size_t(position)];
         auto* f = filters[size_t(i)].get();
         if (!f) continue;
-        f->header->setVisible(!collapsed);
         f->header->setTitleText(juce::String(position + 1) + " " + processor.getFilterHeaderText(i));
         const bool selected = i == currentFilter;
         f->header->setSelectionHighlighted(selected);
         for (auto* control : std::array<juce::Component*, 5> {
                 f->typeControl.get(), f->orderControl.get(), f->frequencyControl.get(),
                 f->bandwidthControl.get(), f->gainControl.get()})
-            control->setVisible(!collapsed && selected);
-        if (!collapsed) rows[3].push_back({f->header.get()});
+            control->setVisible(selected);
+        rows[2].push_back(f->header.get());
     }
     for (int i = count; i < EqlModuleProcessor::maxFilterCount; ++i)
     {
@@ -259,26 +251,15 @@ void AvaAudioProcessorEditor::EqlCopyEditor::updateLayout(int width)
                 f->bandwidthControl.get(), f->gainControl.get()})
             control->setVisible(false);
     }
-    int height = controlBlockHeaderHeight;
-    if (!collapsed)
-    {
-        const juce::Rectangle<int> grid {inset, controlBlockHeaderHeight + gap,
-            juce::jmax(1, frameWidth - 2 * inset), 0};
-        auto rowTop = grid.getY();
-        auto contentBottom = rowTop;
-        for (const auto& row : rows)
-        {
-            if (row.empty()) continue;
-            const auto placed = layoutControlGrid(*this, grid.withY(rowTop), row);
-            contentBottom = placed.getBottom();
-            rowTop = contentBottom + getUiRowGap(*this);
-        }
-        height = contentBottom + gap + controlBlockFrameThickness;
-    }
-    setSize(width, height);
-    controlBlockFrames = {{{0, 0, frameWidth, height}, "EQL", uiGreyDark,
-        "EQL (" + juce::String(ava::module_stack::displayOrdinal(owner.audioProcessor.getModuleStackForRange(size_t(band)), uid)).paddedLeft('0', 2) + ")"}};
-    repaint();
+    const juce::Rectangle<int> grid {0, 0, width, getSquareControlSize(*this)};
+    setSize(width, layoutEqlControlRows(scrollRows, rows, grid, filterActionStart));
+}
+
+void AvaAudioProcessorEditor::EqlCopyEditor::configureScrollTile(const juce::String& caption,
+    const std::function<bool()>& isBypassed, const std::function<void()>& toggle)
+{
+    scrollRows.front()->setScrollLabel(caption + "\nSCROLL");
+    scrollRows.front()->setModuleBypass(isBypassed, toggle);
 }
 
 void AvaAudioProcessorEditor::EqlCopyEditor::refreshFromProcessor()

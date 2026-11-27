@@ -230,13 +230,12 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
             getLocalArea(&anchor, anchor.getLocalBounds()), {}, {}, true);
         if (auto* prompt = dynamic_cast<PromptComponent*>(textPromptOverlay.get())) prompt->followAnchor(anchor);
     });
-    // Every routing INSTANCE presents the same UNIT. Persist its collapsed
-    // sections on the routing owner, not on an individual instance APVTS;
-    // switching pages must not swap UNIT expansion preferences.
-    auto& unitState = audioProcessor.getRoutingOwner().getValueTreeState();
-    unitMainContent.bindCollapseState(unitState, "shell.unit.main");
-    unitContent.addAndMakeVisible(unitMainContent);
+    // A single permanent UNIT row, without nested frames or collapse state.
+    unitMainContent.setCollapsible(false);
+    unitMainContent.setOpaque(false);
+    moduleContent.addAndMakeVisible(unitMainContent);
     unitMainRow.attach("unit-main");
+    unitMainRow.setScrollLabel("UNIT\nSCROLL");
     routingPanel->setName("unit-routing");
     routingPanel->setOnBackgroundClick([this] { showUnitPage(UnitPage::main); });
     addChildComponent(*routingPanel);
@@ -245,10 +244,21 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     slotsContent.onBackgroundRelease = [this] { showUnitPage(UnitPage::main); };
     slotsViewport.setName("unit-slots");
     slotsViewport.setViewedComponent(&slotsContent, false);
-    slotsViewport.setScrollBarsShown(true, false, false, false);
-    slotsViewport.setScrollBarThickness(editorScrollBarWidth);
+    slotsViewport.setScrollBarsShown(false, false, false, false);
+    slotsViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     slotsViewport.setWantsKeyboardFocus(false);
     addChildComponent(slotsViewport);
+    slotsVerticalScrollControl = std::make_unique<LocalContinuousControl>("VERTICAL\nSCROLL");
+    slotsVerticalScrollControl->setName("vertical scroll");
+    slotsVerticalScrollControl->setComponentID("slots-vertical-scroll");
+    slotsVerticalScrollControl->getProperties().set("disableDockSelection", true);
+    slotsVerticalScrollControl->onValueChanged = [this]
+    {
+        const auto maximum = juce::jmax(0, slotsContent.getHeight() - slotsViewport.getHeight());
+        slotsViewport.setViewPosition(0, juce::roundToInt(slotsVerticalScrollControl->getValue() * maximum));
+    };
+    slotsViewport.onViewChanged = [this] { syncSlotsVerticalScrollControl(); };
+    addChildComponent(*slotsVerticalScrollControl);
     OscPanel::Actions oscActions;
     oscActions.getSettings = [this] { return audioProcessor.getOscSettings(); };
     oscActions.setSettings = [this] (const OscSettings& settings)
@@ -256,12 +266,9 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
         return audioProcessor.setOscSettings(settings);
     };
     oscActions.isInputPortBusy = [this] { return audioProcessor.isOscInputPortBusy(); };
+    // OSC owns its controls, which are reparented into the UNIT row by layout.
     oscPanel = std::make_unique<OscPanel>(std::move(oscActions));
-    unitContent.addAndMakeVisible(*oscPanel);
-    // The instance LINK control stays in INSTANCE MAIN, not the UNIT navigation.
-    unitSyncContent.collapseBlockInitially("SYNC");
-    unitSyncContent.bindCollapseState(unitState, "shell.unit.sync");
-    unitContent.addAndMakeVisible(unitSyncContent);
+    // INSTANCE LINK belongs to the instance row; UNIT SYNC belongs to the unit row.
     eqlContent.setName("eql-page");
     eqlContent.onBackgroundClick = [this](const juce::MouseEvent& event) { handleEqlBackgroundClick(event); };
     filterContent.onBackgroundClick = eqlContent.onBackgroundClick;
@@ -271,14 +278,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     mainContent.onBackgroundClick = eqlContent.onBackgroundClick;
     unitMainContent.onBackgroundClick = eqlContent.onBackgroundClick;
     instanceContent.onBackgroundClick = eqlContent.onBackgroundClick;
-    unitContent.bindCollapseState(unitState, "shell.unit");
-    mainContent.collapseBlockInitially("MAIN");
-    mainContent.bindCollapseState(valueTreeState, "shell.main");
-    eqlContent.collapseBlockInitially("EQL");
-    instanceContent.bindCollapseState(valueTreeState, "shell.instance");
-    oscPanel->collapseBlockInitially("OSC");
-    oscPanel->bindCollapseState(unitState, "shell.unit.osc");
-    moduleContent.addAndMakeVisible(unitContent);
     moduleContent.addAndMakeVisible(instanceContent);
     instanceContent.addAndMakeVisible(mainContent);
     instanceMainRow.attach("instance-main");
@@ -301,12 +300,41 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     };
     pinnedRoutingViewport.setOpaque(false);
     pinnedRoutingViewport.setViewedComponent(&pinnedRoutingContent, false);
-    pinnedRoutingViewport.setScrollBarsShown(false, true, false, false);
-    pinnedRoutingViewport.setScrollBarThickness(getUiGap(*this));
+    pinnedRoutingViewport.setScrollBarsShown(false, false, false, false);
     pinnedRoutingViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     pinnedRoutingViewport.setWantsKeyboardFocus(false);
     pinnedRoutingViewport.getProperties().set("foregroundOccluder", true);
     addChildComponent(pinnedRoutingViewport);
+    pinnedRoutingScrollControl = std::make_unique<LocalContinuousControl>("INSTS\nSCROLL");
+    pinnedRoutingScrollControl->setName("insts scroll");
+    pinnedRoutingScrollControl->setComponentID("pinned-routing-scroll");
+    pinnedRoutingScrollControl->getProperties().set("disableDockSelection", true);
+    pinnedRoutingScrollControl->getProperties().set("foregroundOccluder", true);
+    pinnedRoutingScrollControl->onValueChanged = [this]
+    {
+        const auto maximum = juce::jmax(0, pinnedRoutingContent.getWidth() - pinnedRoutingViewport.getWidth());
+        pinnedRoutingViewport.setViewPosition(
+            juce::roundToInt(pinnedRoutingScrollControl->getValue() * double(maximum)), 0);
+    };
+    pinnedRoutingViewport.onViewChanged = [this] { syncPinnedRoutingScrollControl(); };
+    pinnedRoutingScrollControl->setBottomComponent(unitSyncControls);
+    addChildComponent(*pinnedRoutingScrollControl);
+    // The vertical page controller is fixed at the right edge of the pinned
+    // INSTANCE strip. Its target is the currently displayed editor/instance.
+    pinnedVerticalScrollControl = std::make_unique<LocalContinuousControl>("VERTICAL\nSCROLL");
+    pinnedVerticalScrollControl->setName("vertical scroll");
+    pinnedVerticalScrollControl->setComponentID("pinned-instance-vertical-scroll");
+    pinnedVerticalScrollControl->getProperties().set("disableDockSelection", true);
+    pinnedVerticalScrollControl->getProperties().set("foregroundOccluder", true);
+    pinnedVerticalScrollControl->onValueChanged = [this]
+    {
+        auto* visibleEditor = activeInstanceEditor != nullptr ? activeInstanceEditor.get() : this;
+        const auto maximum = juce::jmax(0, visibleEditor->moduleContent.getHeight()
+                                        - visibleEditor->filterViewport.getHeight());
+        visibleEditor->filterViewport.setViewPosition(0,
+            juce::roundToInt(pinnedVerticalScrollControl->getValue() * double(maximum)));
+    };
+    addChildComponent(*pinnedVerticalScrollControl);
     // The selected dock tiles are native controls bound to the source parameters.
     addAndMakeVisible(quickAccessStrip);
     quickAccessStrip.addAndMakeVisible(quickAccessViewport);
@@ -314,11 +342,28 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     quickAccessViewport.setScrollBarsShown(false, false, false, false);
     quickAccessViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     quickAccessViewport.setWantsKeyboardFocus(false);
+    quickAccessScrollControl = std::make_unique<LocalContinuousControl>("DOCK\nSCROLL");
+    quickAccessScrollControl->setName("dock scroll");
+    quickAccessScrollControl->setComponentID("quick-access-scroll");
+    quickAccessScrollControl->getProperties().set("disableDockSelection", true);
+    quickAccessScrollControl->onValueChanged = [this]
+    {
+        const bool vertical = isDockOnly()
+            && bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_vertical"), false));
+        const auto maximum = juce::jmax(0, vertical
+            ? quickAccessContent.getHeight() - quickAccessViewport.getHeight()
+            : quickAccessContent.getWidth() - quickAccessViewport.getWidth());
+        const auto offset = juce::roundToInt(quickAccessScrollControl->getValue() * double(maximum));
+        quickAccessViewport.setViewPosition(vertical ? 0 : offset, vertical ? offset : 0);
+    };
+    quickAccessViewport.onViewChanged = [this] { syncQuickAccessScrollControl(); };
+    quickAccessScrollControl->setBottomComponent(dockControls);
+    quickAccessStrip.addAndMakeVisible(*quickAccessScrollControl);
     // Marking remains visible at the source in the scrolling viewport;
     // mirrored dock controls use their ordinary neutral frame and rail.
     quickAccessContent.getProperties().set("suppressManualSelectionHighlight", true);
     quickAccessStrip.getProperties().set("foregroundOccluder", true);
-    dockSortToggle.onClick = [this]
+    dockControls.sort.onClick = [this]
     {
         dockDragSource = dockDropTarget = -1;
         for (auto& item : quickAccessItems)
@@ -326,40 +371,28 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
             item.control->getProperties().remove("arrangementDragging");
             item.control->repaint();
         }
-        dockSortOverlay.setVisible(dockSortToggle.getToggleState());
+        dockSortOverlay.setVisible(dockControls.sort.getToggleState());
         dockSortOverlay.repaint();
     };
     dockSortOverlay.onGesture = [this](const juce::MouseEvent& event, int phase) { dragDockControl(event, phase); };
-    dockCollapseToggle.onClick = [this] { setDockOnly(dockCollapseToggle.getToggleState()); };
-    addAndMakeVisible(dockSortToggle);
-    addAndMakeVisible(dockCollapseToggle);
-    dockVerticalToggle.onClick = [this]
+    dockControls.collapse.onClick = [this] { setDockOnly(dockControls.collapse.getToggleState()); };
+    dockControls.vertical.onClick = [this]
     {
         auto* root = this;
         while (auto* parent = root->findParentComponentOfClass<AvaAudioProcessorEditor>()) root = parent;
         if (!root->isDockOnly())
         {
-            dockVerticalToggle.setToggleState(false, juce::dontSendNotification);
+            dockControls.vertical.setToggleState(false, juce::dontSendNotification);
             return;
         }
-        const bool vertical = dockVerticalToggle.getToggleState();
+        const bool vertical = dockControls.vertical.getToggleState();
         root->getRootWindowState().setProperty(shell_editor_ui::key("dock_vertical"), vertical, nullptr);
         const juce::ScopedValueSetter<bool> guard(root->suppressEditorSizeStateSave, true);
         const auto width = getEditorWidth(*root);
         root->applyDockWindowSize(width, root->getMinimumEditorHeight());
         root->resized();
     };
-    addAndMakeVisible(dockVerticalToggle);
-    dockClipIndicator.setName("dock-clip");
-    addAndMakeVisible(dockClipIndicator);
-    unitSendIndicator.setName("unit-send");
-    unitReceiveIndicator.setName("unit-receive");
-    unitNumberLabel.setColour(juce::Label::textColourId, uiWhite);
-    unitNumberLabel.setJustificationType(juce::Justification::centred);
-    unitNumberLabel.setBorderSize({});
-    unitNumberLabel.setInterceptsMouseClicks(true, false);
-    unitNumberLabel.setMouseCursor(juce::MouseCursor::DraggingHandCursor);
-    unitNumberLabel.onDrop = [this](juce::Point<int> screen)
+    unitSyncControls.connect.onDrop = [this](juce::Point<int> screen)
     {
         auto* hit = juce::Desktop::getInstance().findComponentAt(screen);
         if (hit == nullptr) return;
@@ -374,19 +407,12 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
             recipient->refreshInstanceLinkControls();
         }
     };
-    unitSyncPlate.setInterceptsMouseClicks(false, true);
-    addChildComponent(unitSyncPlate);
-    unitSyncPlate.addAndMakeVisible(unitNumberLabel);
-    unitSyncPlate.addAndMakeVisible(unitSendIndicator);
-    unitSyncPlate.addAndMakeVisible(unitReceiveIndicator);
-    unitSyncPauseToggle.setButtonText("Pause unit sync");
-    unitSyncPauseToggle.onClick = [this]
+    unitSyncControls.pause.onClick = [this]
     {
         const auto unit = audioProcessor.getRoutingOwner().getLinkSessionId();
-        InstanceLinkRegistry::instance().setPaused(unit, unitSyncPauseToggle.getToggleState());
+        InstanceLinkRegistry::instance().setPaused(unit, unitSyncControls.pause.getToggleState());
         refreshInstanceLinkControls();
     };
-    unitSyncPlate.addAndMakeVisible(unitSyncPauseToggle);
     addChildComponent(dockSortOverlay);
     // The search is a fixed overlay, not a child of the scrolling canvas.
     // Its space is still reserved by layoutUnifiedBlocks().
@@ -395,7 +421,10 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     filterViewport.onViewChanged = [this]
     {
         updatePinnedSearchPosition();
-        syncMainScrollBar();
+        // Nested INSTANCE editors use the root's fixed vertical controller.
+        if (routingInstanceId == 0) syncVerticalScrollControl();
+        else if (auto* root = audioProcessor.getRoutingOwner().getContentEditor())
+            if (root != this) root->syncVerticalScrollControl();
         // Keep the persisted scroll coordinate current for viewport wheel,
         // scrollbar thumb and trackpad gestures. Never persist a transient
         // clamp-to-zero while the page is being rebuilt on DAW Undo.
@@ -415,12 +444,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     filterViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     filterViewport.setWantsKeyboardFocus(false);
     addAndMakeVisible(filterViewport);
-    mainScrollBar.setAutoHide(false);
-    mainScrollBar.setColour(juce::ScrollBar::backgroundColourId, uiGreyDark);
-    mainScrollBar.setColour(juce::ScrollBar::thumbColourId, uiGreyLight);
-    mainScrollBar.setSingleStepSize(uiGap);
-    mainScrollBar.addListener(this);
-    addAndMakeVisible(mainScrollBar);
 
     juce::StringArray unitNumbers;
     for (int number = 1; number <= InstanceLinkRegistry::maxUnitNumber; ++number)
@@ -433,7 +456,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
         InstanceLinkRegistry::instance().setUnitNumber(unit, unitNumberControl->getSelectedChoiceIndex() + 1);
         refreshInstanceLinkControls();
     };
-    unitSyncContent.addAndMakeVisible(*unitNumberControl);
 
     sendControl = std::make_unique<LocalChoiceControl>(
         "SEND", juce::StringArray { "OFF", "ON" }, 0);
@@ -445,7 +467,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
             sendControl->getSelectedChoiceIndex() == 1);
         root.notifyHostOfStateChange();
     };
-    unitSyncContent.addAndMakeVisible(*sendControl);
 
     receiveControl = std::make_unique<LocalChoiceControl>(
         "RECEIVE", juce::StringArray { "OFF", "ON" }, 0);
@@ -457,7 +478,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
             source, receiveControl->getSelectedChoiceIndex() == 1);
         audioProcessor.getRoutingOwner().notifyHostOfStateChange();
     };
-    unitSyncContent.addAndMakeVisible(*receiveControl);
 
     juce::StringArray linkCounts;
     for (int count = 1; count <= InstanceLinkRegistry::maxUnitLinks; ++count)
@@ -472,14 +492,12 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
         root.notifyHostOfStateChange();
         refreshInstanceLinkControls();
     };
-    unitSyncContent.addAndMakeVisible(*linksCountControl);
     for (size_t index = 0; index < linkToControls.size(); ++index)
     {
         auto& control = linkToControls[index];
         control = std::make_unique<LocalChoiceControl>("LINK\nTO", juce::StringArray { "NONE" }, 0);
         control->setBottomIndicatorsVisible(false, false);
         control->onValueChanged = [this, index] { changeLinkDestination(int(index)); };
-        unitSyncContent.addChildComponent(*control);
     }
 
     // Internal ROUTING nodes are different from host UNITs. This independent
@@ -504,6 +522,13 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
 
     if (auto* initialEqlProcessor = audioProcessor.getEqlModuleProcessor())
         setupEqlControls(initialEqlProcessor->getValueTreeState());
+
+    for (size_t index = 0; index < eqlScrollRows.size(); ++index)
+    {
+        eqlScrollRows[index] = std::make_unique<HeaderControlRow>(eqlContent);
+        eqlScrollRows[index]->attach("eql-row-" + juce::String(int(index) + 1));
+        eqlScrollRows[index]->setScrollLabel(eqlScrollLabels[index]);
+    }
 
     restoreEditorStateFromValueTree();
 
@@ -549,13 +574,14 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     setResizeLimits(getEditorWidth(*this), getMinimumEditorHeight(),
                     getEditorWidth(*this), getMaximumEditorHeight());
     getConstrainer()->setFixedAspectRatio(0.0);
+    const auto defaultExpandedHeight = getExpandedEditorWidth(shell_editor_ui::editorColumns(getRootWindowState()));
     const int previousHeight = static_cast<int>(valueTreeState.state.getProperty(
-        AvaAudioProcessor::editorHeightStateKey, getEditorHeight(*this)));
+        AvaAudioProcessor::editorHeightStateKey, defaultExpandedHeight));
     const juce::Point<int> editorSize { getEditorWidth(*this),
         juce::jlimit(getMinimumEditorHeight(), getMaximumEditorHeight(), previousHeight) };
     setSize(editorSize.x, editorSize.y);
     audioProcessor.setLastEditorSize(editorSize.x, isDockOnly()
-        ? juce::jlimit(getEditorWidth(*this), maximumEditorHeight, previousHeight) : editorSize.y);
+        ? juce::jlimit(getExpandedMinimumEditorHeight(), maximumEditorHeight, previousHeight) : editorSize.y);
 
     restoreEditorUiState();
     restoringEditorUiState = false;
@@ -629,8 +655,9 @@ void AvaAudioProcessorEditor::refreshInstanceLinkControls()
     const auto source = audioProcessor.getRoutingOwner().getLinkSessionId();
     const auto number = registry.unitNumber(source);
     unitNumberControl->setSelectedChoiceIndex(number - 1, false);
-    unitNumberLabel.setText(InstanceLinkRegistry::formatUnitNumber(number), juce::dontSendNotification);
-    unitSyncPauseToggle.setToggleState(registry.isPaused(source), juce::dontSendNotification);
+    const auto unitNumber = InstanceLinkRegistry::formatUnitNumber(number);
+    unitMainRow.setScrollLabel("UNIT " + unitNumber + "\nSCROLL");
+    unitSyncControls.pause.setToggleState(registry.isPaused(source), juce::dontSendNotification);
     const bool sending = registry.isSendEnabled(source);
     const bool receiving = registry.isReceiveEnabled(source);
     sendControl->setSelectedChoiceIndex(int(sending), false);
@@ -638,8 +665,8 @@ void AvaAudioProcessorEditor::refreshInstanceLinkControls()
     const auto traffic = registry.activity(source);
     const auto now = juce::Time::getMillisecondCounter();
     constexpr uint32_t activityReleaseMs = 100;
-    unitSendIndicator.setActive(traffic.sentAt != 0 && now - traffic.sentAt < activityReleaseMs);
-    unitReceiveIndicator.setActive(traffic.receivedAt != 0 && now - traffic.receivedAt < activityReleaseMs);
+    unitSyncControls.send.setActive(traffic.sentAt != 0 && now - traffic.sentAt < activityReleaseMs);
+    unitSyncControls.receive.setActive(traffic.receivedAt != 0 && now - traffic.receivedAt < activityReleaseMs);
     const auto peers = registry.peers(source);
     const auto targets = registry.unitLinkTargets(source);
     const auto count = registry.unitLinkCount(source);

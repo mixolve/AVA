@@ -34,8 +34,7 @@ std::vector<ControlSearchEntry> AvaAudioProcessorEditor::findControls(const juce
         if (&component == controlSearchPanel.get()) return;
         // An inactive BAND's stale block rows can still be children of ALL with
         // zero/invisible bounds. They must not pollute the current band's search.
-        if (component.getParentComponent() == &instanceContent && !component.isVisible()
-            && !instanceContent.isBlockCollapsed("INSTANCE")) return;
+        if (component.getParentComponent() == &instanceContent && !component.isVisible()) return;
         // A disabled module has no target in the ALL viewport. Collapsed blocks,
         // by contrast, are indexed with their children so a result can reopen them.
         if (&component == &eqlContent

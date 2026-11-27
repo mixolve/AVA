@@ -122,55 +122,16 @@ void AvaAudioProcessorEditor::setupShellControls()
     unitMainRow.content.addAndMakeVisible(*unitWidthControl);
 
     juce::StringArray dockSizes;
-    for (int size = 0; size <= 16; ++size) dockSizes.add(juce::String(size));
+    for (int size = 1; size <= 12; ++size) dockSizes.add(juce::String(size));
     unitDockSizeControl = std::make_unique<LocalChoiceControl>("DOCK\nSIZE", dockSizes,
-        shell_editor_ui::dockControlCount(getRootWindowState()));
+        shell_editor_ui::dockControlCount(getRootWindowState()) - 1);
     unitDockSizeControl->setBottomIndicatorsVisible(false, false);
     unitDockSizeControl->onValueChanged = [this]
     {
-        const auto size = unitDockSizeControl->getSelectedChoiceIndex();
-        if (size == 0) setDockOnly(false);
+        const auto size = unitDockSizeControl->getSelectedChoiceIndex() + 1;
         getRootWindowState().setProperty(shell_editor_ui::key("dock_count"), size, nullptr);
     };
     unitMainRow.content.addAndMakeVisible(*unitDockSizeControl);
-
-    pinRoutingControl = std::make_unique<LocalChoiceControl>(
-        "PIN\nINSTS", juce::StringArray { "OFF", "ON" },
-        bool(getRootWindowState().getProperty(shell_editor_ui::key("pin_routing"), true)) ? 1 : 0);
-    pinRoutingControl->setBottomIndicatorsVisible(false, false);
-    pinRoutingControl->onValueChanged = [this]
-    {
-        const bool enabled = pinRoutingControl->getSelectedChoiceIndex() == 1;
-        getRootWindowState().setProperty(shell_editor_ui::key("pin_routing"), enabled, nullptr);
-        // PIN INSTS changes only the editor view, not the host's audio state.
-        // Only the UNIT-owned strip is visible, including in nested editors.
-        if (auto* root = audioProcessor.getRoutingOwner().getContentEditor())
-        {
-            root->refreshPinnedRoutingStrip();
-            root->updatePinnedSearchPosition();
-        }
-        resized();
-    };
-    unitMainRow.content.addAndMakeVisible(*pinRoutingControl);
-
-    unitSearchControl = std::make_unique<LocalChoiceControl>(
-        "PIN\nSEARCH", juce::StringArray { "OFF", "ON" },
-        shell_editor_ui::isSearchVisible(getRootWindowState()) ? 1 : 0);
-    unitSearchControl->setBottomIndicatorsVisible(false, false);
-    unitSearchControl->onValueChanged = [this]
-    {
-        auto& rootState = getRootWindowState();
-        rootState.setProperty(shell_editor_ui::key("search_visible"),
-            unitSearchControl->getSelectedChoiceIndex() == 1, nullptr);
-        if (auto* root = audioProcessor.getRoutingOwner().getContentEditor())
-        {
-            root->resized();
-            root->updatePinnedSearchPosition();
-            if (root->activeInstanceEditor != nullptr)
-                root->activeInstanceEditor->resized();
-        }
-    };
-    unitMainRow.content.addAndMakeVisible(*unitSearchControl);
 
     unitSampleRateLabel = std::make_unique<SquareTextLabel>();
     unitSampleRateLabel->setName("sample-rate");
@@ -236,7 +197,7 @@ void AvaAudioProcessorEditor::setupShellControls()
         hostSlotButtons[static_cast<size_t>(slotIndex)] = std::move(slotButton);
     }
 
-    sortFiltersButton = std::make_unique<PushControl>("ALL\nSORT");
+    sortFiltersButton = std::make_unique<PushControl>("SORT");
     sortFiltersButton->getProperties().set("disableDockSelection", true);
     sortFiltersButton->setBottomIndicatorsVisible(false, false);
     sortFiltersButton->onTrigger = [this]

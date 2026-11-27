@@ -359,7 +359,7 @@ void AccessoryButton::bindLowerMuteThreshold(ParameterControl& gain, double thre
 void AccessoryButton::placeIn(juce::Rectangle<int> valueBounds)
 {
     const auto* field = findParentComponentOfClass<ParameterField>();
-    const auto zone = field != nullptr ? field->getBottomTextZone(valueBounds)
+    const auto zone = field != nullptr ? field->getBottomTextZone(valueBounds, 0, field->getBottomComponentCount())
                                        : valueBounds.reduced(RangeIndicator::edgeInset).removeFromBottom(RangeIndicator::compactMarkerSize);
     // Mouse hit testing, button fill and the hover frame all use this exact
     // indicator rectangle. An invisible hit area above it made presses

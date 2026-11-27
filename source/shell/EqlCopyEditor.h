@@ -14,6 +14,8 @@ public:
     ~EqlCopyEditor() override;
 
     void updateLayout(int width);
+    void configureScrollTile(const juce::String& caption, const std::function<bool()>& isBypassed,
+                             const std::function<void()>& toggle);
     EqlModuleProcessor* getProcessorIdentity() const noexcept { return &processor; }
     int getBand() const noexcept { return band; }
     void refreshFromProcessor();
@@ -45,7 +47,6 @@ private:
     const int band;
     int currentFilter = 0;
     int lastActiveCount = -1;
-    int currentWidth = 0;
     bool updating = false;
     std::vector<int> displayOrder;
     std::array<std::unique_ptr<FilterSection>, EqlModuleProcessor::maxFilterCount> filters;
@@ -55,4 +56,5 @@ private:
     std::unique_ptr<PushControl> pasteButton;
     std::unique_ptr<PushControl> deleteButton;
     std::unique_ptr<PushControl> addButton;
+    EqlScrollRows scrollRows;
 };

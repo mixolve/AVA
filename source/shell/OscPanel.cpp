@@ -64,33 +64,10 @@ OscPanel::OscPanel(Actions actionsIn) : actions(std::move(actionsIn))
     refresh();
 }
 
-int OscPanel::getPreferredHeight() const noexcept
+std::array<juce::Component*, 5> OscPanel::getControls() const noexcept
 {
-    if (isBlockCollapsed("OSC")) return controlBlockHeaderHeight;
-    return measureControlGrid(*this, getLocalBounds().reduced(controlBlockPadding + controlBlockFrameThickness), {
-        {enableControl.get()}, {inputPortControl.get()}, {outputPortControl.get()},
-        {statusLabel.get()}, {outputHostControl.get(), 2} }).getHeight() + 2 * (controlBlockPadding + controlBlockFrameThickness) + controlBlockHeaderHeight;
-}
-
-void OscPanel::resized()
-{
-    const auto collapsed = isBlockCollapsed("OSC");
-    for (auto* control : std::array<juce::Component*, 5> {
-            enableControl.get(), inputPortControl.get(), outputPortControl.get(),
-            statusLabel.get(), outputHostControl.get() })
-    {
-        control->setVisible(!collapsed);
-        if (collapsed) control->setBounds({});
-    }
-    if (collapsed)
-    {
-        controlBlockFrames = {{getLocalBounds(), "OSC", uiGreyDark}};
-        return;
-    }
-    layoutControlGrid(*this, getLocalBounds().reduced(controlBlockPadding + controlBlockFrameThickness).withTrimmedTop(controlBlockHeaderHeight), {
-        {enableControl.get()}, {inputPortControl.get()}, {outputPortControl.get()},
-        {statusLabel.get()}, {outputHostControl.get(), 2} });
-    controlBlockFrames = {{getLocalBounds(), "OSC", uiGreyDark}};
+    return { enableControl.get(), inputPortControl.get(), outputPortControl.get(),
+             statusLabel.get(), outputHostControl.get() };
 }
 
 void OscPanel::refresh()

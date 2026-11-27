@@ -188,16 +188,6 @@ private:
     juce::ScrollBar* createScrollBarComponent(bool vertical) override { return new CursorDragScrollBar(vertical); }
 };
 
-inline juce::Rectangle<int> moduleNameplateBypassBounds(juce::Rectangle<int> frame)
-{
-    const auto header = frame.withHeight(controlBlockHeaderHeight);
-    constexpr int inset = controlBlockHeaderButtonInset;
-    const auto side = header.getHeight() - 2 * inset;
-    return {header.getRight() - inset - side,
-            header.getY() + inset,
-            side, side};
-}
-
 struct ControlBlockFrame
 {
     juce::Rectangle<int> bounds;
@@ -224,29 +214,7 @@ public:
                 headerHighlighted,
                 bool(getProperties().getWithDefault("headerOnlyBlock", false)) || isBlockCollapsed(frame.title),
                 frame.centreInkVertically);
-            if (moduleHeaderToggle && frame.colour == uiGreyDark && !isExpandedNameHover(frame.title))
-            {
-                const auto bp = moduleNameplateBypassBounds(frame.bounds);
-                const bool bypassed = moduleHeaderBypassed && moduleHeaderBypassed();
-                graphics.setColour(hoveredBypassTitle == frame.title ? juce::Colour(0xffdddddd)
-                    : bypassed ? uiWhite
-                    : headerHighlighted ? uiGreyDark : uiGreyLight);
-                graphics.fillRect(bp);
-            }
         }
-    }
-    bool isExpandedNameHover(const juce::String& title) const
-    {
-        return hoveredBlockVisualReady && hoveredBlockName && hoveredBlockTitle == title
-            && !isBlockCollapsed(title);
-    }
-    bool hasModuleNameplateBypass() const noexcept { return bool(moduleHeaderToggle); }
-    void setModuleNameplateBypass(std::function<bool()> isBypassed,
-                                  std::function<void()> toggle)
-    {
-        moduleHeaderBypassed = std::move(isBypassed);
-        moduleHeaderToggle = std::move(toggle);
-        repaint();
     }
     // Collapse preferences are stored on the owning instance and scoped by BAND.
     void bindCollapseState(juce::AudioProcessorValueTreeState& state, juce::String scope);
@@ -269,7 +237,7 @@ public:
     juce::MouseCursor getMouseCursor() override;
     std::vector<ControlBlockFrame> controlBlockFrames;
 private:
-    juce::String blockHeaderAt(juce::Point<int>, bool titleOnly = false) const;
+    juce::String blockHeaderAt(juce::Point<int>) const;
     void updateHoveredBlock(juce::Point<int>);
     void setBlockCollapsed(const juce::String& title, bool collapsed);
     juce::Identifier collapseProperty(const juce::String& title) const;
@@ -279,14 +247,10 @@ private:
     // collapsed header (CROSSOVER/INPUT) after a restore.
     juce::StringArray collapsedBlockTitles;
     juce::String hoveredBlockTitle;
-    juce::String hoveredBypassTitle;
     juce::String searchHighlightedTitle;
-    bool hoveredBlockName = false;
     bool hoveredBlockVisualReady = false;
     int hoverGeneration = 0;
     bool collapsible = true;
-    std::function<bool()> moduleHeaderBypassed;
-    std::function<void()> moduleHeaderToggle;
 };
 
 class CopyPasteTextEditor : public juce::TextEditor
@@ -395,6 +359,8 @@ public:
     void enablementChanged() override;
     void setDiscreteChoiceIndicator(int count, int selected = -1);
     void setAlwaysUseChoiceList(bool enabled) noexcept { alwaysUseChoiceList = enabled; }
+    void setLiveDiscreteDrag(bool enabled) noexcept { liveDiscreteDrag = enabled; }
+    void setHideCursorOnDrag(bool enabled) noexcept { hideCursorOnDrag = enabled; }
     std::function<void()> onResetRequested;
     void setIdleTextProvider(std::function<juce::String()> provider);
     juce::Rectangle<int> getValueBounds() const;
@@ -440,6 +406,8 @@ private:
     int choiceCount() const noexcept { return discreteChoiceCount; }
     bool isBinaryToggle() const noexcept { return choiceCount() == 2 && !alwaysUseChoiceList; }
     bool alwaysUseChoiceList = false;
+    bool liveDiscreteDrag = false;
+    bool hideCursorOnDrag = false;
     double valueTransitionAt = 0.0;
     void sliderValueChanged(juce::Slider*) override;
     void showEditor();

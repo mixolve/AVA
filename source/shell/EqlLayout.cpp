@@ -1,4 +1,5 @@
 #include "ChoiceControl.h"
+#include "ClipboardTransfer.h"
 #include "ModuleList.h"
 #include "ValueEditor.h"
 #include "EqlCopyEditor.h"
@@ -14,33 +15,16 @@
 #include "../modules/dyn/Processor.h"
 #include <array>
 #include <set>
-#include "../crossover/Page.h"
+#include "../crossover/RangePage.h"
 #include "../modules/shared/BlockChainProcessor.h"
 
 void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& viewportBounds)
 {
-    const auto bandScope = "eql.band-" + juce::String(int(audioProcessor.getSelectedCrossoverRange() + 1));
-    // The original EQL has its own controls; copied EQL editors have separate
-    // controls and persistent per-UID collapse keys.
-    eqlContent.bindCollapseState(valueTreeState,
-        bandScope + ".module.uid-" + juce::String(module_order::eql));
-    filterContent.bindCollapseState(valueTreeState, bandScope + ".filters");
-    for (size_t index = 0; index < filterSections.size(); ++index)
-        if (filterSections[index] != nullptr)
-            filterSections[index]->body.bindCollapseState(valueTreeState,
-                bandScope + ".filter-" + juce::String(int(index + 1)));
-
     const auto gap = getUiGap(*this);
+    viewportBounds = viewportBounds.withX(0).withWidth(getWidth());
     if (controlSearchPanel != nullptr)
     {
-        controlSearchPanel->setPinned(filterViewport.getViewPositionY() > 0);
-        const auto searchTop = 2 * gap;
-        const bool searchEnabled = shell_editor_ui::isSearchVisible(getRootWindowState());
-        const auto searchHeight = searchEnabled
-            ? controlSearchPanel->getDisplayedHeight() + gap : 0;
-        const auto pinnedHeight = bool(getRootWindowState().getProperty(shell_editor_ui::key("pin_routing"), true))
-            ? getSquareControlSize(*this) + gap : 0;
-        const auto top = searchTop + searchHeight + pinnedHeight;
+        const auto top = getMainViewportTop(controlSearchPanel->getDisplayedHeight());
         const auto bottom = quickAccessStrip.getY();
         viewportBounds = {viewportBounds.getX(), top, viewportBounds.getWidth(),
                           juce::jmax(0, bottom - top)};
@@ -50,58 +34,18 @@ void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& view
     filterViewport.setBounds(viewportBounds);
     filterViewport.setVisible(true);
 
-    // EQL is nested inside the larger white INSTANCE frame. Keep its
-    // six-column geometry and leave a standard gap on each side.
-    const auto nestedWidth = juce::jmax(0, viewportBounds.getWidth()
-        - 2 * (gap + controlBlockFrameThickness));
-    const auto frameWidth = juce::jmax(0, nestedWidth - gap);
-    const auto inset = controlBlockPadding + controlBlockFrameThickness;
-    const auto innerWidth = juce::jmax(1, frameWidth - 2 * inset);
-    const auto controlsTop = controlBlockHeaderHeight + gap;
-    eqlContent.controlBlockFrames.clear();
-    const auto collapsed = eqlContent.isBlockCollapsed("EQL");
-    filterContent.setVisible(!collapsed);
+    const auto width = juce::jmax(0, viewportBounds.getWidth() - 2 * gap);
     for (auto& section : filterSections)
         if (section != nullptr)
-            section->body.setVisible(!collapsed && section->expanded
-                && getFilterOrderPositionForIndex(section->filterIndex) >= 0);
+            section->body.setVisible(section->expanded && getFilterOrderPositionForIndex(section->filterIndex) >= 0);
 
-    if (collapsed)
-    {
-        if (presetsSection != nullptr)
-            for (auto* control : std::array<juce::Component*, 8> {
-                    &presetsSection->presetChoice, presetsSection->addButton.get(),
-                    presetsSection->saveButton.get(), presetsSection->renameButton.get(),
-                    presetsSection->defaultButton.get(), presetsSection->deleteButton.get(),
-                    presetsSection->copyFiltersButton.get(), presetsSection->pasteFilterButton.get() })
-                if (control != nullptr) { control->setVisible(false); control->setBounds({}); }
-        const auto height = controlBlockHeaderHeight;
-        eqlContent.controlBlockFrames.push_back({{0, 0, frameWidth, height}, "EQL", uiGreyDark});
-        eqlContent.setSize(nestedWidth, height);
-        return;
-    }
-
-    std::array<std::vector<ControlGridCell>, 4> rows;
+    std::array<std::vector<juce::Component*>, eqlScrollLabels.size()> rows;
     if (presetsSection != nullptr)
-    {
-        for (auto* control : std::array<juce::Component*, 8> {
-                    &presetsSection->presetChoice, presetsSection->addButton.get(),
-                    presetsSection->saveButton.get(), presetsSection->renameButton.get(),
-                    presetsSection->defaultButton.get(), presetsSection->deleteButton.get(),
-                    presetsSection->copyFiltersButton.get(), presetsSection->pasteFilterButton.get() })
-            if (control != nullptr) control->setVisible(true);
-        rows[0] = {
-            {&presetsSection->presetChoice}, {presetsSection->addButton.get()},
-            {presetsSection->saveButton.get()}, {presetsSection->renameButton.get()},
-            {presetsSection->defaultButton.get()}, {presetsSection->deleteButton.get()}};
-        rows[1] = {{presetsSection->copyFiltersButton.get()},
-                   {presetsSection->pasteFilterButton.get()}};
-    }
-    if (sortFiltersButton != nullptr)
-    {
-        sortFiltersButton->setVisible(true);
-        rows[1].push_back({sortFiltersButton.get()});
-    }
+        rows[0] = {&presetsSection->presetChoice, presetsSection->addButton.get(),
+            presetsSection->saveButton.get(), presetsSection->renameButton.get(),
+            presetsSection->defaultButton.get(), presetsSection->deleteButton.get(),
+            sortFiltersButton.get(), presetsSection->copyFiltersButton.get(),
+            presetsSection->pasteFilterButton.get()};
 
     FilterSection* selectedFilter = nullptr;
     for (auto& section : filterSections)
@@ -112,32 +56,13 @@ void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& view
             break;
         }
     if (selectedFilter != nullptr)
-    {
-        rows[2] = {
-            {selectedFilter->typeControl.get()}, {selectedFilter->orderControl.get()},
-            {selectedFilter->frequencyControl.get()}, {selectedFilter->bandwidthControl.get()},
-            {selectedFilter->gainControl.get()}};
-        for (const auto& cell : rows[2])
-            if (cell.component != nullptr) cell.component->setVisible(true);
+        rows[1] = {selectedFilter->typeControl.get(), selectedFilter->orderControl.get(),
+            selectedFilter->frequencyControl.get(), selectedFilter->bandwidthControl.get(),
+            selectedFilter->gainControl.get()};
+    const auto filterActionStart = int(rows[1].size());
+    rows[1].insert(rows[1].end(), {addFilterButton.get(), deleteFilterButton.get(),
+                                  copyFilterButton.get(), pasteFilterButton.get()});
 
-        selectedFilter->body.addAndMakeVisible(*copyFilterButton);
-        selectedFilter->body.addAndMakeVisible(*pasteFilterButton);
-        selectedFilter->body.addAndMakeVisible(*deleteFilterButton);
-        rows[3] = {{copyFilterButton.get()}, {pasteFilterButton.get()},
-                   {deleteFilterButton.get()}};
-    }
-    else
-    {
-        if (copyFilterButton != nullptr) copyFilterButton->setVisible(false);
-        if (pasteFilterButton != nullptr) pasteFilterButton->setVisible(false);
-        if (deleteFilterButton != nullptr) deleteFilterButton->setVisible(false);
-    }
-
-    if (addFilterButton != nullptr)
-    {
-        addFilterButton->setVisible(true);
-        rows[3].push_back({addFilterButton.get()});
-    }
     for (int position = 0; position < getActiveFilterCount(); ++position)
     {
         const auto index = getFilterIndexForOrderPosition(position);
@@ -145,40 +70,54 @@ void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& view
         {
             auto* header = filterSections[size_t(index)]->header.get();
             header->setVisible(true);
-            rows[3].push_back({header});
+            rows[2].push_back(header);
         }
     }
 
-    const juce::Rectangle<int> gridBounds {inset, controlsTop, innerWidth, 0};
-    std::array<juce::Rectangle<int>, 4> placements;
-    auto rowTop = controlsTop;
-    auto contentBottom = controlsTop;
-    for (size_t index = 0; index < rows.size(); ++index)
-    {
-        if (rows[index].empty()) continue;
-        placements[index] = measureControlGrid(*this, gridBounds.withY(rowTop), rows[index]);
-        contentBottom = placements[index].getBottom();
-        rowTop = contentBottom + getUiRowGap(*this);
-    }
-    const auto moduleHeight = contentBottom + gap + controlBlockFrameThickness;
+    const juce::Rectangle<int> gridBounds {0, 0, width, getSquareControlSize(*this)};
+    const auto moduleHeight = layoutEqlControlRows(eqlScrollRows, rows, gridBounds, filterActionStart);
 
     filterContent.controlBlockFrames.clear();
     filterContent.setInterceptsMouseClicks(false, true);
-    filterContent.setBounds(0, 0, nestedWidth, moduleHeight);
+    filterContent.setBounds(0, 0, width, moduleHeight);
     for (auto& section : filterSections)
         if (section != nullptr)
         {
             section->body.controlBlockFrames.clear();
             section->body.setInterceptsMouseClicks(false, true);
-            section->body.setBounds(0, 0, nestedWidth, moduleHeight);
+            section->body.setBounds(0, 0, width, moduleHeight);
         }
 
-    eqlContent.setSize(nestedWidth, moduleHeight);
-    for (size_t index = 0; index < rows.size(); ++index)
-        if (!placements[index].isEmpty())
-            layoutControlGrid(*this, gridBounds.withY(placements[index].getY()), rows[index]);
-    eqlContent.controlBlockFrames.push_back({{0, 0, frameWidth, moduleHeight}, "EQL", uiGreyDark});
+    eqlContent.setSize(width, moduleHeight);
     filterViewport.setViewPosition(0, filterViewport.getViewPositionY());
+}
+
+int AvaAudioProcessorEditor::layoutEqlControlRows(
+    const EqlScrollRows& scrollRows,
+    std::array<std::vector<juce::Component*>, eqlScrollLabels.size()>& rows,
+    juce::Rectangle<int> grid, int filterActionStart)
+{
+    if (scrollRows.back() == nullptr) return 0;
+
+    constexpr std::array presetDivider {6};
+    const std::array filterDivider {filterActionStart};
+    const auto& owner = scrollRows.back()->content;
+    const auto gap = getUiRowGap(owner);
+    const auto tileViewportWidth = juce::jmax(0, grid.getWidth() - grid.getHeight() - getUiGap(owner));
+    auto& filters = rows.back();
+    const auto fittingSlots = scrollRows.back()->content.countFittingSlots(tileViewportWidth);
+    filters.resize(juce::jmax(filters.size(), size_t(fittingSlots)), nullptr);
+
+    for (size_t index = 0; index < rows.size(); ++index)
+    {
+        for (auto* control : rows[index])
+            if (control != nullptr) control->setVisible(true);
+        const auto divider = index == 0 ? std::span<const int>(presetDivider)
+                           : index == 1 ? std::span<const int>(filterDivider) : std::span<const int>{};
+        scrollRows[index]->layoutInline(grid, rows[index], true, {}, divider);
+        grid.translate(0, grid.getHeight() + gap);
+    }
+    return grid.getY() - gap;
 }
 
 void AvaAudioProcessorEditor::handleEqlBackgroundClick(const juce::MouseEvent&)
@@ -190,84 +129,52 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
 {
     const auto scroll = filterViewport.getViewPositionY();
     layoutEqlModuleSections(bounds);
-    const auto width = filterViewport.getWidth();
-    const auto instanceInset = getUiGap(*this) + controlBlockFrameThickness;
-    // The white frame keeps its existing 560px width; only its inner inset
-    // grows by the border thickness to expose exactly 8px of background.
-    const auto blockWidth = width - getUiGap(*this);
-    const auto innerBlockWidth = blockWidth - 2 * instanceInset;
-    const auto innerViewportWidth = width - 2 * instanceInset;
+    const auto blockWidth = filterViewport.getWidth();
+    const auto instanceInset = getUiGap(*this);
+    const auto innerBlockWidth = juce::jmax(0, blockWidth - 2 * instanceInset);
     auto* crossover = dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get());
     const auto bands = crossover != nullptr ? crossover->getMainControls() : std::vector<juce::Component*>{};
     const auto sync = crossover != nullptr ? crossover->getMainSyncControls()
         : std::array<juce::Component*, 2>{};
     const auto settings = crossover != nullptr ? crossover->getInstanceMainRows() : InstanceMainRows{};
 
-    const auto unitCollapsed = unitContent.isBlockCollapsed("UNIT");
-    const auto paddingUnit = controlBlockPadding + controlBlockFrameThickness;
     const auto unitGap = getUiGap(*this);
     const auto squareSize = getSquareControlSize(*this);
-    int unitHeight = controlBlockHeaderHeight;
-    if (!unitCollapsed)
+    // UNIT is a single headerless, frameless row. Its scroll tile stays fixed
+    // at the left; MAIN / OSC / SYNC controls all share one horizontal canvas.
+    std::vector<juce::Component*> unitControls {
+        routingControl.get(), slotsControl.get(), undoButton.get(), redoButton.get(),
+        abControl.get(), abCopyButton.get(), globalBypassButton.get(),
+        bypassCompensationControl.get(), unitCopyButton.get(), unitPasteButton.get(),
+        unitZoomControl.get(), unitWidthControl.get(), unitDockSizeControl.get(),
+        unitSampleRateLabel.get(), aboutControl.get()
+    };
+    std::vector<int> unitSpans(unitControls.size(), 1);
+    const auto oscStart = int(unitControls.size());
+    const auto oscControls = oscPanel->getControls();
+    unitControls.insert(unitControls.end(), oscControls.begin(), oscControls.end());
+    // HOST retains the two-column width from the former OSC row.
+    unitSpans.insert(unitSpans.end(), {1, 1, 1, 1, 2});
+    const auto syncStart = int(unitControls.size());
+    for (auto* control : std::array<juce::Component*, 4> {
+             unitNumberControl.get(), receiveControl.get(), sendControl.get(), linksCountControl.get() })
     {
-        // Each UNIT child has its own persisted collapse state. Recompute all
-        // heights on every reflow, so folding a nested header closes its space.
-        oscPanel->setSize(innerBlockWidth, squareSize);
-        const auto oscHeight = oscPanel->getPreferredHeight();
-        const auto syncCollapsed = unitSyncContent.isBlockCollapsed("SYNC");
-        std::vector<ControlGridCell> syncCells {{unitNumberControl.get()}, {receiveControl.get()}, {sendControl.get()}, {linksCountControl.get()}};
-        for (int index = 0; index < linkDestinationCount; ++index)
-            syncCells.push_back({linkToControls[size_t(index)].get()});
-        const auto syncHeight = syncCollapsed ? controlBlockHeaderHeight
-            : measureControlGrid(unitSyncContent,
-                {paddingUnit, controlBlockHeaderHeight + paddingUnit,
-                 innerBlockWidth - 2 * paddingUnit, 0}, syncCells).getBottom() + paddingUnit;
-        int blockY = controlBlockHeaderHeight + unitGap;
-        const std::array<juce::Component*, 17> controls {
-            routingControl.get(), slotsControl.get(), undoButton.get(), redoButton.get(), abControl.get(), abCopyButton.get(),
-            globalBypassButton.get(), bypassCompensationControl.get(),
-            unitCopyButton.get(), unitPasteButton.get(), unitZoomControl.get(), unitWidthControl.get(), unitDockSizeControl.get(),
-            pinRoutingControl.get(), unitSearchControl.get(), unitSampleRateLabel.get(), aboutControl.get()
-        };
-        unitMainRow.layout({instanceInset, blockY, innerBlockWidth, controlBlockHeaderHeight}, controls);
-        blockY = unitMainContent.getBottom() + unitGap;
-        oscPanel->setBounds(instanceInset, blockY, innerBlockWidth, oscHeight);
-        blockY += oscHeight + unitGap;
-        unitSyncContent.setBounds(instanceInset, blockY, innerBlockWidth, syncHeight);
-        unitNumberControl->setVisible(!syncCollapsed);
-        sendControl->setVisible(!syncCollapsed);
-        receiveControl->setVisible(!syncCollapsed);
-        linksCountControl->setVisible(!syncCollapsed);
-        for (size_t index = 0; index < linkToControls.size(); ++index)
-        {
-            const bool visible = !syncCollapsed && int(index) < linkDestinationCount;
-            linkToControls[index]->setVisible(visible);
-            if (!visible) linkToControls[index]->setBounds({});
-        }
-        if (!syncCollapsed)
-            layoutControlGrid(unitSyncContent,
-                {paddingUnit, controlBlockHeaderHeight + paddingUnit,
-                 innerBlockWidth - 2 * paddingUnit, squareSize}, syncCells);
-        else
-        {
-            unitNumberControl->setBounds({});
-            sendControl->setBounds({});
-            receiveControl->setBounds({});
-            linksCountControl->setBounds({});
-        }
-        unitSyncContent.controlBlockFrames = {
-            {{0, 0, innerBlockWidth, syncHeight}, "SYNC", uiGreyDark}};
-        unitHeight = blockY + syncHeight + unitGap + controlBlockFrameThickness;
+        unitControls.push_back(control);
+        unitSpans.push_back(1);
     }
-    unitMainContent.setVisible(!unitCollapsed);
-    unitMainRow.syncScrollBar();
-    oscPanel->setVisible(!unitCollapsed);
-    unitSyncContent.setVisible(!unitCollapsed);
-    unitContent.setBounds(0, 0, blockWidth, unitHeight);
-    unitContent.controlBlockFrames = {
-        {{0, 0, blockWidth, unitHeight}, "UNIT", uiWhite, {}, true}};
-    unitContent.setVisible(true);
-    const auto instanceY = unitHeight + unitGap;
+    for (int index = 0; index < linkDestinationCount; ++index)
+    {
+        unitControls.push_back(linkToControls[size_t(index)].get());
+        unitSpans.push_back(1);
+    }
+    // Two white, 2px-wide, full-control-height group separators.
+    const std::array<int, 2> groupBreaks {oscStart, syncStart};
+    unitMainContent.controlBlockFrames.clear();
+    unitMainContent.setBounds(instanceInset, 0, innerBlockWidth, squareSize);
+    unitMainRow.layoutInline({0, 0, innerBlockWidth, squareSize},
+                             unitControls, true, unitSpans, groupBreaks);
+    unitMainContent.setVisible(true);
+    const auto instanceY = squareSize + unitGap;
 
     std::vector<juce::Component*> instanceControls {
         linkInstanceControl.get(), settings.secondary[0], settings.secondary[1],
@@ -277,18 +184,17 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
     instanceControls.insert(instanceControls.end(), bands.begin(), bands.end());
     instanceControls.insert(instanceControls.end(), settings.actions.begin(), settings.actions.end());
     std::erase(instanceControls, nullptr);
-    instanceMainRow.layout({instanceInset, controlBlockHeaderHeight + unitGap,
-                            innerBlockWidth, controlBlockHeaderHeight}, instanceControls);
+    mainContent.setBounds(instanceInset, 0, innerBlockWidth, squareSize);
+    instanceMainRow.layoutInline(mainContent.getLocalBounds(), instanceControls);
 
-    // The INSTANCE frame now contains MAIN and the entire module stack.  Set
-    // the width before reparenting modules, so children can size themselves.
-    instanceContent.setBounds(0, instanceY, blockWidth, controlBlockHeaderHeight);
+    // Set the container width before reparenting modules.
+    instanceContent.setBounds(0, instanceY, blockWidth, squareSize);
     ensureModuleList();
     const auto modulesY = mainContent.getBottom() + unitGap;
     if (moduleList != nullptr)
     {
         const juce::Rectangle<int> boundsForModules {instanceInset, modulesY, innerBlockWidth,
-                                                     moduleList->getContentHeight()};
+                                                     ModuleList::getContentHeight(*this)};
         if (moduleList->getBounds() == boundsForModules) moduleList->resized();
         else moduleList->setBounds(boundsForModules);
     }
@@ -308,10 +214,9 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
     if (auto* editor = dynamic_cast<CrossoverModuleComponent*>(dynModuleEditor.get()))
     {
         editor->getProperties().set("stackedModule", true);
-        editor->getProperties().set("contentRightInset", getUiGap(*this));
         if (editor->getParentComponent() != &instanceContent) instanceContent.addChildComponent(*editor);
-        editor->setBounds(0, 0, innerViewportWidth, 1);
-        editor->setSize(innerViewportWidth, editor->getPreferredHeight());
+        editor->setBounds(0, 0, innerBlockWidth, 1);
+        editor->setSize(innerBlockWidth, editor->getPreferredHeight());
         originals[size_t(module_order::dyn)] = editor;
     }
     originals[size_t(module_order::eql)] = &eqlContent;
@@ -380,10 +285,9 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         else
         {
             editor->getProperties().set("stackedModule", true);
-            editor->getProperties().set("contentRightInset", getUiGap(*this));
             if (editor->getParentComponent() != &instanceContent) instanceContent.addChildComponent(*editor);
-            editor->setBounds(0, 0, innerViewportWidth, 1);
-            editor->setSize(innerViewportWidth, editor->getPreferredHeight());
+            editor->setBounds(0, 0, innerBlockWidth, 1);
+            editor->setSize(innerBlockWidth, editor->getPreferredHeight());
             copies.emplace(slot.uid, editor);
         }
     }
@@ -415,7 +319,7 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
             instanceContent.addAndMakeVisible(*editor);
             found = eqlCopyEditors.emplace(slot.uid, std::move(editor)).first;
         }
-        found->second->updateLayout(innerViewportWidth);
+        found->second->updateLayout(innerBlockWidth);
         copies.emplace(slot.uid, found->second.get());
     }
     for (auto it = eqlCopyEditors.begin(); it != eqlCopyEditors.end();)
@@ -428,12 +332,6 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
     if (auto* editor = originals[size_t(module_order::dyn)])
         editor->setVisible(false);
 
-    const auto instanceCollapsed = instanceContent.isBlockCollapsed("INSTANCE");
-    mainContent.setVisible(!instanceCollapsed);
-    instanceMainRow.syncScrollBar();
-    if (moduleList != nullptr) moduleList->setVisible(!instanceCollapsed);
-    // All module blocks are children of INSTANCE, so a single collapse hides
-    // the complete stack.  Each module still owns its individual collapse key.
     // OFF is a true per-slot DSP bypass (see AudioProcessing.cpp). Apply the
     // same flag here so disabled copies disappear from ALL rather than leaving
     // stale EQL / CHAIN / DYN headers visible.
@@ -479,42 +377,55 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
                 safe->resized();
             }
         };
-        if (auto* page = dynamic_cast<ControlBlockComponent*>(block))
-            page->setModuleNameplateBypass(readBypass, toggleBypass);
-        else if (auto* dyn = dynamic_cast<CrossoverModuleComponent*>(block))
-            dyn->setModuleNameplateBypass(readBypass, toggleBypass);
         const auto type = size_t(slot.type);
         auto caption = juce::String(module_order::descriptions[type].name).toUpperCase();
         if (shownCounts[type] > 1)
             caption += " (" + juce::String(++shownOrdinals[type]).paddedLeft('0', 2) + ")";
-        if (slot.type == module_order::dyn)
+        if (slot.type == module_order::eql)
         {
-            if (auto* dynEditor = dynamic_cast<CrossoverModuleComponent*>(block))
-                dynEditor->setModuleDisplayTitle(caption);
+            if (auto* copy = dynamic_cast<EqlCopyEditor*>(block))
+                copy->configureScrollTile(caption, readBypass, toggleBypass);
+            else
+            {
+                eqlScrollRows.front()->setScrollLabel(caption + "\nSCROLL");
+                eqlScrollRows.front()->setModuleBypass(readBypass, toggleBypass);
+            }
         }
-        else if (auto* blockFrame = dynamic_cast<ControlBlockComponent*>(block))
+        else
         {
-            for (auto& frame : blockFrame->controlBlockFrames)
-                if (frame.title != "INSTANCE" && frame.title != "MAIN")
-                    frame.displayTitle = caption;
-            blockFrame->repaint();
+            const auto safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this);
+            const auto copySettings = [safe, ownerBand, ownerUid]
+            {
+                if (safe != nullptr) ava::clipboard::copyModule(safe->audioProcessor, ownerBand, ownerUid);
+            };
+            const auto pasteSettings = [safe, ownerBand, ownerUid]
+            {
+                if (safe == nullptr || !ava::clipboard::pasteModule(safe->audioProcessor, ownerBand, ownerUid)) return;
+                safe->scheduleModuleControlsRefresh(true);
+                safe->scheduleHistorySnapshot();
+                safe->audioProcessor.notifyHostOfStateChange();
+            };
+            if (auto* dyn = dynamic_cast<CrossoverModuleComponent*>(block))
+                dyn->configureModuleScrollTile(caption, readBypass, toggleBypass, copySettings, pasteSettings);
+            else
+                CrossoverRangePage::configureModuleScrollTile(*block, caption, readBypass, toggleBypass,
+                                                            copySettings, pasteSettings);
         }
         y += getUiGap(*this);
-        block->setVisible(!instanceCollapsed);
+        block->setVisible(true);
         block->setTopLeftPosition(instanceInset, y);
         y = block->getBottom();
     }
-    const int instanceHeight = instanceCollapsed ? controlBlockHeaderHeight
-        : y + getUiGap(*this) + controlBlockFrameThickness;
-    instanceContent.setBounds(0, instanceY, blockWidth, instanceHeight);
-    instanceContent.controlBlockFrames = {{{0, 0, blockWidth, instanceHeight}, "INSTANCE", uiWhite}};
-    updateInstanceHeadings();
-    instanceContent.setVisible(true);
-    moduleContent.setSize(width, juce::jmax(filterViewport.getHeight(), instanceY + instanceHeight));
+    instanceContent.setBounds(0, instanceY, blockWidth, y);
+    updateInstanceScrollLabel();
+    moduleContent.setSize(blockWidth, juce::jmax(filterViewport.getHeight(), instanceY + y));
     // Preserve the user's scroll position after ADD, DEL and ON/OFF.
     // In particular, never jump to a newly created module automatically.
     filterViewport.setViewPosition(0, scroll);
     updatePinnedSearchPosition();
+    if (routingInstanceId != 0)
+        if (auto* root = audioProcessor.getRoutingOwner().getContentEditor())
+            if (root != this) root->updatePinnedSearchPosition();
     refreshQuickAccessControls();
 }
 
@@ -525,79 +436,70 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
     const auto* visibleEditor = activeInstanceEditor != nullptr ? activeInstanceEditor.get() : this;
     const bool showingEditor = !isDockOnly() && !visibleEditor->hasUnitPage()
         && filterViewport.isVisible();
-    const bool searchEnabled = shell_editor_ui::isSearchVisible(getRootWindowState());
-    const bool showSearch = showingEditor && activeInstanceEditor == nullptr && searchEnabled;
-    if (unitSearchControl != nullptr && unitSearchControl->getSelectedChoiceIndex() != int(searchEnabled))
-        unitSearchControl->setSelectedChoiceIndex(searchEnabled ? 1 : 0, false);
+    const bool showSearch = showingEditor && activeInstanceEditor == nullptr;
     controlSearchPanel->setVisible(showSearch);
     const auto searchHeight = visibleEditor->controlSearchPanel != nullptr
         ? visibleEditor->controlSearchPanel->getDisplayedHeight()
         : controlSearchPanel->getDisplayedHeight();
 
-    // PIN ROUTING belongs to UNIT. Keep a single visible strip on the root
-    // editor as INSTANCE editors are created and destroyed. Nested editors
-    // reserve the same height, but do not paint a second strip.
-    const bool routingEnabled = showingEditor
-        && bool(getRootWindowState().getProperty(shell_editor_ui::key("pin_routing"), true));
-    const bool reserveRouting = routingEnabled;
-    const bool showRootRouting = reserveRouting && routingInstanceId == 0;
-    const bool showUnitStatus = showRootRouting
-        && (!searchEnabled || searchHeight == controlBlockHeaderHeight);
-    unitSyncPlate.setVisible(showUnitStatus);
-    if (!showRootRouting) pinnedRoutingViewport.setVisible(false);
+    // Keep the permanent pinned INSTANCE strip on the root editor. Nested
+    // editors reserve its height without painting a second strip.
+    const bool showRootRouting = showingEditor && routingInstanceId == 0;
+    if (!showRootRouting)
+    {
+        pinnedRoutingViewport.setVisible(false);
+        if (pinnedRoutingScrollControl != nullptr) pinnedRoutingScrollControl->setVisible(false);
+    }
+    if (pinnedVerticalScrollControl != nullptr)
+    {
+        pinnedVerticalScrollControl->setVisible(showRootRouting);
+        if (!showRootRouting) pinnedVerticalScrollControl->setBounds({});
+    }
     if (!showingEditor) return;
 
     const auto gap = getUiGap(*this);
     const auto searchTop = 2 * gap;
-    const auto x = visibleEditor->filterViewport.getX();
-    const auto width = visibleEditor->filterViewport.getWidth();
-    const auto unitWidth = juce::jmax(0, width - gap);
-    const auto routingTop = searchTop + (searchEnabled ? searchHeight + gap : 0);
+    const auto width = visibleEditor->getWidth();
+    const auto x = gap;
+    const auto unitWidth = juce::jmax(0, width - 2 * gap);
+    const auto routingTop = searchTop + searchHeight + gap;
     const auto tileHeight = getSquareControlSize(*this);
-    const auto pinnedZoneHeight = tileHeight + gap;
-    int routingInset = 0;
-    if (showUnitStatus)
+    const auto scrollStep = tileHeight + gap;
+    // The rightmost pinned tile is reserved for vertical page scrolling.
+    if (showRootRouting && pinnedVerticalScrollControl != nullptr)
     {
-        constexpr auto indicatorSize = unitIndicatorSize;
-        const auto baseFont = makeUiFont().withHeight(float(indicatorSize));
-        const auto lineHeight = juce::jmin(tileHeight / 4, tileHeight - 3 * indicatorSize);
-        const auto numberFont = baseFont.withPointHeight(baseFont.getHeightInPoints() + 4.0f);
-        unitNumberLabel.setFont(numberFont.withHeight(juce::jmin(float(lineHeight), numberFont.getHeight())));
-        const auto columnWidth = juce::jmax(indicatorSize, getTextPixelWidth(unitNumberLabel.getFont(), "88") + 2);
-        unitSyncPlate.setBounds(x, routingTop, columnWidth, tileHeight);
-        routingInset = columnWidth + gap;
-        const auto freeHeight = tileHeight - 3 * indicatorSize - lineHeight;
-        const auto spacing = [freeHeight](int gaps) { return juce::roundToInt(freeHeight * gaps / 3.0); };
-        const auto square = [&](int y)
-        {
-            return juce::Rectangle<int>((columnWidth - indicatorSize) / 2, y, indicatorSize, indicatorSize);
-        };
-        unitReceiveIndicator.setBounds(square(0));
-        unitSendIndicator.setBounds(square(indicatorSize + spacing(1)));
-        unitNumberLabel.setBounds(1, 2 * indicatorSize + spacing(2), columnWidth, lineHeight);
-        unitSyncPauseToggle.setBounds(square(tileHeight - indicatorSize));
+        pinnedVerticalScrollControl->setBounds(
+            x + unitWidth - tileHeight, routingTop, tileHeight, tileHeight);
+        syncVerticalScrollControl();
     }
     if (showSearch)
-    {
-        controlSearchPanel->setPinned(filterViewport.getViewPositionY() > 0);
         controlSearchPanel->setBounds(x, searchTop, unitWidth, searchHeight);
-    }
     if (showRootRouting)
     {
-        pinnedRoutingViewport.setBounds(x + routingInset, routingTop, juce::jmax(0, unitWidth - routingInset), pinnedZoneHeight);
-        // Never expose a previously hidden ribbon at stale coordinates.
+        const auto scrollX = x;
+        const auto availableWidth = juce::jmax(0, unitWidth - scrollStep);
+        pinnedRoutingScrollControl->setBounds(scrollX, routingTop, tileHeight, tileHeight);
+        pinnedRoutingScrollControl->setVisible(true);
+        pinnedRoutingViewport.setBounds(scrollX + scrollStep, routingTop,
+            juce::jmax(0, availableWidth - scrollStep), tileHeight);
         pinnedRoutingViewport.setVisible(true);
-        pinnedRoutingViewport.toFront(false);
+        pinnedRoutingContent.layoutTrailingSlots(int(pinnedRoutingButtons.size()), pinnedRoutingViewport.getWidth());
+        if (pinnedRoutingContent.getWidth() <= pinnedRoutingViewport.getWidth())
+            pinnedRoutingViewport.setViewPosition(0, 0);
+        syncPinnedRoutingScrollControl();
     }
-    else pinnedRoutingViewport.setBounds({});
-    if (showUnitStatus) unitSyncPlate.toFront(false);
-
+    else
+    {
+        pinnedRoutingViewport.setBounds({});
+        pinnedRoutingScrollControl->setBounds({});
+        pinnedRoutingScrollControl->setVisible(false);
+    }
+    raisePinnedControls();
     if (activeInstanceEditor != nullptr) return;
-    const auto top = routingTop + (reserveRouting ? pinnedZoneHeight : 0);
+    const auto top = getMainViewportTop(searchHeight);
     const auto bottom = quickAccessStrip.getY();
-    const juce::Rectangle<int> visibleBounds{x, top, width, juce::jmax(0, bottom - top)};
+    const juce::Rectangle<int> visibleBounds{0, top, width, juce::jmax(0, bottom - top)};
     if (filterViewport.getBounds() != visibleBounds)
         filterViewport.setBounds(visibleBounds);
-    if (showSearch) controlSearchPanel->toFront(false);
-    if (showRootRouting) pinnedRoutingViewport.toFront(false);
+    if (routingInstanceId == 0) syncVerticalScrollControl();
 }

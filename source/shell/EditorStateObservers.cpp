@@ -58,8 +58,9 @@ void AvaAudioProcessorEditor::resyncEditorFromProcessorState()
     if (routingInstanceId == 0)
     {
         const juce::ScopedValueSetter<bool> sizeGuard(suppressEditorSizeStateSave, true);
+        const auto defaultExpandedHeight = getExpandedEditorWidth(shell_editor_ui::editorColumns(getRootWindowState()));
         const auto savedHeight = int(valueTreeState.state.getProperty(
-            AvaAudioProcessor::editorHeightStateKey, getEditorHeight(*this)));
+            AvaAudioProcessor::editorHeightStateKey, defaultExpandedHeight));
         expandedHeightBeforeDock = savedHeight;
         applyDockWindowSize(getEditorWidth(*this), juce::jlimit(
             getMinimumEditorHeight(), getMaximumEditorHeight(),

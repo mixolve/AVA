@@ -29,6 +29,11 @@ public:
     void resized() override;
     void mouseDown(const juce::MouseEvent&) override;
     void hideIndependentBlocks();
+    static void configureModuleScrollTile(juce::Component& block, const juce::String& caption,
+                                          const std::function<bool()>& isBypassed,
+                                          const std::function<void()>& toggle,
+                                          const std::function<void()>& copy,
+                                          const std::function<void()>& paste);
     std::vector<std::pair<int, juce::Component*>> independentBlocks(juce::Component& parent, int width);
 private:
     void applyGainOrder(const ava::modules::chain::gain::Order& order);
@@ -87,11 +92,9 @@ private:
         ParameterGroup(juce::String name, std::vector<std::unique_ptr<RowBase>> membersIn);
         ~ParameterGroup() override;
         void enableHorizontalLayout();
-        int getLayoutHeight(int width) const override;
         int getPreferredHeight() const override;
         int getTopGap() const noexcept override;
         int getPreferredWidth() const override;
-        int columns = 0;
         void refreshExternalState() override;
         void resized() override;
         std::vector<std::unique_ptr<RowBase>> members;

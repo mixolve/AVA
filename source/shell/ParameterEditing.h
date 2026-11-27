@@ -9,6 +9,7 @@ class ParameterField : public juce::Component
 public:
     virtual juce::String getTitleText() const = 0;
     void setBottomAccessory(AccessoryButton* accessory);
+    void setBottomComponent(juce::Component& component);
     struct BottomAction { juce::String label; std::function<void()> action; std::function<bool()> isActive; int slot = -1; };
     void setBottomActions(std::initializer_list<BottomAction> actions);
     void setBottomActionEnabled(const juce::String& label, bool enabled);
@@ -31,6 +32,7 @@ public:
         repaint();
     }
     int getBottomIndicatorSize() const noexcept;
+    int getBottomComponentCount() const noexcept;
     bool hasTopInternalControls() const noexcept;
     bool hasBottomInternalControls() const noexcept;
     juce::Rectangle<int> getBottomSideZone(juce::Rectangle<int> bounds, int side) const;
@@ -57,6 +59,7 @@ private:
     bool rangeIndicatorsVisible = true;
     int bottomIndicatorSize = 8;
     AccessoryButton* bottomAccessory = nullptr;
+    juce::Component::SafePointer<juce::Component> bottomComponent;
     std::vector<std::unique_ptr<juce::Button>> bottomActions;
     std::array<bool, 2> bottomIndicatorsVisible { true, true };
 };

@@ -198,11 +198,23 @@ void AvaAudioProcessorEditor::handleFilterDrag(const int filterIndex, juce::Poin
     if (!released) filterViewport.autoScroll(juce::roundToInt(viewportPoint.x), juce::roundToInt(viewportPoint.y),
         2 * getUiGap(*this), getUiGap(*this));
     const auto inViewport = filterViewport.getLocalBounds().toFloat().contains(viewportPoint);
-    const auto point = filterContent.getLocalPoint(nullptr, screenPosition);
+    // EQL filter headers are now children of their own horizontal viewport.
+    // Hit-test in screen coordinates (not the former filterContent parent),
+    // and auto-scroll that row while dragging a header near either edge.
+    auto* headerRow = eqlScrollRows[2].get();
+    bool inRow = false;
+    if (headerRow != nullptr)
+    {
+        auto rowPoint = headerRow->viewport.getLocalPoint(nullptr, screenPosition);
+        inRow = headerRow->viewport.getLocalBounds().toFloat().contains(rowPoint);
+        if (!released && inRow)
+            headerRow->viewport.autoScroll(juce::roundToInt(rowPoint.x), juce::roundToInt(rowPoint.y),
+                2 * getUiGap(*this), getUiGap(*this));
+    }
     int destination = -1;
     for (int index = 0; index < activeCount; ++index) {
         auto& header = *filterSections[size_t(index)]->header;
-        const auto over = inViewport && header.getBounds().toFloat().contains(point);
+        const auto over = inViewport && inRow && header.getScreenBounds().toFloat().contains(screenPosition);
         header.setDragTargetHighlighted(over && index != filterDragSourceIndex);
         if (over) destination = index;
     }

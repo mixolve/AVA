@@ -24,7 +24,6 @@ public:
     std::function<std::vector<ControlSearchEntry>(const juce::String&)> findMatches;
     std::function<void(ControlSearchEntry)> onChoose;
 
-    void setPinned(bool pinned) noexcept;
     int getDisplayedHeight() const noexcept;
     int getPreferredHeight() const noexcept;
     std::function<void()> onDisplayChanged;
@@ -84,7 +83,6 @@ private:
     ResultCanvas resultsCanvas;
     std::vector<ControlSearchEntry> results;
     int selectedRow = -1;
-    bool pinnedToViewport = false;
     bool resultsDismissed = false;
     juce::Rectangle<int> frame;
     void updateQuery();

@@ -101,8 +101,6 @@ CrossoverRangePage::ParameterGroup::ParameterGroup(juce::String name,
     : members(std::move(membersIn))
 {
     setName("group-" + name);
-    label = name.replace("exclusive-", "").replace("-", " ").toUpperCase();
-    if (label == "TRANS") label = "TRANS SUST";
     hasTopGap = members.front()->hasTopGap;
     members.front()->hasTopGap = false;
     for (auto& member : members) addAndMakeVisible(*member);
@@ -113,36 +111,21 @@ CrossoverRangePage::ParameterGroup::~ParameterGroup() = default;
 
 void CrossoverRangePage::ParameterGroup::enableHorizontalLayout()
 {
-    horizontalRow = std::make_unique<HeaderControlRow>(*this, label);
+    horizontalRow = std::make_unique<HeaderControlRow>(*this);
     horizontalRow->attach(label.toLowerCase());
+    horizontalRow->enableModuleClipboard();
+    horizontalRow->setScrollLabel(label + "\nSCROLL");
 }
 
 int CrossoverRangePage::ParameterGroup::getPreferredHeight() const
 {
-    return getLayoutHeight(getWidth());
-}
-
-int CrossoverRangePage::ParameterGroup::getLayoutHeight(int width) const
-{
-    if (horizontalRow != nullptr) return horizontalRow->getPreferredHeight();
-    const auto padding = bool(getProperties().getWithDefault("independentBlock", false)) ? controlBlockPadding + controlBlockFrameThickness : controlBlockPadding;
-    if (isBlockCollapsed(label))
-        return controlBlockHeaderHeight
-            + (bool(getProperties().getWithDefault("independentBlock", false))
-                ? 0 : 2 * controlBlockFrameGap);
-    const auto rowsHeight = measureRows(members, columns,
-        width > 0 ? juce::jmax(1, width - 2 * padding) : 0).y;
-    if (bool(getProperties().getWithDefault("independentBlock", false)))
-        return controlBlockHeaderHeight + uiGap + rowsHeight + uiGap + controlBlockFrameThickness;
-    return rowsHeight + 2 * padding + controlBlockHeaderHeight;
+    return getSquareControlSize(*this);
 }
 
 int CrossoverRangePage::ParameterGroup::getPreferredWidth() const
 {
-    if (horizontalRow != nullptr)
-        return 6 * getSquareControlSize(*this) + 5 * getUiGap(*this)
-            + 2 * controlBlockPadding;
-    return measureRows(members, columns).x + 2 * controlBlockPadding;
+    return 6 * getSquareControlSize(*this) + 5 * getUiGap(*this)
+        + 2 * controlBlockPadding;
 }
 
 int CrossoverRangePage::ParameterGroup::getTopGap() const noexcept
@@ -157,48 +140,35 @@ void CrossoverRangePage::ParameterGroup::refreshExternalState()
 
 void CrossoverRangePage::ParameterGroup::resized()
 {
-    const auto independent = bool(getProperties().getWithDefault("independentBlock", false));
-    const auto padding = independent ? controlBlockPadding + controlBlockFrameThickness : controlBlockPadding;
-    const auto collapsed = isBlockCollapsed(label);
-    if (horizontalRow != nullptr)
-    {
-        std::vector<juce::Component*> controls;
-        for (const auto& member : members)
-            if (!member->layoutHidden) controls.push_back(member.get());
-        const auto displayTitle = controlBlockFrames.empty() ? juce::String{} : controlBlockFrames.front().displayTitle;
-        controlBlockFrames = {{getLocalBounds(), label, independent ? uiGreyDark : uiWhite, displayTitle}};
-        horizontalRow->layoutContents(controls);
-        return;
-    }
-    juce::Rectangle<int> occupied;
+    if (horizontalRow == nullptr) return;
+    std::vector<juce::Component*> controls;
+    std::vector<int> spans;
     for (const auto& member : members)
-    {
-        member->setVisible(!collapsed && !member->layoutHidden);
-        if (collapsed) member->setBounds({});
-    }
-    if (!collapsed)
-    {
-        auto controlsBounds = independent
-            ? getLocalBounds().withTrimmedLeft(padding).withTrimmedRight(padding)
-                .withTrimmedTop(controlBlockHeaderHeight + uiGap)
-                .withTrimmedBottom(uiGap + controlBlockFrameThickness)
-            : getLocalBounds().reduced(padding).withTrimmedTop(controlBlockHeaderHeight);
-        layoutRows(members, 0, members.size(), controlsBounds, columns);
+        if (!member->layoutHidden)
+        {
+            controls.push_back(member.get());
+            spans.push_back(member->getCellSpan());
+        }
+    horizontalRow->layoutModuleControls(getLocalBounds(), controls, spans);
+}
 
-        for (const auto& member : members)
-            if (!member->layoutHidden) occupied = occupied.getUnion(member->getBounds());
+void CrossoverRangePage::configureModuleScrollTile(juce::Component& block, const juce::String& caption,
+                                                  const std::function<bool()>& isBypassed,
+                                                  const std::function<void()>& toggle,
+                                                  const std::function<void()>& copy,
+                                                  const std::function<void()>& paste)
+{
+    HeaderControlRow* row = nullptr;
+    if (auto* group = dynamic_cast<ParameterGroup*>(&block))
+        row = group->horizontalRow.get();
+    else if (auto* page = dynamic_cast<CrossoverRangePage*>(&block))
+        row = page->dynRow.get();
+    if (row != nullptr)
+    {
+        row->setScrollLabel(caption + "\nSCROLL");
+        row->setModuleBypass(isBypassed, toggle);
+        row->setModuleClipboardActions(copy, paste);
     }
-    controlBlockFrames.clear();
-    const auto* page = findParentComponentOfClass<CrossoverRangePage>();
-    const auto colour = independent || (page != nullptr && page->owner.config.moduleKey == "dyn")
-        ? uiGreyDark : uiWhite;
-    // Independent module blocks occupy their whole row both open and closed;
-    // their painted edges must have the same 8px gap in either state.
-    auto frame = independent ? getLocalBounds()
-                             : (collapsed ? getLocalBounds().reduced(controlBlockFrameGap)
-                                          : getControlBlockFrameBounds(occupied));
-    if (!independent && colour != uiWhite) frame.setWidth(getWidth() - 2 * controlBlockFrameGap);
-    if (collapsed || !occupied.isEmpty()) controlBlockFrames.push_back({frame, label, colour});
 }
 
 void CrossoverRangePage::groupBlockControls()
@@ -215,17 +185,11 @@ void CrossoverRangePage::groupBlockControls()
         auto group = std::make_unique<ParameterGroup>( "block." + juce::String(int(block.id)), std::move(members));
         group->blockIndex = int(block.id);
         group->label = block.name;
-        group->collapseBlockInitially(group->label);
-        if (owner.config.uiState != nullptr)
-            group->bindCollapseState(*owner.config.uiState,
-                (owner.config.collapseScope.isNotEmpty() ? owner.config.collapseScope : owner.config.moduleKey)
-                + ".band-" + juce::String(int(rangeIndex + 1)) + ".groups");
         rows.erase(first, last);
         addAndMakeVisible(*group);
-        if (block.id == ava::modules::chain::blocks::Id::listen
-            || block.id == ava::modules::chain::blocks::Id::shift
-            || block.id == ava::modules::chain::blocks::Id::sibil)
-            group->enableHorizontalLayout();
+        // Every independent CHAIN module gets the same pinned first SCROLL
+        // control; wide or repeated parameter rows remain horizontally usable.
+        group->enableHorizontalLayout();
         rows.insert(rows.begin() + std::ptrdiff_t(insertIndex), std::move(group));
     }
 }
@@ -236,12 +200,6 @@ CrossoverRangePage::CrossoverRangePage(CrossoverModuleComponent& ownerIn,
       rangeIndex(rangeIndexIn)
 {
     setName("page-" + juce::String(static_cast<int>(rangeIndex) + 1));
-    if (owner.config.moduleKey == "dyn") collapseBlockInitially("DYN");
-    if (owner.config.uiState != nullptr)
-        bindCollapseState(*owner.config.uiState,
-            (owner.config.collapseScope.isNotEmpty() ? owner.config.collapseScope : owner.config.moduleKey)
-            + ".band-" + juce::String(int(rangeIndex + 1)) + ".page");
-
     addControlSpecs(owner.config.rangeControls, *this);
     if (owner.config.moduleKey == "chain") {
         size_t index=0;
@@ -265,8 +223,10 @@ CrossoverRangePage::CrossoverRangePage(CrossoverModuleComponent& ownerIn,
     }
     if (owner.config.moduleKey == "dyn")
     {
-        dynRow = std::make_unique<HeaderControlRow>(*this, "DYN");
+        dynRow = std::make_unique<HeaderControlRow>(*this);
         dynRow->attach("dyn");
+        dynRow->enableModuleClipboard();
+        dynRow->setScrollLabel("DYN\nSCROLL");
     }
     refreshRows();
 }
@@ -294,7 +254,7 @@ void CrossoverRangePage::refreshExternalState()
 
 int CrossoverRangePage::getPreferredHeight() const
 {
-    if (dynRow != nullptr) return dynRow->getPreferredHeight();
+    if (dynRow != nullptr) return getSquareControlSize(*this);
     return measureRows(rows, 0, juce::jmax(1, getWidth() - int(getProperties().getWithDefault("contentRightInset", 0)))).y
         + 2 * (getEditorContentInset(*this) - 2 * getUiGap(*this));
 }
@@ -309,10 +269,7 @@ void CrossoverRangePage::resized()
         for (auto& row : rows)
             if (!row->layoutHidden) controls.push_back(row.get());
 
-        const auto frameWidth = juce::jmax(0, getWidth() - getUiGap(*this));
-        const auto caption = owner.getProperties().getWithDefault("moduleDisplayTitle", "DYN").toString();
-        controlBlockFrames = {{{0, 0, frameWidth, dynRow->getPreferredHeight()}, "DYN", uiGreyDark, caption}};
-        dynRow->layoutContents(controls);
+        dynRow->layoutModuleControls(getLocalBounds().withHeight(getSquareControlSize(*this)), controls);
         return;
     }
     for (auto& row : rows) row->setVisible(!row->layoutHidden);

@@ -142,6 +142,16 @@ void ParameterField::setBottomAccessory(AccessoryButton* accessory)
     resized();
 }
 
+void ParameterField::setBottomComponent(juce::Component& component)
+{
+    if (bottomComponent == &component) return;
+    if (bottomComponent != nullptr) removeChildComponent(bottomComponent.getComponent());
+    bottomComponent = &component;
+    addAndMakeVisible(component);
+    resized();
+    repaint();
+}
+
 bool ParameterField::hasTopInternalControls() const noexcept
 {
     for (auto* child : getChildren())
@@ -152,7 +162,7 @@ bool ParameterField::hasTopInternalControls() const noexcept
 
 bool ParameterField::hasBottomInternalControls() const noexcept
 {
-    if (bottomAccessory != nullptr || !bottomActions.empty()) return true;
+    if (bottomAccessory != nullptr || bottomComponent != nullptr || !bottomActions.empty()) return true;
     for (auto* child : getChildren())
         if (const auto* value = dynamic_cast<const ValueBoxComponent*>(child))
             return value->hasBottomInternalControls();
@@ -162,6 +172,11 @@ bool ParameterField::hasBottomInternalControls() const noexcept
 int ParameterField::getBottomIndicatorSize() const noexcept
 {
     return RangeIndicator::bottomControlSize(*this, getLocalBounds(), bottomIndicatorSize);
+}
+
+int ParameterField::getBottomComponentCount() const noexcept
+{
+    return int(bottomActions.size()) + int(bottomAccessory != nullptr) + int(bottomComponent != nullptr);
 }
 
 juce::Rectangle<int> ParameterField::getBottomTextZone(juce::Rectangle<int> bounds, int index, int count) const
@@ -191,7 +206,7 @@ juce::Rectangle<int> ParameterField::getBottomTextZone(juce::Rectangle<int> boun
 
 juce::Rectangle<int> ParameterField::getBottomSideZone(juce::Rectangle<int> bounds, int side) const
 {
-    const auto count = int(bottomActions.size()) + (bottomAccessory != nullptr ? 1 : 0);
+    const auto count = getBottomComponentCount();
     auto left = isBottomIndicatorVisible(0), right = isBottomIndicatorVisible(1);
     for (auto* child : getChildren())
         if (const auto* box = dynamic_cast<const ValueBoxComponent*>(child))
@@ -206,12 +221,19 @@ juce::Rectangle<int> ParameterField::getBottomSideZone(juce::Rectangle<int> boun
 void ParameterField::layoutBottomAccessory(juce::Rectangle<int> bounds)
 {
     if (bottomAccessory != nullptr) bottomAccessory->placeIn(bounds);
-    const auto count = static_cast<int>(bottomActions.size());
-    for (int index = 0; index < count; ++index)
+    const auto actionCount = static_cast<int>(bottomActions.size());
+    const auto count = getBottomComponentCount();
+    const auto firstAction = int(bottomAccessory != nullptr);
+    for (int index = 0; index < actionCount; ++index)
     {
-        const auto zone = getBottomTextZone(bounds, index, count);
+        const auto zone = getBottomTextZone(bounds, firstAction + index, count);
         bottomActions[static_cast<size_t>(index)]->setBounds(zone);
         bottomActions[static_cast<size_t>(index)]->toFront(false);
+    }
+    if (bottomComponent != nullptr)
+    {
+        bottomComponent->setBounds(getBottomTextZone(bounds, count - 1, count));
+        bottomComponent->toFront(false);
     }
 }
 

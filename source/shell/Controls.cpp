@@ -71,47 +71,19 @@ bool ControlBlockComponent::collapseAllBlocks()
     return changed;
 }
 
-juce::String ControlBlockComponent::blockHeaderAt(juce::Point<int> position, bool titleOnly) const
+juce::String ControlBlockComponent::blockHeaderAt(juce::Point<int> position) const
 {
-    // Header hover/click is disabled only for non-collapsible pages.
     if (!collapsible) return {};
     for (auto it = controlBlockFrames.rbegin(); it != controlBlockFrames.rend(); ++it)
-    {
-        const auto header = it->bounds.withHeight(controlBlockHeaderHeight);
-        if (!header.contains(position)) continue;
-        if (!titleOnly && (!bool(getProperties().getWithDefault("headerScrollbarVisible", false))
-            || isBlockCollapsed(it->title)))
+        if (it->bounds.withHeight(controlBlockHeaderHeight).contains(position))
             return it->title;
-        const auto& title = it->displayTitle.isNotEmpty() ? it->displayTitle : it->title;
-        if (getControlBlockTitleZone(header, title).contains(position))
-            return it->title;
-    }
     return {};
 }
 
 void ControlBlockComponent::updateHoveredBlock(juce::Point<int> position)
 {
     const auto title = blockHeaderAt(position);
-    const bool nameHovered = title.isNotEmpty() && blockHeaderAt(position, true) == title;
-    juce::String bypassTitle;
-    if (moduleHeaderToggle)
-        for (const auto& frame : controlBlockFrames)
-            if (frame.colour == uiGreyDark
-                && moduleNameplateBypassBounds(frame.bounds).contains(position))
-            {
-                bypassTitle = frame.title;
-                break;
-            }
-
-    if (hoveredBlockTitle == title && hoveredBypassTitle == bypassTitle && hoveredBlockName == nameHovered) return;
-    hoveredBlockName = nameHovered;
-    hoveredBypassTitle = bypassTitle;
-    if (hoveredBlockTitle == title)
-    {
-        repaint();
-        return;
-    }
-
+    if (hoveredBlockTitle == title) return;
     hoveredBlockTitle = title;
     hoveredBlockVisualReady = false;
     const auto generation = ++hoverGeneration;
@@ -148,10 +120,8 @@ void ControlBlockComponent::mouseEnter(const juce::MouseEvent& event)
 
 void ControlBlockComponent::mouseExit(const juce::MouseEvent&)
 {
-    if (hoveredBlockTitle.isEmpty() && hoveredBypassTitle.isEmpty()) return;
+    if (hoveredBlockTitle.isEmpty()) return;
     hoveredBlockTitle.clear();
-    hoveredBlockName = false;
-    hoveredBypassTitle.clear();
     hoveredBlockVisualReady = false;
     ++hoverGeneration;
     repaint();
@@ -165,17 +135,6 @@ juce::MouseCursor ControlBlockComponent::getMouseCursor()
 void ControlBlockComponent::mouseUp(const juce::MouseEvent& event)
 {
     if (event.mods.isPopupMenu() || event.mouseWasDraggedSinceMouseDown()) return;
-    // A click on BP in the module's title BAR is a bypass gesture,
-    // not a collapse gesture. Keep the name and surrounding frame intact.
-    if (moduleHeaderToggle)
-        for (const auto& frame : controlBlockFrames)
-            if (frame.colour == uiGreyDark
-                && moduleNameplateBypassBounds(frame.bounds).contains(event.getPosition()))
-            {
-                moduleHeaderToggle();
-                repaint();
-                return;
-            }
     const auto title = blockHeaderAt(event.getPosition());
     if (title.isEmpty() || title != blockHeaderAt(event.getMouseDownPosition())) return;
     setBlockCollapsed(title, !isBlockCollapsed(title));

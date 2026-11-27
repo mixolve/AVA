@@ -99,9 +99,10 @@ public:
     void refreshExternalState();
     void refreshRangeControls();
     void setInstanceName(const juce::String& name);
-    void setModuleDisplayTitle(const juce::String& title);
-    void setModuleNameplateBypass(std::function<bool()> isBypassed,
-                                 std::function<void()> toggle);
+    void configureModuleScrollTile(const juce::String& title, const std::function<bool()>& isBypassed,
+                                   const std::function<void()>& toggle,
+                                   const std::function<void()>& copy,
+                                   const std::function<void()>& paste);
     std::vector<juce::Component*> getMainControls();
     std::array<juce::Component*, 2> getMainSyncControls() const;
     std::vector<juce::Component*> getInstanceSettingsControls() const;

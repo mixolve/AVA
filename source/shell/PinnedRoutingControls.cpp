@@ -36,6 +36,56 @@ std::vector<int> pinnedInstanceIds(const ava::routing::State& topology, const ju
 }
 }
 
+AvaAudioProcessorEditor::UnitConnectPad::UnitConnectPad()
+{
+    setName("unit-connect");
+    setTitle("Connect units");
+    setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+}
+
+void AvaAudioProcessorEditor::UnitConnectPad::paint(juce::Graphics& g)
+{
+    const auto hover = isHoverInversionReady(*this, isMouseHovering(*this), "indicator");
+    paintControlTextButton(g, getLocalBounds(), hover, false, dragging);
+}
+
+void AvaAudioProcessorEditor::UnitConnectPad::mouseDown(const juce::MouseEvent&)
+{
+    dragging = false;
+}
+
+void AvaAudioProcessorEditor::UnitConnectPad::mouseDrag(const juce::MouseEvent& event)
+{
+    if (dragging || !event.mods.isLeftButtonDown() || !event.mouseWasDraggedSinceMouseDown()) return;
+    dragging = true;
+    repaint();
+}
+
+void AvaAudioProcessorEditor::UnitConnectPad::mouseUp(const juce::MouseEvent& event)
+{
+    if (!std::exchange(dragging, false)) return;
+    repaint();
+    if (onDrop != nullptr) onDrop(event.getScreenPosition());
+}
+
+AvaAudioProcessorEditor::UnitSyncControls::UnitSyncControls()
+{
+    receive.setName("unit-receive");
+    send.setName("unit-send");
+    pause.setTitle("Pause unit sync");
+    addAndMakeVisible(receive);
+    addAndMakeVisible(send);
+    addAndMakeVisible(connect);
+    addAndMakeVisible(pause);
+}
+
+void AvaAudioProcessorEditor::UnitSyncControls::resized()
+{
+    const std::array<juce::Component*, 4> pads {&receive, &send, &connect, &pause};
+    for (int index = 0; index < int(pads.size()); ++index)
+        pads[size_t(index)]->setBounds(controlStripCell(getLocalBounds(), index, int(pads.size())));
+}
+
 void AvaAudioProcessorEditor::switchPinnedRoutingInstance(const int instanceId)
 {
     // A nested editor may be destroyed when a different routing node opens.
@@ -142,29 +192,20 @@ void AvaAudioProcessorEditor::handlePinnedRoutingDrag(const int sourceId,
 
 void AvaAudioProcessorEditor::refreshPinnedRoutingStrip()
 {
-    const bool visible = bool(getRootWindowState().getProperty(shell_editor_ui::key("pin_routing"), true));
-    if (pinRoutingControl != nullptr && pinRoutingControl->getSelectedChoiceIndex() != int(visible))
-        pinRoutingControl->setSelectedChoiceIndex(visible ? 1 : 0, false);
-    if (visible != pinnedRoutingVisible)
-    {
-        pinnedRoutingVisible = visible;
-        // During resized(), the parent layout is already responsible for
-        // positioning the pinned strip. Avoid recursively laying out the editor.
-        if (!layingOutEditor && getWidth() > 0 && controlSearchPanel != nullptr) resized();
-    }
+    // The pinned INSTANCE strip is permanent; the legacy pin_routing state
+    // (which might still be saved as OFF) no longer controls visibility.
     // Do not restore the persisted order halfway through a drag gesture.
     if (pinnedRoutingDragSourceId != 0) return;
     // The compact dock has no pinned routing strip. Keep its existing tiles
     // untouched until the expanded geometry has been calculated again.
-    if (!visible || routingInstanceId != 0 || isDockOnly()) return;
+    if (routingInstanceId != 0 || isDockOnly()) return;
 
     const auto topology = ava::routing::readState(audioProcessor.getRoutingOwner().getValueTreeState().state);
     const auto selected = activeInstanceId != 0 ? activeInstanceId : topology.rootInstanceId;
     const auto orderedIds = pinnedInstanceIds(topology, getRootWindowState());
     const int gap = getUiGap(*this);
     const int side = getSquareControlSize(*this);
-    const auto firstColumnX = 3 * gap + 2 * controlBlockFrameThickness;
-    const int firstX = juce::jmax(0, firstColumnX - pinnedRoutingViewport.getX());
+    const int firstX = 0; // The optional SCROLL slot is outside this content viewport.
     juce::String signature = juce::String(shell_editor_ui::zoomStep(getRootWindowState()));
     for (const auto id : orderedIds)
         signature << "|" << id << ":" << ava::routing::getDisplayName(topology, id);
@@ -187,7 +228,8 @@ void AvaAudioProcessorEditor::refreshPinnedRoutingStrip()
             x += side + gap;
             ++index;
         }
-        pinnedRoutingContent.setSize(juce::jmax(1, x), side);
+        updatePinnedSearchPosition();
+        syncPinnedRoutingScrollControl();
         return;
     }
     pinnedRoutingSignature = signature;
@@ -251,6 +293,17 @@ void AvaAudioProcessorEditor::refreshPinnedRoutingStrip()
         pinnedRoutingButtonIds.push_back(id);
         x += side + gap;
     }
-    pinnedRoutingContent.setSize(juce::jmax(1, x), side);
+    updatePinnedSearchPosition();
     pinnedRoutingViewport.setViewPosition(previousScrollX, 0);
+    syncPinnedRoutingScrollControl();
+}
+
+void AvaAudioProcessorEditor::syncPinnedRoutingScrollControl()
+{
+    if (pinnedRoutingScrollControl == nullptr) return;
+    const auto maximum = juce::jmax(0, pinnedRoutingContent.getWidth() - pinnedRoutingViewport.getWidth());
+    const auto position = juce::jlimit(0, maximum, pinnedRoutingViewport.getViewPositionX());
+    pinnedRoutingScrollControl->setValue(maximum > 0 ? double(position) / double(maximum) : 0.0, false);
+    pinnedRoutingScrollControl->setInteractionEnabled(pinnedRoutingScrollControl->isVisible()
+                                                      && maximum > 0);
 }

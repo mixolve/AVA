@@ -139,19 +139,13 @@ juce::String AvaAudioProcessorEditor::getInstanceDisplayName() const
                                          routingInstanceId != 0 ? routingInstanceId : routing.rootInstanceId);
 }
 
-void AvaAudioProcessorEditor::updateInstanceHeadings()
+void AvaAudioProcessorEditor::updateInstanceScrollLabel()
 {
     auto name = getInstanceDisplayName();
     // Default routing names are INS-1, INS-2, etc. Show them as INS 1.
     if (name.startsWithIgnoreCase("INS-"))
         name = "INS " + name.substring(4);
-    const auto caption = "INSTANCE (" + name.toUpperCase() + ")";
-    for (auto& frame : instanceContent.controlBlockFrames)
-        if (frame.title == "INSTANCE" && frame.displayTitle != caption)
-        {
-            frame.displayTitle = caption;
-            instanceContent.repaint();
-        }
+    instanceMainRow.setScrollLabel(name.toUpperCase() + "\nSCROLL");
 }
 
 void AvaAudioProcessorEditor::updateSectionStates()
@@ -163,17 +157,18 @@ void AvaAudioProcessorEditor::updateSectionStates()
     const auto showPage = !isDockOnly();
     setComponentVisible(aboutPanel.get(), showPage && unitPage == UnitPage::about);
     setComponentVisible(routingPanel.get(), showPage && unitPage == UnitPage::routing);
-    slotsViewport.setVisible(showPage && unitPage == UnitPage::slots);
+    const auto showSlots = showPage && unitPage == UnitPage::slots;
+    slotsViewport.setVisible(showSlots);
+    setComponentVisible(slotsVerticalScrollControl.get(), showSlots);
 
-    updateInstanceHeadings();
+    updateInstanceScrollLabel();
 
     const auto modulePageVisible = !hasUnitPage();
     if (!slotsViewport.isVisible() && hostSlotMoveSourceIndex >= 0) cancelHostSlotMove();
     setComponentVisible(crossoverEditor.get(), modulePageVisible);
     const auto moduleContentVisible = modulePageVisible && crossoverEditor != nullptr;
 
-    // UNIT MAIN owns UNDO, REDO, A/B and BYPASS; the nested block manages
-    // their visibility so collapsed controls never reappear in the sidebar.
+    // The UNIT row and module stack share the main viewport.
     if (!moduleContentVisible)
     {
         filterViewport.setVisible(false);

@@ -223,13 +223,6 @@ int ControlSearchPanel::getDisplayedHeight() const noexcept
     return resultsDismissed ? controlBlockHeaderHeight : getPreferredHeight();
 }
 
-void ControlSearchPanel::setPinned(const bool pinned) noexcept
-{
-    if (pinnedToViewport == pinned) return;
-    pinnedToViewport = pinned;
-    repaint();
-}
-
 void ControlSearchPanel::updateQuery()
 {
     // InputFilter handles typing, paste and IME inserts. Normalise again here
@@ -274,7 +267,7 @@ void ControlSearchPanel::resized()
 
     // Keep the full-size native editing field: caret and selection geometry
     // must not be moved together with the custom centred glyphs.
-    input.setBounds(0, 0, width, controlBlockHeaderHeight);
+    input.setBounds(frame.withHeight(controlBlockHeaderHeight));
     // Search results use the same insets as nested MAIN/module headers.
     const auto inset = uiGap + controlBlockFrameThickness;
     const auto area = getHeight() > controlBlockHeaderHeight
@@ -291,13 +284,10 @@ void ControlSearchPanel::resized()
 
 void ControlSearchPanel::paint(juce::Graphics& g)
 {
-    // When pinned, the scrolled controls pass underneath this overlay.
-    // Paint the full panel backing, including gaps between result rows, so
-    // they can never bleed through a partially repainted search frame.
     g.setColour(uiPanelBackground);
-    g.fillRect(frame);
+    g.fillRect(frame.withTrimmedTop(controlBlockHeaderHeight));
     g.setColour(uiWhite);
-    g.fillRect(frame.withHeight(controlBlockHeaderHeight));
+    g.fillRect(input.getBounds());
 }
 
 void ControlSearchPanel::paintOverChildren(juce::Graphics& g)

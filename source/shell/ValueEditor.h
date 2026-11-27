@@ -122,12 +122,15 @@ public:
         return slider.proportionOfLengthToValue(position);
     }
 
-    bool beginFromValue(const juce::MouseEvent& event, juce::Rectangle<int> bounds, juce::Slider& slider, int choices = 0)
+    bool beginFromValue(const juce::MouseEvent& event, juce::Rectangle<int> bounds, juce::Slider& slider,
+                        int choices = 0, bool liveDiscrete = false, bool hideCursor = false)
     {
         if (!event.mods.isLeftButtonDown()) return false;
         target = &slider;
         moved = false;
         discreteChoices = choices;
+        liveDiscreteDrag = liveDiscrete && choices > 1;
+        hideCursorOnDrag = hideCursor;
         position = rangePosition(slider);
         // Work in the original component's drag coordinate system. JUCE can
         // extend these coordinates beyond the screen while dragging; converting
@@ -141,9 +144,8 @@ public:
     bool isActive() const { return target != nullptr; }
     bool wasDragged() const { return moved; }
     bool isDragging() const { return isActive() && moved; }
-    // Continuous values are applied on every drag event; paint the slider's
-    // actual (possibly quantised) value. Discrete choices are committed only
-    // on release, so display the snapped choice during the drag as well.
+    // Continuous and opt-in live discrete controls apply on each drag event.
+    // Other discrete controls keep their existing release-to-commit behaviour.
     double visualPosition() const
     {
         if (!isDragging() || discreteChoices <= 1) return -1.0;
@@ -181,7 +183,13 @@ public:
 
         if (!moved)
         {
-            cursor.hold(event, true);
+            // Reuse the standard DragCursor lifecycle (including native macOS
+            // cursor hiding and a deferred reveal) for all discrete lists.
+            // This keeps the pointer hidden until the return warp has settled.
+            const bool hideAndDefer = discreteChoices > 1 || hideCursorOnDrag;
+            cursor.hold(event, true, hideAndDefer);
+            if (hideAndDefer)
+                cursor.setReturnPosition(event.getMouseDownScreenPosition().toFloat());
             moved = true;
             if (gesture == nullptr)
                 gesture = std::make_unique<juce::Slider::ScopedDragNotification>(*target);
@@ -204,15 +212,19 @@ public:
 
         if (discreteChoices == 0)
             target->setValue(valueAt(*target, position), juce::sendNotificationSync);
+        else if (liveDiscreteDrag)
+            target->setValue(discreteValueAt(*target, position, discreteChoices), juce::sendNotificationSync);
     }
 
     void end(bool commit = false)
     {
         cursor.end();
-        if (commit && discreteChoices > 0 && moved && target != nullptr)
+        if (commit && discreteChoices > 0 && !liveDiscreteDrag && moved && target != nullptr)
             target->setValue(discreteValueAt(*target, position, discreteChoices), juce::sendNotificationSync);
         gesture.reset();
         target = nullptr;
+        liveDiscreteDrag = false;
+        hideCursorOnDrag = false;
         dragAxis = DragAxis::unlocked;
     }
 
@@ -227,6 +239,8 @@ private:
     int travel = 1;
     bool moved = false;
     int discreteChoices = 0;
+    bool liveDiscreteDrag = false;
+    bool hideCursorOnDrag = false;
 };
 
 class ValueEditor final : public CopyPasteTextEditor, private juce::Slider::Listener

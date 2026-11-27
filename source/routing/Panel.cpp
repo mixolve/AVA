@@ -1707,7 +1707,7 @@ void RoutingPanel::resized()
     if (containersButton != nullptr)
     {
         const auto size = getCompactControlSize(*this) / 2;
-        containersButton->setBounds(juce::jmax(0, canvasWidth - size), 0, size, size);
+        containersButton->setBounds(0, juce::jmax(0, canvasHeight - size), size, size);
         containersButton->toFront(false);
     }
     content->setCanvasSize(juce::jmax(canvasWidth, contentWidth), juce::jmax(canvasHeight, contentHeight),

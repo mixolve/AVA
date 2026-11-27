@@ -72,7 +72,9 @@ void ValueBoxComponent::mouseDown(const juce::MouseEvent& event)
 
     pointerDown = true;
     if (canAdjustValue() && getValueBounds().contains(point))
-        directIndicator->beginFromValue(event.getEventRelativeTo(this), RangeIndicator::potentiometerBounds(*this, getValueBounds()), slider, choiceCount());
+        directIndicator->beginFromValue(event.getEventRelativeTo(this),
+            RangeIndicator::potentiometerBounds(*this, getValueBounds()),
+            slider, choiceCount(), liveDiscreteDrag, hideCursorOnDrag);
 }
 
 void ValueBoxComponent::setPressPreviewPosition(double position)

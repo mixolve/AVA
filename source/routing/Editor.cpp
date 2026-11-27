@@ -1,5 +1,6 @@
 #include "../shell/Editor.h"
 #include "../shell/Controls.h"
+#include "../shell/ChoiceControl.h"
 
 void AvaAudioProcessorEditor::setReturnToRoutingAction(std::function<void()> action)
 {
@@ -48,7 +49,11 @@ void AvaAudioProcessorEditor::openRoutingInstance(const int instanceId)
     updateSectionStates();
     resized();
     refreshPinnedRoutingStrip();
-    if (pinnedRoutingViewport.isVisible()) pinnedRoutingViewport.toFront(false);
+    if (pinnedRoutingViewport.isVisible())
+    {
+        pinnedRoutingViewport.toFront(false);
+        if (pinnedRoutingScrollControl != nullptr) pinnedRoutingScrollControl->toFront(false);
+    }
 }
 
 void AvaAudioProcessorEditor::closeRoutingInstance()
