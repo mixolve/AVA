@@ -25,8 +25,8 @@ inline std::vector<int> arrange(const std::vector<int>& available, const std::ve
 
 // Live tile movement, identical to the DOCK's insertion behaviour.
 // The associated ids and Component owners must be moved with the same indices.
-template <typename T>
-inline bool moveToIndex(std::vector<T>& items, const int from, const int to)
+template <typename Items>
+inline bool moveToIndex(Items& items, const int from, const int to)
 {
     if (from == to) return false;
     if (from < 0 || to < 0 || from >= int(items.size()) || to >= int(items.size()))

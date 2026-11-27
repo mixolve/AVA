@@ -1,5 +1,6 @@
 #include "UnitSyncDelta.h"
 #include "Processor.h"
+#include "EditorStateSchema.h"
 
 #include <algorithm>
 #include <map>
@@ -31,7 +32,8 @@ namespace
 bool isLocalNavigation(const juce::Identifier& key)
 {
     const auto name = key.toString();
-    return name.startsWith("ava.editor.ui.scroll.")
+    return key == shell_editor_ui::inactiveModulesOrderKey
+        || name.startsWith("ava.editor.ui.scroll.")
         || name.startsWith("ava.editor.ui.collapsed.")
         || (name.startsWith("ava.crossover.") && name.endsWith(".page_scroll_y"));
 }

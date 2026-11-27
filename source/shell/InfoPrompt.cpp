@@ -370,8 +370,7 @@ public:
     {
         viewport.setName("about-viewport");
         viewport.setViewedComponent(&document, false);
-        viewport.setScrollBarsShown(false, false, true, false);
-        viewport.setScrollBarThickness(getUiGap(*this));
+        viewport.setScrollBarsShown(true, false, false, false);
         viewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
         viewport.setWantsKeyboardFocus(false);
         addAndMakeVisible(viewport);
@@ -393,7 +392,7 @@ public:
 private:
     AboutDocument document;
     std::function<void()> onBackgroundClick;
-    juce::Viewport viewport;
+    UiScrollViewport viewport;
 };
 }
 

@@ -121,7 +121,7 @@ void AvaAudioProcessorEditor::rebindActiveModuleEditors()
         }
 
         const auto* crossover = dynamic_cast<CrossoverModuleComponent*>(crossoverEditor.get());
-        editor->setVisible(moduleLoaded && !aboutExpanded
+        editor->setVisible(moduleLoaded && !hasUnitPage()
             && crossover != nullptr);
     };
 

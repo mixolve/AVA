@@ -37,6 +37,11 @@ public:
         if (auto* editor = findParentComponentOfClass<AvaAudioProcessorEditor>())
             editor->grabKeyboardFocus();
     }
+    void mouseUp(const juce::MouseEvent& event) override
+    {
+        if (auto* editor = findParentComponentOfClass<AvaAudioProcessorEditor>())
+            editor->mouseUp(event.getEventRelativeTo(editor));
+    }
 };
 
 // Observe actual edit gestures across all nested controls, including routing
@@ -162,12 +167,12 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     routingPanel = std::make_unique<RoutingPanel>(audioProcessor.getRoutingOwner());
     routingPanel->setOnOpenRoot([this]
     {
-        // When an INSTANCE editor covers the root, selecting the root node
-        // from its embedded ROUTING block returns to the root editor.
+        showUnitPage(UnitPage::main);
         if (returnToRoutingAction != nullptr) returnToRoutingAction();
     });
     routingPanel->setOnOpenInstance([this] (const int id)
     {
+        showUnitPage(UnitPage::main);
         if (audioProcessor.isRoutingInstance())
         {
             // Switch instances through the owner, asynchronously: replacing
@@ -229,14 +234,21 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     // sections on the routing owner, not on an individual instance APVTS;
     // switching pages must not swap UNIT expansion preferences.
     auto& unitState = audioProcessor.getRoutingOwner().getValueTreeState();
-    unitMainContent.collapseBlockInitially("MAIN");
     unitMainContent.bindCollapseState(unitState, "shell.unit.main");
     unitContent.addAndMakeVisible(unitMainContent);
-    // ROUTING is a collapsible nested UNIT block, not a separate page.
-    unitRoutingContent.collapseBlockInitially("ROUTING");
-    unitRoutingContent.bindCollapseState(unitState, "shell.unit.routing");
-    unitRoutingContent.addAndMakeVisible(*routingPanel);
-    unitContent.addAndMakeVisible(unitRoutingContent);
+    unitMainRow.attach("unit-main");
+    routingPanel->setName("unit-routing");
+    routingPanel->setOnBackgroundClick([this] { showUnitPage(UnitPage::main); });
+    addChildComponent(*routingPanel);
+
+    slotsContent.setCollapsible(false);
+    slotsContent.onBackgroundRelease = [this] { showUnitPage(UnitPage::main); };
+    slotsViewport.setName("unit-slots");
+    slotsViewport.setViewedComponent(&slotsContent, false);
+    slotsViewport.setScrollBarsShown(true, false, false, false);
+    slotsViewport.setScrollBarThickness(editorScrollBarWidth);
+    slotsViewport.setWantsKeyboardFocus(false);
+    addChildComponent(slotsViewport);
     OscPanel::Actions oscActions;
     oscActions.getSettings = [this] { return audioProcessor.getOscSettings(); };
     oscActions.setSettings = [this] (const OscSettings& settings)
@@ -250,7 +262,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     unitSyncContent.collapseBlockInitially("SYNC");
     unitSyncContent.bindCollapseState(unitState, "shell.unit.sync");
     unitContent.addAndMakeVisible(unitSyncContent);
-    unitContent.addAndMakeVisible(slotsContent);
     eqlContent.setName("eql-page");
     eqlContent.onBackgroundClick = [this](const juce::MouseEvent& event) { handleEqlBackgroundClick(event); };
     filterContent.onBackgroundClick = eqlContent.onBackgroundClick;
@@ -258,12 +269,8 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     eqlContent.addAndMakeVisible(filterContent);
     moduleContent.onBackgroundClick = eqlContent.onBackgroundClick;
     mainContent.onBackgroundClick = eqlContent.onBackgroundClick;
-    unitRoutingContent.onBackgroundClick = eqlContent.onBackgroundClick;
     unitMainContent.onBackgroundClick = eqlContent.onBackgroundClick;
     instanceContent.onBackgroundClick = eqlContent.onBackgroundClick;
-    slotsContent.collapseBlockInitially("SLOTS");
-    slotsContent.bindCollapseState(unitState, "shell.unit.slots");
-    unitContent.collapseBlockInitially("UNIT");
     unitContent.bindCollapseState(unitState, "shell.unit");
     mainContent.collapseBlockInitially("MAIN");
     mainContent.bindCollapseState(valueTreeState, "shell.main");
@@ -274,8 +281,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     moduleContent.addAndMakeVisible(unitContent);
     moduleContent.addAndMakeVisible(instanceContent);
     instanceContent.addAndMakeVisible(mainContent);
-    instanceContent.addAndMakeVisible(modulesContent);
-    modulesContent.bindCollapseState(valueTreeState, "shell.instance.modules");
+    instanceMainRow.attach("instance-main");
     instanceContent.addAndMakeVisible(eqlContent);
     controlSearchPanel = std::make_unique<ControlSearchPanel>();
     // Range indicators are painted in the editor's final overlay pass; mark
@@ -295,37 +301,23 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     };
     pinnedRoutingViewport.setOpaque(false);
     pinnedRoutingViewport.setViewedComponent(&pinnedRoutingContent, false);
-    pinnedRoutingViewport.setScrollBarsShown(false, false, true, true);
+    pinnedRoutingViewport.setScrollBarsShown(false, true, false, false);
+    pinnedRoutingViewport.setScrollBarThickness(getUiGap(*this));
     pinnedRoutingViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     pinnedRoutingViewport.setWantsKeyboardFocus(false);
     pinnedRoutingViewport.getProperties().set("foregroundOccluder", true);
     addChildComponent(pinnedRoutingViewport);
-    // The quick-access row is a fixed, horizontally scrollable control strip.
-    // The selected tiles are native controls bound to the source parameters.
+    // The selected dock tiles are native controls bound to the source parameters.
     addAndMakeVisible(quickAccessStrip);
     quickAccessStrip.addAndMakeVisible(quickAccessViewport);
     quickAccessViewport.setViewedComponent(&quickAccessContent, false);
-    quickAccessViewport.setScrollBarsShown(false, false, true, true);
+    quickAccessViewport.setScrollBarsShown(false, false, false, false);
     quickAccessViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     quickAccessViewport.setWantsKeyboardFocus(false);
     // Marking remains visible at the source in the scrolling viewport;
     // mirrored dock controls use their ordinary neutral frame and rail.
     quickAccessContent.getProperties().set("suppressManualSelectionHighlight", true);
     quickAccessStrip.getProperties().set("foregroundOccluder", true);
-    quickAccessContent.addMouseListener(&quickAccessStrip, true);
-    quickAccessStrip.onScroll = [this](const juce::MouseWheelDetails& wheel)
-    {
-        const auto contentWidth = quickAccessContent.getWidth();
-        const auto maxX = juce::jmax(0, contentWidth - quickAccessViewport.getWidth());
-        const auto delta = std::abs(wheel.deltaX) > std::abs(wheel.deltaY) ? -wheel.deltaX : -wheel.deltaY;
-        const auto step = juce::roundToInt(delta * (wheel.isSmooth ? 140.0f : 70.0f));
-        const bool vertical = isDockOnly() && bool(getRootWindowState().getProperty(shell_editor_ui::key("dock_vertical"), false));
-        // In the rotated dock, horizontal swipes must not scroll the Y axis.
-        if (vertical && std::abs(wheel.deltaX) > std::abs(wheel.deltaY)) return;
-        if (vertical)
-            quickAccessViewport.setViewPosition(0, juce::jlimit(0, juce::jmax(0, quickAccessContent.getHeight() - quickAccessViewport.getHeight()), quickAccessViewport.getViewPositionY() + step));
-        else quickAccessViewport.setViewPosition(juce::jlimit(0, maxX, quickAccessViewport.getViewPositionX() + step), 0);
-    };
     dockSortToggle.onClick = [this]
     {
         dockDragSource = dockDropTarget = -1;
@@ -338,7 +330,6 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
         dockSortOverlay.repaint();
     };
     dockSortOverlay.onGesture = [this](const juce::MouseEvent& event, int phase) { dragDockControl(event, phase); };
-    dockSortOverlay.onScroll = quickAccessStrip.onScroll;
     dockCollapseToggle.onClick = [this] { setDockOnly(dockCollapseToggle.getToggleState()); };
     addAndMakeVisible(dockSortToggle);
     addAndMakeVisible(dockCollapseToggle);
@@ -420,7 +411,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     filterViewport.setName("filter-viewport");
     filterContent.setName("filter-content");
     if (auto* holder = eqlContent.getParentComponent()) holder->setName("filter-scroll");
-    filterViewport.setScrollBarsShown(false, false, true, false);
+    filterViewport.setScrollBarsShown(false, false, false, false);
     filterViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     filterViewport.setWantsKeyboardFocus(false);
     addAndMakeVisible(filterViewport);
@@ -496,8 +487,9 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     linkInstanceControl = std::make_unique<LocalChoiceControl>(
         "INSTANCE\nLINK", juce::StringArray { "NONE" }, 0);
     linkInstanceControl->setBottomIndicatorsVisible(false, false);
+    linkInstanceControl->setAlwaysUseChoiceList(true);
     linkInstanceControl->onValueChanged = [this] { changeRoutingLinkDestination(); };
-    mainContent.addAndMakeVisible(*linkInstanceControl);
+    instanceMainRow.content.addAndMakeVisible(*linkInstanceControl);
     refreshInstanceLinkControls();
 
     displayedModule = audioProcessor.getActiveModule();
@@ -516,31 +508,36 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
     restoreEditorStateFromValueTree();
 
     aboutPanel = makeAboutPanel(shell_setup_support::getMixolveInfoMarkdown(),
-        [this] { showAllSection(); });
+        [this] { showUnitPage(UnitPage::main); });
     aboutPanel->setName("about");
     addChildComponent(*aboutPanel);
-    aboutControl = std::make_unique<LocalChoiceControl>("ABOUT", juce::StringArray { "OFF", "ON" }, 0);
-    aboutControl->setName("info");
     windowDragHandle = std::make_unique<SidebarFocusHandle>();
     windowDragHandle->setName("window-drag-handle");
     windowDragHandle->setWantsKeyboardFocus(false);
     addAndMakeVisible(*windowDragHandle);
     windowMoveGesture = std::make_unique<WindowMoveGesture>(*windowDragHandle, *this);
-    aboutControl->setBottomIndicatorsVisible(false, false);
+    const auto makePageControl = [this](const char* title, const char* name, UnitPage page)
+    {
+        auto control = std::make_unique<PushControl>(title);
+        control->setName(name);
+        control->setBottomIndicatorsVisible(false, false);
+        control->onTrigger = [this, page] { showUnitPage(page); };
+        unitMainRow.content.addAndMakeVisible(*control);
+        return control;
+    };
+    routingControl = makePageControl("ROUTING", "routing", UnitPage::routing);
+    slotsControl = makePageControl("SLOTS", "slots", UnitPage::slots);
+
+    aboutControl = makePageControl("ABOUT", "info", UnitPage::about);
+    aboutControl->onTrigger = [this]
+    {
+        if (!isSvgExportGesture(juce::ModifierKeys::getCurrentModifiersRealtime()))
+            showUnitPage(UnitPage::about);
+    };
     svgExportClickListener = std::make_unique<ModifierClickAction>(
         [] (const juce::ModifierKeys& modifiers) { return isSvgExportGesture(modifiers); },
         [this] { requestSvgExport(); });
     aboutControl->addMouseListener(svgExportClickListener.get(), true);
-    aboutControl->onValueChanged = [this]
-    {
-        if (isSvgExportGesture(juce::ModifierKeys::getCurrentModifiersRealtime()))
-        {
-            aboutControl->setSelectedChoiceIndex(aboutExpanded ? 1 : 0, false);
-            return;
-        }
-        toggleAboutSection();
-    };
-    unitMainContent.addAndMakeVisible(*aboutControl);
 
     // Native UNIT MAIN controls use the same Ctrl-click quick-access marking
     // as all module controls (no special treatment for action/toggle controls).

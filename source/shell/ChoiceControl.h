@@ -81,7 +81,11 @@ public:
     int getSelectedChoiceIndex() const noexcept { return getDisplayIndex(); }
     void setSelectedChoiceIndex(int index, bool sendNotification);
     void setChoiceEnabled(int index, bool enabled) { setDisplayItemEnabled(index, enabled); }
+    void setAlwaysUseChoiceList(bool enabled) { alwaysUseChoiceList = enabled; valueBox->setAlwaysUseChoiceList(enabled); }
+    bool usesChoiceListWithTwoOptions() const noexcept { return alwaysUseChoiceList; }
     void setChoices(const juce::StringArray& choices);
+private:
+    bool alwaysUseChoiceList = false;
 };
 
 class PushControl final : public ChoiceField

@@ -211,25 +211,13 @@ public:
 
     void mouseDown(const juce::MouseEvent& event) override
     {
-        if (textEditor.beginIndicatorDrag(event.getEventRelativeTo(&textEditor))) return;
+        if (textEditor.isRangeIndicatorAt(event.getEventRelativeTo(&textEditor).getPosition())) return;
         auto* target = underlyingComponentAt(event.getPosition());
         if(event.mods.isLeftButtonDown() && isEmptyEditorBackground(target)) {
             if(!commit()) cancel();
             return;
         }
         textEditor.grabKeyboardFocus();
-    }
-
-    void mouseDrag(const juce::MouseEvent& event) override
-    {
-        if (textEditor.isIndicatorDragging())
-            textEditor.mouseDrag(event.getEventRelativeTo(&textEditor));
-    }
-
-    void mouseUp(const juce::MouseEvent& event) override
-    {
-        if (textEditor.isIndicatorDragging())
-            textEditor.mouseUp(event.getEventRelativeTo(&textEditor));
     }
 
     bool keyPressed(const juce::KeyPress& key) override

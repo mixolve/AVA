@@ -95,6 +95,8 @@ std::vector<ControlSearchEntry> AvaAudioProcessorEditor::findControls(const juce
     };
 
     visit(moduleContent, {});
+    for (auto* child : slotsContent.getChildren())
+        visit(*child, {"UNIT", "SLOTS"});
     std::stable_sort(matches.begin(), matches.end(), [](const auto& left, const auto& right)
     {
         return left.location.compareIgnoreCase(right.location) < 0;
@@ -172,10 +174,18 @@ void AvaAudioProcessorEditor::navigateToSearchResult(ControlSearchEntry result)
     searchFlashTarget = nullptr;
     searchFlashBlockTitle.clear();
 
-    if (aboutExpanded)
+    if (slotsContent.isParentOf(target))
     {
-        showAllSection();
+        showUnitPage(UnitPage::slots);
+        const auto rect = slotsContent.getLocalArea(target, target->getLocalBounds());
+        slotsViewport.setViewPosition(0, rect.getCentreY() - slotsViewport.getHeight() / 2);
+        searchFlashTarget = target;
+        searchFlashStarted = juce::Time::getMillisecondCounter();
+        searchFlashOn = true;
+        repaint();
+        return;
     }
+    if (hasUnitPage()) showUnitPage(UnitPage::main);
 
     // Expand only the ancestors of a result, not a clicked block caption itself.
     bool changed = false;
@@ -210,6 +220,16 @@ void AvaAudioProcessorEditor::navigateToSearchResult(ControlSearchEntry result)
                     break;
                 }
     if (targetRect.isEmpty()) return;
+    if (auto* row = target->findParentComponentOfClass<HorizontalControlViewport>())
+        if (auto* rowContent = row->getViewedComponent())
+        {
+            const auto item = rowContent->getLocalArea(target, targetRect);
+            const auto visible = row->getViewArea();
+            if (item.getX() < visible.getX()) row->setViewPosition(item.getX(), 0);
+            else if (item.getRight() > visible.getRight())
+                row->setViewPosition(item.getRight() - visible.getWidth(), 0);
+        }
+
     const auto rect = content.getLocalArea(target, targetRect);
     const auto viewportHeight = viewport.getHeight();
     const auto centered = rect.getCentreY() - viewportHeight / 2;

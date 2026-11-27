@@ -3,7 +3,7 @@
 #include "Controls.h"
 #include "Editor.h"
 
-class AvaAudioProcessorEditor::AvaLookAndFeel final : public juce::LookAndFeel_V4
+class AvaAudioProcessorEditor::AvaLookAndFeel final : public juce::LookAndFeel_V4, private juce::Timer
 {
 public:
     AvaLookAndFeel();
@@ -23,4 +23,9 @@ public:
                            const juce::String& shortcutKeyText, const juce::Drawable*, const juce::Colour*) override;
     void drawPopupMenuItemWithOptions(juce::Graphics&, const juce::Rectangle<int>&, bool isHighlighted,
                                       const juce::PopupMenu::Item&, const juce::PopupMenu::Options&) override;
+private:
+    void trackScrollbarAnimation(juce::ScrollBar& bar);
+    void timerCallback() override;
+    std::vector<juce::Component::SafePointer<juce::ScrollBar>> animatedScrollbars;
+
 };

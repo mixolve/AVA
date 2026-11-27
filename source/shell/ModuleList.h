@@ -1,381 +1,237 @@
 #pragma once
 
 #include "Editor.h"
-#include "ModuleOrder.h"
-#include "Controls.h"
-#include "ParameterControl.h"
-#include "ValueEditor.h"
-#include "../modules/shared/BlockCatalog.h"
+#include "EditorStateSchema.h"
+#include "PinnedRoutingOrder.h"
 
-#include <algorithm>
-#include <cstddef>
-#include <functional>
-#include <memory>
-#include <map>
-#include <utility>
-#include <vector>
-
-struct ModuleListItem {
+struct ModuleListItem
+{
     int id;
     juce::String name;
-    int serial = 1;
-    bool enabled = true;
-    bool canDelete = false;
+    int serial;
+    bool operator==(const ModuleListItem&) const = default;
 };
 
 class ModuleList final : public juce::Component
 {
 public:
     using Order = std::vector<int>;
-    using Id = int;
-    using Change = std::function<void(const Order&)>;
-    ModuleList(Order initial, Change commitIn,
-                        std::vector<ModuleListItem> items={})
-        : order(initial), committed(initial), commit(std::move(commitIn))
-    {
-        setName("MODULES");
-        getProperties().set("disableDockSelection", true);
-        setWantsKeyboardFocus(true);
-        viewport.setViewedComponent(&list, false);
-        viewport.getProperties().set("controlViewportClip", true);
-        viewport.setScrollBarsShown(false, false);
-        viewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
-        list.setInterceptsMouseClicks(false,true);
-        panel.setOpaque(false);
-        panel.addAndMakeVisible(viewport);
-        addAndMakeVisible(panel);
-        createRows(items);
 
+    struct Actions
+    {
+        std::function<std::vector<ModuleListItem>()> readChain;
+        std::function<void(const Order&)> reorder;
+        std::function<void(int, size_t)> insert;
+        std::function<void(int, bool permanently)> remove;
+    };
+
+    ModuleList(Actions actionsIn, juce::AudioProcessorValueTreeState& state)
+        : actions(std::move(actionsIn)), viewState(state.state),
+          catalogOrder(shell_editor_ui::inactiveModulesOrder(viewState))
+    {
+        getProperties().set("disableDockSelection", true);
+        inactiveBlock.bindCollapseState(state, "shell.instance.modules");
+        activeBlock.bindCollapseState(state, "shell.instance.modules");
+        addAndMakeVisible(inactiveBlock);
+        catalogRow.attach("modules-inactive");
+        addAndMakeVisible(activeBlock);
+        chainRow.attach("modules-active");
+        for (const auto& type : module_order::descriptions)
+            catalogTiles[size_t(type.id)] = makeTile(type.id, type.name, true);
+        refreshItemsIfChanged();
     }
-    ~ModuleList() override {
+
+    ~ModuleList() override
+    {
         if (dragging) juce::Component::beginDragAutoRepeat(0);
     }
 
-    // The arrangement is a real list of processor instances, not a permutation
-    // of a fixed set of module types. Duplicate UIDs remain stable across reordering.
-    void createRows(const std::vector<ModuleListItem>& items)
+    void refreshItemsIfChanged(bool force = false)
     {
-        rows.clear();
-        for (const auto& item : items)
+        if (dragging) return;
+        const auto savedCatalogOrder = shell_editor_ui::inactiveModulesOrder(viewState);
+        if (savedCatalogOrder != catalogOrder)
         {
-            auto row = std::make_unique<Row>(*this, item);
-            list.addAndMakeVisible(*row);
-            rows.emplace(item.id,std::move(row));
+            catalogOrder = savedCatalogOrder;
+            layoutCatalog();
         }
-        resized();
-    }
-    void setInstanceActions(std::function<int(int)> addIn,
-                            std::function<bool(int)> delIn,
-                            std::function<void(int)> toggleIn,
-                            std::function<void(int)> selectIn,
-                            std::function<std::vector<ModuleListItem>()> sourceIn)
-    {
-        addAction=std::move(addIn);deleteAction=std::move(delIn);
-        toggleAction=std::move(toggleIn);selectAction=std::move(selectIn);
-        reloadItems=std::move(sourceIn);
-    }
-    void doAdd(int uid) {
-        if (!addAction) return;
-        const int createdUid = addAction(uid);
-        if (createdUid >= 0) {
-            queueReload();
-        } else {
-            // A rejected ADD must never look like a click that did nothing.
-            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-                "AVA", "ADD could not create a module instance.");
-        }
-    }
-    void doDelete(int uid) {
-        if (deleteAction && deleteAction(uid)) queueReload();
-    }
-    void doToggle(int uid)
-    {
-        if (!toggleAction) return;
-        toggleAction(uid);
-        if (!reloadItems) { queueReload(); return; }
-
-        // Only the shown state changes on a normal click. Updating its existing
-        // tile avoids destroying/recreating the entire MODULES grid mid-click.
-        const auto items = reloadItems();
-        if (items.size() != order.size()) { queueReload(); return; }
-        for (size_t index = 0; index < items.size(); ++index)
+        auto items = actions.readChain();
+        if (!force && items == chainItems) return;
+        chainItems = std::move(items);
+        chainTiles.clear();
+        order.clear();
+        for (const auto& item : chainItems)
         {
-            const auto& item = items[index];
-            const auto it = rows.find(item.id);
-            if (it == rows.end() || order[index] != item.id
-                || it->second->serial != item.serial || it->second->text != item.name
-                || it->second->canDelete != item.canDelete)
-            {
-                queueReload();
-                return;
-            }
+            order.push_back(item.id);
+            auto tile = makeTile(item.id, item.name, false);
+            chainTiles.push_back(std::move(tile));
         }
-        bool changed = false;
-        for (const auto& item : items)
-        {
-            auto& row = *rows.at(item.id);
-            if (row.localEnabled == item.enabled) continue;
-            row.localEnabled = item.enabled;
-            row.control.setRestingState(item.enabled);
-            changed = true;
-        }
-        if (changed && layoutChanged)
-            juce::MessageManager::callAsync([safe = juce::Component::SafePointer<ModuleList>(this)]
-            {
-                if (safe != nullptr && safe->layoutChanged) safe->layoutChanged();
-            });
-    }
-    void doSelect(int uid) { if(selectAction) selectAction(uid); }
-    void refreshItemsIfChanged()
-    {
-        if (dragging || reloadQueued || !reloadItems) return;
-        const auto items = reloadItems();
-        if (items.size() != order.size()) { queueReload(); return; }
-        for (size_t index = 0; index < items.size(); ++index)
-        {
-            const auto it = rows.find(items[index].id);
-            if (it == rows.end() || order[index] != items[index].id
-                || it->second->serial != items[index].serial
-                || it->second->localEnabled != items[index].enabled
-                || it->second->canDelete != items[index].canDelete)
-            {
-                queueReload();
-                return;
-            }
-        }
-    }
-    void queueReload()
-    {
-        if (reloadQueued) return;
-        reloadQueued = true;
-        juce::MessageManager::callAsync([safe=juce::Component::SafePointer<ModuleList>(this)] {
-            if (safe == nullptr) return;
-            safe->reloadQueued = false;
-            if (!safe->reloadItems) return;
-            const auto items=safe->reloadItems();
-            safe->order.clear();
-            for(const auto& item:items)safe->order.push_back(item.id);
-            safe->committed=safe->order;
-            safe->createRows(items);
-            if (safe->layoutChanged)
-                safe->layoutChanged();
-        });
+        layoutChain();
     }
 
-    void setLayoutChanged(std::function<void()> callback)
+    int getContentHeight() const
     {
-        layoutChanged = std::move(callback);
+        const auto gap = getUiGap(*this);
+        const auto body = getSquareControlSize(*this) + 2 * (controlBlockPadding + controlBlockFrameThickness);
+        return 2 * controlBlockHeaderHeight + gap
+            + (inactiveBlock.isBlockCollapsed("MODULES INACTIVE") ? 0 : body)
+            + (activeBlock.isBlockCollapsed("MODULES ACTIVE") ? 0 : body);
     }
-    int getContentHeight(int width) const noexcept
-    {
-        const int size = getSquareControlSize(*this), gap = getUiGap(*this);
-        const int columnsForWidth = juce::jmax(1,
-            (width - 2 * (controlBlockPadding + controlBlockFrameThickness) + gap) / (size + gap));
-        const int rowCount = (int(order.size()) + columnsForWidth - 1) / columnsForWidth;
-        if (rowCount == 0) return 0;
-        return gap + rowCount * size + (rowCount - 1) * getUiRowGap(*this)
-            + gap + controlBlockFrameThickness;
-    }
+
     void resized() override
     {
-        const auto gap = getUiGap(*this), size = getSquareControlSize(*this);
-        const auto width = getWidth();
-        if (width <= 0) return;
-        panel.setBounds(getLocalBounds());
-        viewport.setBounds(panel.getLocalBounds());
-        const auto padding = controlBlockPadding + controlBlockFrameThickness;
-        columns = juce::jmax(1, (width - 2 * padding + gap) / (size + gap));
-        contentTopInset = gap;
-        list.setSize(width, juce::jmax(getHeight(), getContentHeight(width)));
-        layoutRows();
-        viewport.setViewPosition(0, 0);
-    }
-    void forwardWheel(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
-    {
-        // Scrolling within the inline MODULES block scrolls ALL, not a hidden
-        // second viewport whose content is already fully expanded.
-        for (auto* parent = getParentComponent(); parent != nullptr; parent = parent->getParentComponent())
-            if (auto* outer = dynamic_cast<UiScrollViewport*>(parent))
-            {
-                outer->mouseWheelMove(event.getEventRelativeTo(outer), wheel);
-                return;
-            }
-    }
-    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
-    {
-        forwardWheel(event, wheel);
+        layoutCatalog();
+        layoutChain();
     }
 
 private:
-    juce::Component panel;
-    struct Row final : juce::Component {
-        Row(ModuleList& ownerIn, const ModuleListItem& item)
-            : owner(ownerIn), id(item.id), text(item.name), control(juce::String()),
-              serial(item.serial), localEnabled(item.enabled), canDelete(item.canDelete)
+    std::unique_ptr<BoxTextButton> makeTile(int id, const juce::String& name, bool fromCatalog)
+    {
+        auto tile = std::make_unique<BoxTextButton>();
+        tile->setButtonText(name);
+        tile->setTextJustification(juce::Justification::centred);
+        tile->setDragRequiresControl(false);
+        if (fromCatalog) tile->setClickOnRelease(BoxTextButton::ClickOnRelease::none);
+        tile->setComponentID(juce::String(fromCatalog ? "module-type-" : "module-slot-") + juce::String(id));
+        if (!fromCatalog)
         {
-            setName(text);
-            control.setBottomIndicatorsVisible(false, false);
-            // A module tile is a persistent toggle: its marker must not jump to ON
-            // during mouseDown and back before the actual toggle on mouseUp.
-            control.setPressFeedbackEnabled(false);
-            control.setComponentID("module-slot-" + juce::String(id));
-            control.onTrigger = [this] {
-                const auto point = control.getMouseXYRelative();
-                if (control.getBottomTextZone(control.getLocalBounds(), 0, 2).contains(point)
-                    || control.getBottomTextZone(control.getLocalBounds(), 1, 2).contains(point))
-                    return;
-                owner.doToggle(id);
+            tile->getProperties().set("preserveCtrlClick", true);
+            tile->onModifiedClick = [this, id](juce::ModifierKeys modifiers)
+            {
+                if (!modifiers.isCtrlDown() || modifiers.isShiftDown() || modifiers.isAltDown()
+                    || modifiers.isCommandDown()) return;
+                juce::MessageManager::callAsync([safe = juce::Component::SafePointer<ModuleList>(this), id]
+                {
+                    if (safe == nullptr) return;
+                    const auto remove = safe->actions.remove;
+                    remove(id, true);
+                    if (safe != nullptr) safe->refreshItemsIfChanged();
+                });
             };
-            control.setDragAction([this](const juce::MouseEvent& event, bool released) {
-                if (pressedAction >= 0) return;
-                if (released) {
-                    if (owner.dragging) owner.drop();
-                    return;
-                }
-                if (!owner.dragging) {
-                    owner.dragging = true;
-                    owner.dragged = id;
-                    owner.setDragCursor(true);
-                }
-                owner.drag(event);
-            }, [this] {
-                if (owner.dragging) owner.drop();
-            });
-            // Retain the ordinary ParameterField bottom-action components,
-            // including their exact paint, hover and disabled states.  The
-            // MODULES row is also a drag target, so route its bottom-strip
-            // clicks explicitly instead of allowing the ValueBox to treat
-            // them as selecting or dragging the whole module.
-            control.setBottomActions({
-                { "ADD", {}, {} },
-                { "DEL", {}, {} }
-            });
-            control.setBottomActionEnabled("DEL", canDelete);
-            addAndMakeVisible(control);
-            control.addMouseListener(this, true);
-            control.setRestingState(isModuleEnabled());
-            updateTitle();
         }
-        ~Row() override { control.removeMouseListener(this); }
-        bool isModuleEnabled() const noexcept { return localEnabled; }
-        void updateTitle() {
-            control.setTitleText(juce::String(ordinal).paddedLeft('0', 2)
-                + " (" + juce::String(serial).paddedLeft('0', 2) + ")\n" + text);
-        }
-        // Events from BOTH the parent ValueBox and the embedded JUCE buttons
-        // reach this listener.  This is required because the row uses the
-        // same ValueBox for module selection and drag/reorder gestures.
-        int actionAt(const juce::MouseEvent& event)
+        tile->onControlDragStarted = [this, button = tile.get()]
         {
-            const auto point = event.getEventRelativeTo(&control).getPosition();
-            for (int action = 0; action < 2; ++action)
-                if (control.getBottomTextZone(control.getLocalBounds(), action, 2).contains(point))
-                    return action;
-            return -1;
-        }
-        void mouseDown(const juce::MouseEvent& event) override
+            dragging = true;
+            button->getProperties().set("routing.instance.dragging", true);
+            button->repaint();
+            juce::Component::beginDragAutoRepeat(40);
+        };
+        tile->onControlDrag = [this, id, fromCatalog, button = tile.get()](const juce::MouseEvent& event, bool released)
         {
-            // Ctrl+click marks the tile; it must not activate ADD/DEL.
-            pressedAction = event.mods.isLeftButtonDown()
-                && !event.mods.isCtrlDown()
-                ? actionAt(event) : -1;
-        }
-        void mouseUp(const juce::MouseEvent& event) override
-        {
-            const int action = std::exchange(pressedAction, -1);
-            if (owner.dragging || event.mods.isCtrlDown()
-                || action < 0 || actionAt(event) != action)
-                return;
-            if (action == 0) owner.doAdd(id);
-            else if (canDelete) owner.doDelete(id);
-        }
-        void resized() override {
-            control.setBounds(getLocalBounds());
-        }
-        void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override {
-            owner.forwardWheel(event, wheel);
-        }
-        ModuleList& owner;
-        Id id;
-        juce::String text;
-        PushControl control;
-        int serial=1;
-        bool localEnabled=true;
-        bool canDelete=false;
-        int pressedAction=-1;
-        int ordinal = 1;
-    };
-    int rowLeft(int row) const {
-        return rows.at(order[size_t(row * columns)])->getX();
+            handleDrag(id, fromCatalog, *button, event, released);
+        };
+        return tile;
     }
-    void layoutRows() {
-        const auto padding = controlBlockPadding + controlBlockFrameThickness;
-        std::vector<ControlGridCell> cells;
-        cells.reserve(order.size());
-        for(size_t i=0;i<order.size();++i) {
-            auto& row = *rows.at(order[i]);
-            row.ordinal = int(i) + 1;
-            row.updateTitle();
-            cells.push_back({&row});
-            row.repaint();
-        }
-        layoutControlGrid(*this, {padding, contentTopInset, list.getWidth() - 2 * padding,
-                                  list.getHeight() - contentTopInset}, cells);
-        list.repaint();
-    }
-    void drag(const juce::MouseEvent& event) {
-        if(!dragging || order.empty()) return;
-        const auto local = event.getEventRelativeTo(&viewport).getPosition();
-        viewport.autoScroll(local.x, local.y, getUiGap(*this) * 2, getUiGap(*this));
-        const auto position = event.getEventRelativeTo(&list).getPosition();
-        const auto gap = getUiGap(*this), step = getSquareControlSize(*this) + gap;
-        const auto row = juce::jlimit(0, (int(order.size()) - 1) / columns, (position.y - contentTopInset) / (getSquareControlSize(*this) + getUiRowGap(*this)));
-        const auto column = juce::jlimit(0, columns - 1, (position.x - rowLeft(row)) / step);
-        const auto target = size_t(juce::jlimit(0, int(order.size()) - 1, row * columns + column));
-        auto from=size_t(std::find(order.begin(),order.end(),dragged)-order.begin());
-        if(from==target) return;
-        const auto id=order[from];
-        if(from<target) std::move(order.begin()+std::ptrdiff_t(from+1),order.begin()+std::ptrdiff_t(target+1),order.begin()+std::ptrdiff_t(from));
-        else std::move_backward(order.begin()+std::ptrdiff_t(target),order.begin()+std::ptrdiff_t(from),order.begin()+std::ptrdiff_t(from+1));
-        order[target]=id;
-        layoutRows();
-    }
-    void setDragCursor(bool active) {
-        const auto cursor=active?juce::MouseCursor::DraggingHandCursor:juce::MouseCursor::NormalCursor;
-        setMouseCursor(cursor);
-        for(auto& [uid,row]:rows) { juce::ignoreUnused(uid); row->setMouseCursor(cursor); }
-    }
-    void drop() {
-        if(!dragging || order.empty()) return;
-        dragging=false;
-        juce::Component::beginDragAutoRepeat(0);
-        setDragCursor(false);
-        if(order!=committed) {
-            committed=order;
-            if(commit) commit(order);
-        }
-        for (auto& [uid,row] : rows) { juce::ignoreUnused(uid); row->repaint(); }
-        list.repaint();
-    }
-    juce::Component list;
-    struct RowViewport final : juce::Viewport {
-        explicit RowViewport(ModuleList& ownerIn) : owner(ownerIn) {}
-        void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override {
-            owner.forwardWheel(event, wheel);
-        }
-        ModuleList& owner;
-    } viewport { *this };
-    int columns = 1, contentTopInset = 0;
-    std::map<Id,std::unique_ptr<Row>> rows;
-    Order order,committed;
-    Id dragged=Id(0);
-    Change commit;
-    std::function<int(int)> addAction;
-    std::function<bool(int)> deleteAction;
-    std::function<void(int)> toggleAction,selectAction;
-    std::function<std::vector<ModuleListItem>()> reloadItems;
-    bool dragging = false;
-    bool reloadQueued = false;
-    std::function<void()> layoutChanged;
-};
 
+    void layoutCatalog()
+    {
+        std::array<juce::Component*, module_order::descriptions.size()> tiles {};
+        for (size_t index = 0; index < catalogOrder.size(); ++index)
+            tiles[index] = catalogTiles[size_t(catalogOrder[index])].get();
+        catalogRow.layout({0, 0, getWidth(), controlBlockHeaderHeight}, tiles);
+    }
+
+    void layoutChain()
+    {
+        std::vector<juce::Component*> tiles;
+        for (size_t index = 0; index < order.size(); ++index)
+        {
+            const auto item = std::find_if(chainItems.begin(), chainItems.end(), [uid = order[index]](const auto& entry)
+            {
+                return entry.id == uid;
+            });
+            auto& tile = *chainTiles[index];
+            tile.setButtonText(item->serial == 0 ? item->name
+                : item->name + "\n" + juce::String(item->serial).paddedLeft('0', 2));
+            tiles.push_back(&tile);
+        }
+        if (insertion)
+            tiles.insert(tiles.begin() + std::ptrdiff_t(*insertion), nullptr);
+        else if (tiles.empty())
+            tiles.push_back(nullptr);
+        chainRow.layout({0, inactiveBlock.getBottom() + getUiGap(*this), getWidth(),
+                         controlBlockHeaderHeight}, tiles);
+    }
+
+    void handleDrag(int id, bool fromCatalog, BoxTextButton& button, const juce::MouseEvent& event, bool released)
+    {
+        if (!dragging) return;
+        auto& chainViewport = chainRow.viewport;
+        auto& catalogViewport = catalogRow.viewport;
+        const auto point = chainViewport.getLocalPoint(event.eventComponent, event.getPosition());
+        const bool overChain = chainViewport.isShowing() && chainViewport.getLocalBounds().contains(point);
+        const auto catalogPoint = catalogViewport.getLocalPoint(event.eventComponent, event.getPosition());
+        const bool overCatalog = catalogViewport.isShowing() && catalogViewport.getLocalBounds().contains(catalogPoint);
+        const auto side = getSquareControlSize(*this);
+        const auto gap = getUiGap(*this);
+        if (overChain && !released)
+            chainViewport.autoScroll(point.x, point.y, 2 * gap, gap);
+        const auto index = (point.x + chainViewport.getViewPositionX() + side / 2) / (side + gap);
+        if (!released)
+        {
+            if (fromCatalog)
+            {
+                if (overCatalog)
+                {
+                    catalogViewport.autoScroll(catalogPoint.x, catalogPoint.y, 2 * gap, gap);
+                    const auto from = int(std::find(catalogOrder.begin(), catalogOrder.end(), id) - catalogOrder.begin());
+                    const auto slot = (catalogPoint.x + catalogViewport.getViewPositionX() + gap / 2) / (side + gap);
+                    const auto to = juce::jlimit(0, int(catalogOrder.size()) - 1, slot);
+                    if (ava::pinned_routing::moveToIndex(catalogOrder, from, to)) layoutCatalog();
+                }
+                const auto target = overChain ? std::optional<size_t>(juce::jlimit(0, int(order.size()), index)) : std::nullopt;
+                if (insertion == target) return;
+                insertion = target;
+            }
+            else if (overChain)
+            {
+                const auto from = int(std::find(order.begin(), order.end(), id) - order.begin());
+                const auto to = juce::jlimit(0, int(order.size()) - 1, index);
+                if (!ava::pinned_routing::moveToIndex(order, from, to)) return;
+                ava::pinned_routing::moveToIndex(chainTiles, from, to);
+            }
+            else return;
+            layoutChain();
+            return;
+        }
+
+        const auto next = order;
+        const auto dropIndex = size_t(juce::jlimit(0, int(order.size()), index));
+        if (fromCatalog && overCatalog && catalogOrder != shell_editor_ui::inactiveModulesOrder(viewState))
+            viewState.setProperty(shell_editor_ui::inactiveModulesOrderKey, module_order::serialise(catalogOrder), nullptr);
+        if (insertion)
+        {
+            insertion.reset();
+            layoutChain();
+        }
+        button.getProperties().set("routing.instance.dragging", false);
+        button.repaint();
+        juce::Component::beginDragAutoRepeat(0);
+        // The tile under the pointer may be removed by this action after mouseUp.
+        juce::MessageManager::callAsync([safe = juce::Component::SafePointer<ModuleList>(this),
+                                       id, fromCatalog, overChain, overCatalog, dropIndex, next]
+        {
+            if (safe == nullptr) return;
+            const auto callbacks = safe->actions;
+            if (fromCatalog && overChain) callbacks.insert(id, dropIndex);
+            else if (!fromCatalog && overCatalog) callbacks.remove(id, false);
+            else if (!fromCatalog && overChain) callbacks.reorder(next);
+            if (safe == nullptr) return;
+            safe->dragging = false;
+            safe->refreshItemsIfChanged(!fromCatalog);
+        });
+    }
+
+    const Actions actions;
+    juce::ValueTree& viewState;
+    module_order::CatalogOrder catalogOrder;
+    BackgroundClickComponent inactiveBlock, activeBlock;
+    HeaderControlRow catalogRow {inactiveBlock, "MODULES INACTIVE"};
+    HeaderControlRow chainRow {activeBlock, "MODULES ACTIVE"};
+    std::vector<std::unique_ptr<BoxTextButton>> chainTiles;
+    std::array<std::unique_ptr<BoxTextButton>, module_order::descriptions.size()> catalogTiles;
+    std::vector<ModuleListItem> chainItems;
+    Order order;
+    std::optional<size_t> insertion;
+    bool dragging = false;
+};

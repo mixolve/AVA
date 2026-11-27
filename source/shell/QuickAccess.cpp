@@ -403,12 +403,8 @@ void AvaAudioProcessorEditor::layoutQuickAccessStrip()
     const auto gap = getUiGap(*this);
     const auto configuredCount = shell_editor_ui::dockControlCount(getRootWindowState());
     const bool showDock = configuredCount > 0;
-    for (juce::Component* component : std::array<juce::Component*, 4>{
-             &quickAccessStrip, &dockSortToggle, &dockCollapseToggle, &dockVerticalToggle})
-        component->setVisible(showDock);
-    dockSortOverlay.setVisible(showDock && dockSortToggle.getToggleState());
     const auto side = getSquareControlSize(*this);
-    const auto toggleSize = RangeIndicator::bottomControlSize(*this, {0, 0, side, side});
+    constexpr auto toggleSize = unitIndicatorSize;
     if (!showDock)
     {
         // The content viewport uses the strip's top edge as its lower bound.
@@ -430,7 +426,7 @@ void AvaAudioProcessorEditor::layoutQuickAccessStrip()
         return vertical ? juce::Rectangle<int>(layoutHeight - r.getBottom(), r.getX(), r.getHeight(), r.getWidth()) : r;
     };
     // Reserve the configured slots in a collapsed dock, even when fewer are pinned.
-    const auto count = isDockOnly() ? configuredCount : viewportControlColumns;
+    const auto count = isDockOnly() ? configuredCount : shell_editor_ui::editorColumns(getRootWindowState());
     const auto visibleLength = count * side + (count - 1) * gap;
     const auto expandedStripX = 2 * (gap + controlBlockFrameThickness);
     const auto stripX = vertical ? gap : (isDockOnly() ? 0 : expandedStripX);
@@ -441,7 +437,8 @@ void AvaAudioProcessorEditor::layoutQuickAccessStrip()
         ? dockBounds.getRight() + gap
         : layoutWidth - gap - toggleSize;
     quickAccessStrip.setBounds(rotate(strip));
-    quickAccessViewport.setBounds(rotate(dockBounds).translated(-quickAccessStrip.getX(), -quickAccessStrip.getY()));
+    const auto viewportBounds = rotate(dockBounds);
+    quickAccessViewport.setBounds(viewportBounds.translated(-quickAccessStrip.getX(), -quickAccessStrip.getY()));
     const auto serviceGap = juce::jmax(0, (dockBounds.getHeight() - 5 * toggleSize) / 3);
     const auto firstY = dockBounds.getY();
     dockClipIndicator.setBounds(rotate({rightButtonsX,
@@ -678,6 +675,7 @@ void AvaAudioProcessorEditor::refreshQuickAccessControls()
         {
             auto control = std::make_unique<LocalChoiceControl>(local->getTitleText(),
                 local->getChoiceItems(), local->getSelectedChoiceIndex());
+            control->setAlwaysUseChoiceList(local->usesChoiceListWithTwoOptions());
             auto safe = juce::Component::SafePointer<juce::Component>(source);
             auto* proxy = control.get();
             control->onValueChanged = [safe, proxy]
@@ -1027,11 +1025,12 @@ void AvaAudioProcessorEditor::setDockOnly(bool dockOnly)
         root->expandedHeightBeforeDock = root->getHeight();
         root->storeEditorStateToValueTree();
     }
+    const auto expandedWidth = getExpandedEditorWidth(shell_editor_ui::editorColumns(root->getRootWindowState()));
     const auto savedHeight = root->expandedHeightBeforeDock > 0
         ? root->expandedHeightBeforeDock
         : int(root->getRootWindowState().getProperty(
-            AvaAudioProcessor::editorHeightStateKey, getExpandedEditorWidth()));
-    const auto expandedHeight = juce::jlimit(getExpandedEditorWidth(), maximumEditorHeight, savedHeight);
+            AvaAudioProcessor::editorHeightStateKey, expandedWidth));
+    const auto expandedHeight = juce::jlimit(expandedWidth, maximumEditorHeight, savedHeight);
 
     dismissTextPrompt();
     if (root != this) root->dismissTextPrompt();

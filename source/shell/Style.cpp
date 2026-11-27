@@ -53,18 +53,22 @@ int getDockLength(const bool vertical, const int controls) noexcept
 int getEditorWidth(const juce::Component& component) noexcept
 {
     if (const auto* editor = dynamic_cast<const AvaAudioProcessorEditor*>(&component))
+    {
+        const auto& state = editor->getRootWindowState();
         if (editor->isDockOnly())
-            return bool(editor->getRootWindowState().getProperty(shell_editor_ui::key("dock_vertical"), false))
-                ? squareControlSize + 2 * uiGap : getDockLength(false, shell_editor_ui::dockControlCount(editor->getRootWindowState()));
+            return bool(state.getProperty(shell_editor_ui::key("dock_vertical"), false))
+                ? squareControlSize + 2 * uiGap : getDockLength(false, shell_editor_ui::dockControlCount(state));
+        return getExpandedEditorWidth(shell_editor_ui::editorColumns(state));
+    }
     return getExpandedEditorWidth();
 }
 
-int getExpandedEditorWidth() noexcept
+int getExpandedEditorWidth(int columns) noexcept
 {
     return editorScrollBarArea + 2 * uiGap
-        + viewportControlColumns * squareControlSize + (viewportControlColumns - 1) * uiGap
+        + columns * squareControlSize + (columns - 1) * uiGap
         + 2 * (controlBlockPadding + controlBlockFrameThickness)
-        // The white INSTANCE frame contains dark six-column sections. Reserve
+        // The white INSTANCE frame contains dark control sections. Reserve
         // a real standard gap on both sides instead of shrinking their paint.
         + 2 * (uiGap + controlBlockFrameThickness);
 
@@ -196,16 +200,11 @@ juce::Rectangle<int> getModuleBlockFrameBounds(juce::Rectangle<int> blocks) noex
     return frame;
 }
 
-void paintControlBlockFrame(juce::Graphics& graphics, juce::Rectangle<int> bounds, const juce::String& title,
-                            juce::Colour colour, bool hovered, bool collapsed, bool centreInkVertically)
+namespace
 {
-    if (bounds.isEmpty()) return;
-    const auto header = bounds.withHeight(controlBlockHeaderHeight);
-    const auto effectiveColour = hovered ? uiGreyLight
-        : (colour == uiWhite ? uiWhite : uiGreyDark);
-    graphics.setColour(effectiveColour);
-    graphics.fillRect(header);
-    graphics.setColour(effectiveColour == uiGreyDark ? uiWhite : juce::Colour(0xff222222));
+juce::Path makeControlBlockTitlePath(juce::Rectangle<int> header, const juce::String& title,
+                                     bool centreInkVertically)
+{
     // Every section header (UNIT, INSTANCE, nested blocks, module blocks)
     // must share one optical baseline. Centring each caption by its own ink
     // bounds shifts uppercase letters when a title contains digits, brackets,
@@ -242,8 +241,31 @@ void paintControlBlockFrame(juce::Graphics& graphics, juce::Rectangle<int> bound
         const auto x = textArea.getCentreX() - inkBounds.getCentreX() * scale;
         const auto verticalCentre = centreInkVertically ? inkBounds.getCentreY() : capCentreY;
         const auto y = textArea.getCentreY() - verticalCentre * scale;
-        graphics.fillPath(ink, juce::AffineTransform::scale(scale).translated(x, y));
+        ink.applyTransform(juce::AffineTransform::scale(scale).translated(x, y));
+        return ink;
     }
+    return {};
+}
+}
+
+juce::Rectangle<int> getControlBlockTitleZone(juce::Rectangle<int> header, const juce::String& title)
+{
+    const auto ink = makeControlBlockTitlePath(header, title, false).getBounds().getSmallestIntegerContainer();
+    return ink.isEmpty() ? juce::Rectangle<int>{}
+                         : juce::Rectangle<int>(ink.getX(), header.getY(), ink.getWidth(), header.getHeight());
+}
+
+void paintControlBlockFrame(juce::Graphics& graphics, juce::Rectangle<int> bounds, const juce::String& title,
+                            juce::Colour colour, bool hovered, bool collapsed, bool centreInkVertically)
+{
+    if (bounds.isEmpty()) return;
+    const auto header = bounds.withHeight(controlBlockHeaderHeight);
+    const auto effectiveColour = hovered ? uiGreyLight
+        : (colour == uiWhite ? uiWhite : uiGreyDark);
+    graphics.setColour(effectiveColour);
+    graphics.fillRect(header);
+    graphics.setColour(effectiveColour == uiGreyDark ? uiWhite : juce::Colour(0xff222222));
+    graphics.fillPath(makeControlBlockTitlePath(header, title, centreInkVertically));
     if (collapsed) return;
     const auto thickness = juce::jmin(controlBlockFrameThickness, juce::jmin(bounds.getWidth(), bounds.getHeight()));
     graphics.setColour(effectiveColour);
@@ -294,13 +316,6 @@ bool isHoverInversionReady(juce::Component& component, const bool hovering, cons
             });
     }
     return bool(properties.getWithDefault(shown, false));
-}
-
-int getPinnedRoutingTileHeight(const juce::Component& component) noexcept
-{
-    const auto size = getSquareControlSize(component);
-    return standardControlTextZoneHeight + 2 * controlEdgeInset + controlInnerGap
-        + RangeIndicator::bottomControlSize(component, {0, 0, size, size});
 }
 
 juce::Rectangle<int> getControlTextBounds(const juce::Component& component, juce::Rectangle<int> bounds) noexcept

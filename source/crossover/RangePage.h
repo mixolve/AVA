@@ -11,6 +11,8 @@
 #include <memory>
 #include <vector>
 
+class HeaderControlRow;
+
 class CrossoverRangePage final : public CrossoverModulePage,
                                  private juce::AudioProcessorValueTreeState::Listener,
                                  private juce::AsyncUpdater
@@ -83,6 +85,8 @@ private:
     struct ParameterGroup final : public RowBase
     {
         ParameterGroup(juce::String name, std::vector<std::unique_ptr<RowBase>> membersIn);
+        ~ParameterGroup() override;
+        void enableHorizontalLayout();
         int getLayoutHeight(int width) const override;
         int getPreferredHeight() const override;
         int getTopGap() const noexcept override;
@@ -91,6 +95,7 @@ private:
         void refreshExternalState() override;
         void resized() override;
         std::vector<std::unique_ptr<RowBase>> members;
+        std::unique_ptr<HeaderControlRow> horizontalRow;
     };
 
     struct ParameterRow final : public RowBase
@@ -211,5 +216,6 @@ private:
     size_t rangeIndex = 0;
     std::vector<std::unique_ptr<RowBase>> rows;
     ava::modules::chain::gain::Order displayedGainOrder = ava::modules::chain::gain::defaultOrder;
+    std::unique_ptr<HeaderControlRow> dynRow;
     std::vector<juce::String> listenedParameterIds;
 };

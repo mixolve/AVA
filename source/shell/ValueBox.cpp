@@ -80,6 +80,7 @@ void ValueBoxComponent::enablementChanged()
         directIndicator->end();
         pointerDown = false;
         cancelMomentaryPress();
+        setPressPreviewPosition(-1.0);
         setTextInputActive(false);
         valueVisible = false;
         valueTransitionAt = 0.0;
@@ -114,6 +115,8 @@ void ValueBoxComponent::setInteractionEnabled(const bool shouldEnable)
     if (!interactionEnabled)
     {
         cancelMomentaryPress();
+        pointerDown = false;
+        setPressPreviewPosition(-1.0);
         directIndicator->end();
         valueVisible = false;
         valueTransitionAt = 0.0;
@@ -138,6 +141,7 @@ void ValueBoxComponent::setTextInputActive(const bool shouldBeActive)
     if (! shouldBeActive)
     {
         pointerDown = false;
+        setPressPreviewPosition(-1.0);
         valueVisible = interactionEnabled && isEnabled() && pointerOnValue();
         valueTransitionAt = 0.0;
         if (valueVisible) startTimer(10);
@@ -151,7 +155,11 @@ void ValueBoxComponent::setDiscreteChoiceIndicator(int count, int selected)
 {
     count = juce::jmax(0, count);
     if (discreteChoiceCount == count && discreteChoiceIndex == selected) return;
-    if (discreteChoiceCount != count) directIndicator->end();
+    if (discreteChoiceCount != count)
+    {
+        directIndicator->end();
+        setPressPreviewPosition(-1.0);
+    }
     discreteChoiceCount = count;
     discreteChoiceIndex = selected;
     repaintValueOverlay(*this);
@@ -166,10 +174,15 @@ void ValueBoxComponent::setIdleTextProvider(std::function<juce::String()> provid
     repaint();
 }
 
+double ValueBoxComponent::getVisualPosition() const
+{
+    return pressPreviewPosition >= 0.0 ? pressPreviewPosition : directIndicator->visualPosition();
+}
+
 double ValueBoxComponent::getDisplayedValue() const
 {
     auto& source = slider;
-    const auto position = directIndicator->visualPosition();
+    const auto position = getVisualPosition();
     if (position >= 0.0 && choiceCount() > 0)
         return RangeIndicator::discreteValueAt(source, position, choiceCount());
     return position >= 0.0 ? source.getNormalisableRange().snapToLegalValue(RangeIndicator::valueAt(source, position))
@@ -195,7 +208,7 @@ void ValueBoxComponent::timerCallback()
 {
     const auto now = juce::Time::getMillisecondCounterHiRes();
     const auto showValue = interactionEnabled && isEnabled()
-        && (pointerOnValue() || momentaryPressed || directIndicator->isDragging() || textInputActive);
+        && (pointerOnValue() || pressPreviewPosition >= 0.0 || momentaryPressed || directIndicator->isDragging() || textInputActive);
     if (showValue)
     {
         if (valueVisible) { valueTransitionAt = 0.0; return; }
@@ -271,35 +284,9 @@ void ValueBoxComponent::paintOverChildren(juce::Graphics& g)
         && (numericControlEnabled || choiceCount() > 0) && !textInputActive)
     {
         const auto rail = RangeIndicator::potentiometerBounds(*this, getValueBounds());
-        const auto visual = directIndicator->visualPosition();
-        const auto position = visual >= 0.0 ? visual : RangeIndicator::rangePosition(slider);
-        const auto marker = RangeIndicator::continuousMarker(rail, position);
+        const auto visual = getVisualPosition();
         const bool enabled = interactionEnabled && isEnabled();
-        const bool selected = isManualControlSelected(*this);
         RangeIndicator::paint(g, rail, slider, enabled ? uiIndicatorActive : uiIndicatorDisabled, visual, this);
-        const bool interacting = directIndicator->isDragging();
-        const bool hovered = enabled && (interacting ? directIndicator->startedDragOnMarker()
-            : isMouseHovering(*this, marker.getSmallestIntegerContainer()));
-        if (selected)
-        {
-            if (isHoverInversionReady(*this, hovered, "value.top"))
-            {
-                g.setColour(juce::Colour(0xff666666));
-                g.fillRect(marker);
-                g.setColour(uiWhite);
-                g.drawRect(marker, 1.0f);
-            }
-        }
-        else if (interacting)
-        {
-            if (isHoverInversionReady(*this, hovered, "value.top"))
-            {
-                g.setColour(juce::Colour(0xff666666));
-                g.fillRect(marker);
-            }
-        }
-        else
-            RangeIndicator::paintHover(g, *this, *this, marker, enabled, false, "value.top");
     }
     const auto fittedText = bool(getProperties().getWithDefault("fittedText", false));
     const auto textBounds = getControlTextBounds(*this, getValueBounds());
@@ -309,14 +296,14 @@ void ValueBoxComponent::paintOverChildren(juce::Graphics& g)
     const auto compactButton = getHeight() <= getCompactControlSize(*this) + 2
         && getWidth() <= getCompactControlSize(*this) + 2;
     const auto compactOn = compactButton && momentaryAction == nullptr
-        && (selectionHighlighted || (choiceCount() == 2 && getDisplayedValue() >= 0.5));
+        && (selectionHighlighted || (isBinaryToggle() && getDisplayedValue() >= 0.5));
     const auto arrangementDragging = getParentComponent() != nullptr
         && bool(getParentComponent()->getProperties().getWithDefault("arrangementDragging", false));
-    paintControlTextButton(g, textBounds, interactionEnabled && isEnabled() && (valueVisible || dragTargetHighlighted), textInputActive || (interactionEnabled && isEnabled() && compactOn), arrangementDragging || (interactionEnabled && isEnabled() && momentaryPressed && momentaryPressFeedbackEnabled), interactionEnabled && isEnabled() ? juce::Colour(juce::uint32(juce::int64(base))) : uiIndicatorDisabled);
+    paintControlTextButton(g, textBounds, interactionEnabled && isEnabled() && (valueVisible || dragTargetHighlighted), textInputActive || (interactionEnabled && isEnabled() && compactOn), arrangementDragging || (interactionEnabled && isEnabled() && pressPreviewPosition >= 0.0), interactionEnabled && isEnabled() ? juce::Colour(juce::uint32(juce::int64(base))) : uiIndicatorDisabled);
     if (textInputActive && choiceCount() == 0) return;
     const auto valueText = valueVisible || idleTextProvider == nullptr
-        ? displayTextProvider ? displayTextProvider() : slider.getTextFromValue(slider.getValue()) : juce::String();
-    const auto binaryStateText = (choiceCount() == 2 || momentaryAction != nullptr)
+        ? displayTextProvider ? displayTextProvider() : slider.getTextFromValue(getDisplayedValue()) : juce::String();
+    const auto binaryStateText = (isBinaryToggle() || momentaryAction != nullptr)
         && (valueText.equalsIgnoreCase("OFF") || valueText.equalsIgnoreCase("ON"));
     const auto showIdleContent = (!valueVisible || binaryStateText) && !textInputActive;
     const auto text = idleTextProvider != nullptr && showIdleContent ? idleTextProvider() : valueText;
@@ -449,8 +436,7 @@ void ValueBoxComponent::paintRangeIndicators(juce::Graphics& g, juce::Component&
             const auto rangeVisible = value->areRangeIndicatorsVisible();
             const auto manuallySelected = isManualControlSelected(*value);
             const auto count = value->choiceCount();
-            const auto directVisual = value->directIndicator->visualPosition();
-            const auto visual = directVisual;
+            const auto visual = value->getVisualPosition();
             const auto position = visual >= 0.0 ? visual : RangeIndicator::rangePosition(value->slider);
             // The marker is pixel-aligned. Reusing its cached image until that
             // pixel changes avoids reallocating an image for every tiny drag step.
@@ -530,46 +516,6 @@ void ValueBoxComponent::paintRangeIndicators(juce::Graphics& g, juce::Component&
                         && (value == hoveredControl || value->pressedBottomIndicator == index),
                     value->pressedBottomIndicator == index))
                     drawEmbeddedButtonText(g, index == 0 ? "SL" : "BP", marker, value->pressedBottomIndicator == index ? juce::Colour(0xff222222) : uiWhite);
-            }
-            if (!paintsRangeLocally(*value) && rangeVisible
-                && (value->numericControlEnabled || count > 0) && !value->textInputActive)
-            {
-                const auto marker = RangeIndicator::continuousMarker(
-                    RangeIndicator::potentiometerBounds(*value, bounds),
-                    visual >= 0.0 ? visual : RangeIndicator::rangePosition(value->slider));
-                const bool interacting = value->directIndicator->isDragging();
-                const bool enabledHover = value->interactionEnabled && value->isEnabled();
-                // The pointer is hidden while dragging. Keep the thumb's
-                // existing hover instead of clearing it and restarting the
-                // delayed hover after mouseUp.
-                const bool markerHovered = enabledHover && (interacting
-                    ? value->directIndicator->startedDragOnMarker()
-                    : value == hoveredControl && marker.contains(pointerPosition));
-                if (manuallySelected)
-                {
-                    // Selection is white at rest, but must still respond to
-                    // hovering the thumb.  Use a dark centre with a WHITE
-                    // outline, so the control remains visibly Ctrl-marked.
-                    if (isHoverInversionReady(*value, markerHovered, "value.top"))
-                    {
-                        g.setColour(juce::Colour(0xff666666));
-                        g.fillRect(marker);
-                        g.setColour(uiWhite);
-                        g.drawRect(marker, 1.0f);
-                    }
-                }
-                else if (interacting)
-                {
-                    if (isHoverInversionReady(*value, markerHovered, "value.top"))
-                    {
-                        g.setColour(juce::Colour(0xff666666));
-                        g.fillRect(marker);
-                    }
-                }
-                else
-                {
-                    paintHover(*value, "value.top", marker, enabledHover);
-                }
             }
             // The badge hover occupies the *existing* bottom indicator row.
             // Cover both labels (number + BP), without a tooltip or popup.

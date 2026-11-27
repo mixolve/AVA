@@ -50,6 +50,9 @@ inline constexpr std::array<Description, 15> descriptions {{
     {dyn, ava::modules::dyn::displayName},
     {sibil, ava::modules::sibil::description.name}
 }};
+using CatalogOrder = std::array<int, descriptions.size()>;
+inline constexpr CatalogOrder defaultCatalogOrder {eql,dyn,sibil,0,1,2,3,4,5,6,7,8,9,10,11};
+
 using ava::modules::order::valid;
 using ava::modules::order::pack;
 using ava::modules::order::serialise;

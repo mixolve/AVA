@@ -1,12 +1,27 @@
 #pragma once
 #include "../crossover/UiStateSchema.h"
 #include "Metrics.h"
+#include "ModuleOrder.h"
 #include <optional>
 #include <array>
 
 namespace shell_editor_ui
 {
 inline juce::Identifier key(const juce::String& name) { return juce::Identifier("ava.editor.ui." + name); }
+
+inline const juce::Identifier inactiveModulesOrderKey = key("modules_inactive_order");
+
+inline module_order::CatalogOrder inactiveModulesOrder(const juce::ValueTree& state)
+{
+    auto order = module_order::defaultCatalogOrder;
+    module_order::parse(state.getProperty(inactiveModulesOrderKey).toString(), order);
+    return order;
+}
+
+inline bool isSearchVisible(const juce::ValueTree& state)
+{
+    return bool(state.getProperty(key("search_visible"), false));
+}
 
 // Persist eighths of the base size: controls and gaps stay whole pixels.
 inline constexpr std::array<int, 8> zoomSteps { 6, 7, 8, 10, 12, 16, 20, 24 };
@@ -32,6 +47,14 @@ inline juce::StringArray zoomChoices()
     for (int step : zoomSteps)
         choices.add(juce::String(step * 12.5, step % 2 != 0 ? 1 : 0));
     return choices;
+}
+
+inline constexpr int minEditorColumns = 2;
+inline constexpr int maxEditorColumns = 12;
+inline int editorColumns(const juce::ValueTree& state)
+{
+    return juce::jlimit(minEditorColumns, maxEditorColumns,
+        int(state.getProperty(key("editor_columns"), viewportControlColumns)));
 }
 
 inline int dockControlCount(const juce::ValueTree& state)
@@ -94,6 +117,11 @@ inline std::optional<bool> validate(const juce::Identifier& property, const juce
                 return false;
         return true;
     }
+    if (property == inactiveModulesOrderKey)
+    {
+        module_order::CatalogOrder order {};
+        return value.isString() && module_order::parse(value.toString(), order);
+    }
     if (property == key("pinned_routing_order"))
     {
         if (!value.isString() || value.toString().length() > 704) return false;
@@ -113,6 +141,8 @@ inline std::optional<bool> validate(const juce::Identifier& property, const juce
     }
     if (property == key("pin_routing") || property == key("search_visible"))
         return crossover_ui::hasExactBooleanValue(value);
+    if (property == key("editor_columns"))
+        return crossover_ui::hasExactIntegerValue(value, minEditorColumns, maxEditorColumns);
     if (property == key("dock_count")) return crossover_ui::hasExactIntegerValue(value, 0, 16);
     if (property == key("zoom_step"))
     {

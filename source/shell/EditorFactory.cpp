@@ -142,7 +142,8 @@ private:
     void handleAsyncUpdate() override { applyZoom(); }
     void valueTreePropertyChanged(juce::ValueTree& changed, const juce::Identifier& property) override
     {
-        if (changed == state && property == shell_editor_ui::key("zoom_step"))
+        if (changed == state && (property == shell_editor_ui::key("zoom_step")
+                                 || property == shell_editor_ui::key("editor_columns")))
             triggerAsyncUpdate();
     }
     void valueTreeRedirected(juce::ValueTree&) override { triggerAsyncUpdate(); }

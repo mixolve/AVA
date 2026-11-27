@@ -96,7 +96,6 @@ public:
 
     void resized() override;
     void mouseDown(const juce::MouseEvent& event) override;
-    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
     void refreshExternalState();
     void refreshRangeControls();
     void setInstanceName(const juce::String& name);
@@ -131,7 +130,6 @@ private:
     void updateRangeNavigation();
     void updateSoloState();
     void updatePageVisibility();
-    void scrollPageViewport(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel);
     void updatePageViewport();
     CrossoverModulePage* getCurrentPageComponent() const noexcept;
     int getCurrentPagePreferredHeight() const noexcept;

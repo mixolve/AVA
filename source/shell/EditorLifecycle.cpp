@@ -26,6 +26,7 @@ AvaAudioProcessorEditor::~AvaAudioProcessorEditor()
     storeEditorStateToValueTree();
     stopTimer();
     pinnedRoutingViewport.setViewedComponent(nullptr, false);
+    slotsViewport.setViewedComponent(nullptr, false);
     setLookAndFeel(nullptr);
 }
 
@@ -46,19 +47,6 @@ void AvaAudioProcessorEditor::timerCallback()
     refreshInstanceLinkControls();
     refreshPinnedRoutingStrip();
     syncQuickAccessControls();
-    const auto scrollUntil = double(mainScrollBar.getProperties().getWithDefault("scrollActiveUntil", 0.0));
-    if (scrollUntil > 0.0 && juce::Time::getMillisecondCounterHiRes() >= scrollUntil)
-    {
-        mainScrollBar.getProperties().remove("scrollActiveUntil");
-        mainScrollBar.repaint();
-    }
-    const auto fadeUntil = double(mainScrollBar.getProperties().getWithDefault("scrollFadeUntil", 0.0));
-    if (fadeUntil > 0.0)
-    {
-        mainScrollBar.repaint();
-        if (juce::Time::getMillisecondCounterHiRes() >= fadeUntil)
-            mainScrollBar.getProperties().remove("scrollFadeUntil");
-    }
     if (unitSampleRateLabel != nullptr)
     {
         const auto sampleRate = audioProcessor.getRoutingOwner().getSampleRate();
@@ -72,6 +60,9 @@ void AvaAudioProcessorEditor::timerCallback()
         if (unitSampleRateLabel->getText() != value)
             unitSampleRateLabel->setText(value, juce::dontSendNotification);
     }
+    if (unitWidthControl != nullptr)
+        unitWidthControl->setSelectedChoiceIndex(
+            shell_editor_ui::editorColumns(getRootWindowState()) - shell_editor_ui::minEditorColumns, false);
     if (unitDockSizeControl != nullptr)
         unitDockSizeControl->setSelectedChoiceIndex(shell_editor_ui::dockControlCount(getRootWindowState()), false);
     if (unitZoomControl != nullptr)
@@ -165,11 +156,11 @@ bool AvaAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     if (activeInstanceEditor != nullptr && activeInstanceEditor->isShowing())
         return activeInstanceEditor->keyPressed(key);
 
-    if (!bool(getRootWindowState().getProperty(shell_editor_ui::key("search_visible"), true)))
+    if (!shell_editor_ui::isSearchVisible(getRootWindowState()))
         return false;
     // Enter is a search shortcut on ALL and INFO alike; navigating
     // from another page first reveals the existing pinned search control.
-    if (aboutExpanded) showAllSection();
+    if (hasUnitPage()) showUnitPage(UnitPage::main);
     if (controlSearchPanel != nullptr && controlSearchPanel->isShowing()
         && !controlSearchPanel->hasKeyboardFocus(true))
     {
@@ -179,35 +170,15 @@ bool AvaAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
     return false;
 }
 
-void AvaAudioProcessorEditor::mouseDown(const juce::MouseEvent& event)
+void AvaAudioProcessorEditor::mouseDown(const juce::MouseEvent&)
 {
-    if (aboutExpanded && (aboutPanel == nullptr
-        || !aboutPanel->getBounds().contains(event.getPosition())))
-    {
-        showAllSection();
-        return;
-    }
     if (hostSlotMoveSourceIndex >= 0) cancelHostSlotMove();
     grabKeyboardFocus();
 }
 
-bool AvaAudioProcessorEditor::allowsViewportScroll(const juce::Component& viewport) const
+void AvaAudioProcessorEditor::mouseUp(const juce::MouseEvent& event)
 {
-    for (auto* editor = this; editor != nullptr;
-         editor = editor->findParentComponentOfClass<AvaAudioProcessorEditor>())
-        if (const auto* popup = editor->textPromptOverlay.get(); popup != nullptr && popup->isVisible()
-            && popup != &viewport && !popup->isParentOf(&viewport)) return false;
-    if (activeInstanceEditor != nullptr && !activeInstanceEditor->isParentOf(&viewport))
-        return activeInstanceEditor->allowsViewportScroll(viewport);
-    return true;
-}
-
-void AvaAudioProcessorEditor::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
-{
-    if (!allowsViewportScroll(*this)) return;
-    if (! filterViewport.getBounds().contains(event.getPosition()))
-        return;
-
-    scrollViewportWithWheel(filterViewport, getActiveFilterContentHeight(), wheel, event.mods.isShiftDown());
-    storeEditorUiState();
+    if (hasUnitPage() && !event.mouseWasDraggedSinceMouseDown()
+        && !event.mods.isPopupMenu() && getLocalBounds().contains(event.getPosition()))
+        showUnitPage(UnitPage::main);
 }

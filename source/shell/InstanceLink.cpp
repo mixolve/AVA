@@ -1180,10 +1180,10 @@ void InstanceLinkRegistry::poll(uint64_t source)
         bool changed = false;
         bool viewChanged = false;
 
-        // Mirror explicit copy additions/removals, not existing, unrelated
-        // copies. A copy is paired using type + band + creation serial.
+        // Mirror explicit module removals and copy additions. Copies are paired
+        // using type + band + creation serial.
         for (const auto& [key, oldSlot] : previous.slots)
-            if (key.serial > 1 && !fresh.slots.contains(key))
+            if (!fresh.slots.contains(key))
             {
                 const auto mapped = mapping.find(key);
                 if (mapped != mapping.end())
@@ -1196,9 +1196,7 @@ void InstanceLinkRegistry::poll(uint64_t source)
         for (const auto& [key, newSlot] : fresh.slots)
             if (key.serial > 1 && !previous.slots.contains(key))
             {
-                // Create the same module type, using the target's original
-                // as the insertion point, then apply the sender's parameter deltas.
-                const int newUid = target.addModuleCopy(size_t(key.band), ava::module_stack::originalUid(key.type));
+                const int newUid = target.addModuleCopy(size_t(key.band), key.type);
                 if (newUid >= 0)
                 {
                     changed = true;

@@ -40,7 +40,7 @@ ControlSearchPanel::ControlSearchPanel() : input(*this), resultsCanvas(*this)
     addAndMakeVisible(input);
 
     listViewport.setViewedComponent(&resultsCanvas, false);
-    listViewport.setScrollBarsShown(false, false, true, false);
+    listViewport.setScrollBarsShown(true, false, false, false);
     listViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     addAndMakeVisible(listViewport);
 }
@@ -260,7 +260,7 @@ void ControlSearchPanel::refreshMatches()
     const auto query = uppercaseText(input.getText().trim());
     if (query.isNotEmpty() && findMatches)
         results = findMatches(query);
-    resultsCanvas.setSize(juce::jmax(0, listViewport.getWidth()), resultsCanvas.getContentHeight());
+    resized();
     listViewport.setViewPosition(0, 0);
     resultsCanvas.repaint();
     if (onDisplayChanged) onDisplayChanged();
@@ -275,22 +275,18 @@ void ControlSearchPanel::resized()
     // Keep the full-size native editing field: caret and selection geometry
     // must not be moved together with the custom centred glyphs.
     input.setBounds(0, 0, width, controlBlockHeaderHeight);
-    // Align each result with the entire dark MAIN/module header (including
-    // its border/padding), rather than just the six controls inside it.
-    // The white INSTANCE header starts at x=0; nested dark headers start
-    // one standard gap plus the 2px outer border further in.
+    // Search results use the same insets as nested MAIN/module headers.
     const auto inset = uiGap + controlBlockFrameThickness;
-    const auto controlsWidth = viewportControlColumns * getSquareControlSize(*this)
-        + (viewportControlColumns - 1) * getUiGap(*this);
-    const auto resultsRowWidth = controlsWidth + 2 * (uiGap + controlBlockFrameThickness);
     const auto area = getHeight() > controlBlockHeaderHeight
         ? juce::Rectangle<int> {inset, controlBlockHeaderHeight + resultPadding,
-            juce::jmax(0, juce::jmin(resultsRowWidth, width - 2 * inset)),
+            juce::jmax(0, width - 2 * inset),
             juce::jmax(0, getHeight() - controlBlockHeaderHeight - 2 * resultPadding)}
         : juce::Rectangle<int> {};
     listViewport.setBounds(area);
     listViewport.setVisible(getHeight() > controlBlockHeaderHeight);
-    resultsCanvas.setSize(area.getWidth(), resultsCanvas.getContentHeight());
+    const auto resultsHeight = resultsCanvas.getContentHeight();
+    const auto barWidth = resultsHeight > area.getHeight() ? listViewport.getScrollBarThickness() : 0;
+    resultsCanvas.setSize(juce::jmax(0, area.getWidth() - barWidth), resultsHeight);
 }
 
 void ControlSearchPanel::paint(juce::Graphics& g)

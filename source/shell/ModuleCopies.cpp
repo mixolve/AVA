@@ -14,6 +14,22 @@
 namespace {
 using Slot=ava::module_stack::Slot;
 
+void moveSlotToShownIndex(ava::module_stack::Order& slots, int uid, size_t shownIndex)
+{
+    const auto source = std::find_if(slots.begin(), slots.end(), [uid](const Slot& slot) { return slot.uid == uid; });
+    if (source == slots.end()) return;
+    const auto slot = *source;
+    slots.erase(source);
+    auto destination = slots.end();
+    for (auto it = slots.begin(); it != slots.end(); ++it)
+        if (it->shown && shownIndex-- == 0)
+        {
+            destination = it;
+            break;
+        }
+    slots.insert(destination, slot);
+}
+
 juce::var asObject() { return juce::var(new juce::DynamicObject()); }
 void put(juce::var& object, const juce::Identifier& name, const juce::var& value) {
     if(auto* ptr=object.getDynamicObject())ptr->setProperty(name,value);
@@ -90,27 +106,43 @@ bool AvaAudioProcessor::isModuleSlotBypassed(const size_t band, const int uid) c
     return false;
 }
 
-int AvaAudioProcessor::addModuleCopy(size_t band,int sourceUid)
+int AvaAudioProcessor::insertModuleAt(size_t band, int type, size_t shownIndex)
 {
     const juce::ScopedLock ownerLock(getRoutingOwner().processingLock);
     const juce::ScopedLock lock(processingLock);
-    if(band>=moduleStacks.size()||moduleStacks[band].size()>=ava::module_stack::maximumSlotsPerBand)return -1;
-    const auto* slot=ava::module_stack::find(moduleStacks[band],sourceUid);
-    if(slot==nullptr)return -1;
-    const auto sourceType=slot->type;
+    if (band >= moduleStacks.size()) return -1;
+    auto& stack = moduleStacks[band];
+    const auto inactive = std::find_if(stack.begin(), stack.end(), [type](const Slot& slot)
+    {
+        return slot.type == type && !slot.shown;
+    });
+    if (inactive != stack.end())
+    {
+        const auto uid = inactive->uid;
+        moveSlotToShownIndex(stack, uid, shownIndex);
+        return setModuleSlotShown(band, uid, true) ? uid : -1;
+    }
+    return addModuleCopy(band, type, shownIndex);
+}
+
+int AvaAudioProcessor::addModuleCopy(size_t band, int sourceType, std::optional<size_t> shownIndex)
+{
+    const juce::ScopedLock ownerLock(getRoutingOwner().processingLock);
+    const juce::ScopedLock lock(processingLock);
+    if (band >= moduleStacks.size() || !juce::isPositiveAndBelow(sourceType, ava::module_stack::typeCount)
+        || moduleStacks[band].size() >= ava::module_stack::maximumSlotsPerBand)
+        return -1;
     if (nextModuleCopyUid >= ava::module_stack::state::maximumSavedSerial
         || lastCreatedModuleNumbers[band][size_t(sourceType)] >= ava::module_stack::state::maximumSavedSerial)
         return -1;
-    const auto sourceCopy=sourceUid>=ava::module_stack::originalCount
-        ? moduleCopies.find(sourceUid) : moduleCopies.end();
-    if(sourceUid>=ava::module_stack::originalCount && sourceCopy==moduleCopies.end())return -1;
     const auto id=nextModuleCopyUid;
     // Also account for the serials already present in the stack, so a copy
     // can never be assigned the original module's serial (1).
     const auto serial=ava::module_stack::nextSerial(
         moduleStacks[band], sourceType, lastCreatedModuleNumbers[band][size_t(sourceType)]);
     auto copy=makeModuleCopy(sourceType,int(band),id,serial);
-    if(copy==nullptr||!ava::module_stack::insertCopy(moduleStacks[band],sourceUid,id,serial))return -1;
+    if(copy==nullptr||!ava::module_stack::insertCopy(moduleStacks[band],sourceType,id,serial))return -1;
+    if (shownIndex) moveSlotToShownIndex(moduleStacks[band], id, *shownIndex);
     nextModuleCopyUid++;
     lastCreatedModuleNumbers[band][size_t(sourceType)]=serial;
     moduleCopies.emplace(id,std::move(copy));
@@ -131,10 +163,6 @@ bool AvaAudioProcessor::deleteModuleSlot(size_t band,int uid)
     const auto* target = ava::module_stack::find(moduleStacks[band], uid);
     if (target == nullptr) return false;
     const auto type = target->type;
-    // Never delete the only remaining instance of a module type.
-    if (std::count_if(moduleStacks[band].begin(), moduleStacks[band].end(),
-                      [type](const auto& slot) { return slot.type == type; }) <= 1)
-        return false;
     if (!ava::module_stack::remove(moduleStacks[band], uid)) return false;
     // Unbind the owner's automation source before a slot's BP proxy can die.
     invalidateHostSlotTargets();

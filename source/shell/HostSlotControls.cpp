@@ -89,15 +89,15 @@ void AvaAudioProcessorEditor::handleHostSlotControlDrag(const juce::MouseEvent& 
     // The captured source moves with the scrolled content. Use the pointer's
     // screen position so repeated drag events do not drift with that component.
     const auto screenPosition=event.source.getScreenPosition();
-    const auto viewportPosition=filterViewport.getLocalPoint(nullptr,screenPosition);
+    const auto viewportPosition=slotsViewport.getLocalPoint(nullptr,screenPosition);
     if(!released)
     {
         const auto edge=getUiGap(*this)*2;
-        filterViewport.autoScroll(juce::roundToInt(viewportPosition.x),juce::roundToInt(viewportPosition.y),
+        slotsViewport.autoScroll(juce::roundToInt(viewportPosition.x),juce::roundToInt(viewportPosition.y),
             edge,getUiGap(*this));
     }
     const auto position=slotsContent.getLocalPoint(nullptr,screenPosition);
-    const auto inViewport=filterViewport.getLocalBounds().toFloat().contains(viewportPosition);
+    const auto inViewport=slotsViewport.getLocalBounds().toFloat().contains(viewportPosition);
     auto destination = -1;
     for (int index = 0; index < static_cast<int>(hostSlotButtons.size()); ++index)
     {

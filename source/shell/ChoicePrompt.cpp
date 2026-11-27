@@ -51,8 +51,7 @@ public:
         setMouseClickGrabsKeyboardFocus(false);
         setInterceptsMouseClicks(true, true);
         choiceViewport.setViewedComponent(&choiceContent, false);
-        choiceViewport.onWheel = [this](const juce::MouseEvent& e, const juce::MouseWheelDetails& w) { mouseWheelMove(e.getEventRelativeTo(this), w); };
-        choiceViewport.setScrollBarsShown(false, false);
+        choiceViewport.setScrollBarsShown(!compactButtons, compactButtons, false, false);
         choiceViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
         choiceViewport.setWantsKeyboardFocus(false);
         choiceViewport.setMouseClickGrabsKeyboardFocus(false);
@@ -113,12 +112,13 @@ public:
         {
             const auto size = getCompactControlSize(*this);
             const auto gap = getUiGap(*this);
-            panelBounds = juce::Rectangle<int>(juce::jmin(visibleBounds.getWidth(),
-                itemCount * size + juce::jmax(0, itemCount - 1) * gap), size);
+            const auto contentWidth = itemCount * size + juce::jmax(0, itemCount - 1) * gap;
+            const auto barHeight = contentWidth > visibleBounds.getWidth() ? choiceViewport.getScrollBarThickness() : 0;
+            panelBounds = juce::Rectangle<int>(juce::jmin(visibleBounds.getWidth(), contentWidth), size + barHeight);
             panelBounds.setCentre(anchorBounds.getCentre());
             panelBounds = panelBounds.constrainedWithin(visibleBounds);
             choiceViewport.setBounds(panelBounds.withPosition(0, 0));
-            choiceContent.setSize(panelBounds.getWidth(), size);
+            choiceContent.setSize(contentWidth, size);
             for (size_t index = 0; index < itemButtons.size(); ++index)
                 itemButtons[index]->setBounds(int(index) * (size + gap), 0, size, size);
             if (!animationStarted && !visibleBounds.isEmpty())
@@ -131,8 +131,10 @@ public:
         }
         const auto itemBlockHeight = popup_list::contentHeight(itemCount, *this);
         const auto availableWidth = visibleBounds.getWidth();
-        const auto promptWidth = juce::jmax(1, juce::jmin(availableWidth, getSquareControlSize(*this) + 2 * getUiGap(*this)));
         const auto visibleRows = juce::jmin(itemCount, juce::jmax(0, juce::jmax(0, visibleBounds.getHeight() - 2 * getUiGap(*this) + getUiRowGap(*this)) / (getSquareControlSize(*this) + getUiRowGap(*this))));
+        const auto barWidth = visibleRows < itemCount ? choiceViewport.getScrollBarThickness() : 0;
+        const auto promptWidth = juce::jlimit(1, juce::jmax(1, availableWidth),
+            getSquareControlSize(*this) + 2 * getUiGap(*this) + barWidth);
         const auto promptHeight = popup_list::contentHeight(visibleRows, *this) + 2 * getUiGap(*this);
         const auto alignedItemIndex = juce::isPositiveAndBelow(selectedIndex, itemCount) ? selectedIndex : 0;
         const auto alignedItemCentreY = (alignedItemIndex * (getSquareControlSize(*this) + getUiRowGap(*this)))
@@ -144,7 +146,8 @@ public:
         panelBounds = panelBounds.constrainedWithin(visibleBounds);
 
         choiceViewport.setBounds(panelBounds.withPosition(0, 0).reduced(getUiGap(*this)));
-        choiceContent.setSize(choiceViewport.getWidth(), juce::jmax(choiceViewport.getHeight(), itemBlockHeight));
+        choiceContent.setSize(juce::jmax(0, choiceViewport.getWidth() - barWidth),
+                              juce::jmax(choiceViewport.getHeight(), itemBlockHeight));
 
         auto contentBounds = choiceContent.getLocalBounds();
         for (size_t index = 0; index < itemButtons.size(); ++index)
@@ -175,32 +178,13 @@ public:
                 choiceViewport.setViewPosition(0, juce::jlimit(0, maxOffset, targetY));
             }
         }
-        choiceViewport.setViewPosition(0, juce::jlimit(0, juce::jmax(0, itemBlockHeight - choiceViewport.getHeight()),
-            (choiceViewport.getViewPositionY() / (getSquareControlSize(*this) + getUiRowGap(*this))) * (getSquareControlSize(*this) + getUiRowGap(*this))));
-        layoutReveal();
+
     }
 
     void mouseDown(const juce::MouseEvent& event) override
     {
         if (! revealClip.getBounds().contains(event.getPosition()))
             cancel();
-    }
-
-    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
-    {
-        if (compactButtons || ! panelBounds.contains(event.getPosition()))
-            return;
-        // Horizontal trackpad gestures are not row navigation.
-        if (std::abs(wheel.deltaX) > std::abs(wheel.deltaY)) return;
-
-        const auto delta = wheel.isReversed ? wheel.deltaY : -wheel.deltaY;
-        scrollRemainder += delta * (wheel.isSmooth ? 220.0f : 48.0f) / static_cast<float>(getSquareControlSize(*this) + getUiRowGap(*this));
-        const auto rows = static_cast<int>(scrollRemainder);
-        if (rows == 0) return;
-        scrollRemainder -= static_cast<float>(rows);
-        const auto maximum = juce::jmax(0, choiceContent.getHeight() - choiceViewport.getHeight());
-        choiceViewport.setViewPosition(0, juce::jlimit(0, maximum,
-            choiceViewport.getViewPositionY() + rows * (getSquareControlSize(*this) + getUiRowGap(*this))));
     }
 
 private:
@@ -292,13 +276,7 @@ private:
     {
         void paint(juce::Graphics& g) override { paintPluginBackground(g); }
     } revealClip;
-    class RowViewport final : public juce::Viewport
-    {
-    public:
-        std::function<void(const juce::MouseEvent&, const juce::MouseWheelDetails&)> onWheel;
-        void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
-        { if (onWheel) onWheel(e, w); }
-    } choiceViewport;
+    UiScrollViewport choiceViewport;
     DisclosureAnimation reveal;
     bool animationStarted = false, closing = false;
     ChoiceContent choiceContent;
@@ -311,7 +289,6 @@ private:
     bool closePending = false;
     bool commitBeforeFade = false;
     int pendingChoice = -1;
-    float scrollRemainder = 0.0f;
 };
 }
 

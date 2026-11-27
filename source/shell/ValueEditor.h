@@ -122,40 +122,25 @@ public:
         return slider.proportionOfLengthToValue(position);
     }
 
-    static bool contains(const juce::MouseEvent& event, juce::Rectangle<int> bounds, juce::Slider& slider)
-    {
-        if (bounds.getWidth() < bounds.getHeight() || slider.getMaximum() <= slider.getMinimum()) return false;
-        return continuousMarker(bounds, rangePosition(slider)).contains(event.getPosition().toFloat());
-    }
-
-    bool begin(const juce::MouseEvent& event, juce::Rectangle<int> bounds, juce::Slider& slider, int choices = 0)
-    {
-        if (!contains(event, bounds, slider) || !beginFromValue(event, bounds, slider, choices)) return false;
-        return true;
-    }
-
     bool beginFromValue(const juce::MouseEvent& event, juce::Rectangle<int> bounds, juce::Slider& slider, int choices = 0)
     {
         if (!event.mods.isLeftButtonDown()) return false;
         target = &slider;
         moved = false;
         discreteChoices = choices;
-        startedOnMarker = contains(event, bounds, slider);
         position = rangePosition(slider);
         // Work in the original component's drag coordinate system. JUCE can
         // extend these coordinates beyond the screen while dragging; converting
         // them back to physical screen coordinates discards that continuity.
         lastDragDistance = 0.0;
         dragAxis = DragAxis::unlocked;
-        thumbSize = bounds.getHeight();
-        travel = juce::jmax(1, bounds.getWidth() - thumbSize);
+        travel = juce::jmax(1, bounds.getWidth() - bounds.getHeight());
         return true;
     }
 
     bool isActive() const { return target != nullptr; }
     bool wasDragged() const { return moved; }
     bool isDragging() const { return isActive() && moved; }
-    bool startedDragOnMarker() const { return isDragging() && startedOnMarker; }
     // Continuous values are applied on every drag event; paint the slider's
     // actual (possibly quantised) value. Discrete choices are committed only
     // on release, so display the snapped choice during the drag as well.
@@ -229,21 +214,18 @@ public:
         gesture.reset();
         target = nullptr;
         dragAxis = DragAxis::unlocked;
-        startedOnMarker = false;
     }
 
 private:
     enum class DragAxis { unlocked, horizontal, vertical };
     DragAxis dragAxis = DragAxis::unlocked;
     double lastDragDistance = 0.0;
-    int thumbSize = compactMarkerSize;
     DragCursor cursor;
     juce::Component::SafePointer<juce::Slider> target;
     std::unique_ptr<juce::Slider::ScopedDragNotification> gesture;
     double position = 0.0;
     int travel = 1;
     bool moved = false;
-    bool startedOnMarker = false;
     int discreteChoices = 0;
 };
 
@@ -267,10 +249,7 @@ public:
         const auto area = RangeIndicator::potentiometerBounds(*this, bounds);
         // Editing has an ordinary rail. The control's manual-selection state
         // remains saved and is drawn again when the value editor closes.
-        RangeIndicator::paint(g, area, *target, uiIndicatorActive, indicator.visualPosition());
-        const auto position = indicator.visualPosition() >= 0.0 ? indicator.visualPosition() : RangeIndicator::rangePosition(*target);
-        if (const auto* parent = getParentComponent())
-            RangeIndicator::paintHover(g, *this, *parent, RangeIndicator::continuousMarker(area, position), isEnabled() && !indicator.isDragging());
+        RangeIndicator::paint(g, area, *target, uiIndicatorActive);
     }
 
     void refreshPresentationFor(juce::Slider& control)
@@ -289,26 +268,15 @@ public:
         formatText = std::move(formatter);
     }
 
-    void mouseMove(const juce::MouseEvent& event) override
+    bool isRangeIndicatorAt(juce::Point<int> point) const
     {
-        CopyPasteTextEditor::mouseMove(event);
-        if (auto* parent = getParentComponent()) parent->repaint();
+        return target != nullptr
+            && RangeIndicator::potentiometerBounds(*this, getLocalBounds()).contains(point);
     }
-    void mouseExit(const juce::MouseEvent& event) override
-    {
-        CopyPasteTextEditor::mouseExit(event);
-        if (auto* parent = getParentComponent()) parent->repaint();
-    }
-
-    bool beginIndicatorDrag(const juce::MouseEvent& event)
-    {
-        return target != nullptr && indicator.begin(event, RangeIndicator::potentiometerBounds(*this, getLocalBounds()), *target);
-    }
-    bool isIndicatorDragging() const { return indicator.isActive(); }
 
     void mouseDown(const juce::MouseEvent& event) override
     {
-        if (beginIndicatorDrag(event)) return;
+        if (isRangeIndicatorAt(event.getPosition())) return;
         if (event.mods.isLeftButtonDown() && event.mods.isCtrlDown() && event.mods.isShiftDown()
             && !event.mods.isAltDown() && onResetRequested != nullptr)
         {
@@ -322,32 +290,6 @@ public:
         }
         CopyPasteTextEditor::mouseDown(event);
     }
-    void mouseDrag(const juce::MouseEvent& event) override
-    {
-        if (!indicator.isActive()) { CopyPasteTextEditor::mouseDrag(event); return; }
-        juce::Component::SafePointer<ValueEditor> safeThis(this);
-        indicator.drag(event);
-        if (safeThis != nullptr && indicator.wasDragged())
-        {
-            refreshNumericTextPreservingSelection();
-        }
-    }
-    void mouseUp(const juce::MouseEvent& event) override
-    {
-        if (indicator.isActive())
-        {
-            indicator.end(true);
-            repaintValueOverlay(*this);
-            return;
-        }
-        CopyPasteTextEditor::mouseUp(event);
-    }
-
-    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
-    {
-        juce::Component::mouseWheelMove(event, wheel);
-    }
-
 private:
     void refreshNumericTextPreservingSelection()
     {
@@ -377,6 +319,5 @@ private:
     juce::Component::SafePointer<juce::Slider> target;
     std::function<double(const juce::String&)> parseText;
     std::function<juce::String()> formatText;
-    RangeIndicator indicator;
     bool frameVisible = true;
 };

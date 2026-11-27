@@ -132,13 +132,13 @@ CrossoverModuleComponent::Config makeCrossoverConfig(AvaAudioProcessor& processo
 std::vector<CrossoverModuleComponent::CrossoverControlSpec> makeBlockRangeControls()
 {
     return {
-        toggleControl("lc", "LEFT\nCENTER", false, 4),
+        toggleControl("lc", "LEFT\nCENTER", false),
         toggleControl("rc", "RIGHT\nCENTER"),
-        toggleControl("ll", "LEFT\nLEFT"),
-        toggleControl("rr", "RIGHT\nRIGHT"),
-        toggleControl("mc", "MID\nCENTER", true, 4),
+        toggleControl("mc", "MID\nCENTER"),
         toggleControl("sc", "SIDE\nCENTER"),
         toggleControl("ms+3", "MS+3"),
+        toggleControl("ll", "LEFT\nLEFT"),
+        toggleControl("rr", "RIGHT\nRIGHT"),
         toggleControl("ss", "SIDE\nSIDE"),
 
         []

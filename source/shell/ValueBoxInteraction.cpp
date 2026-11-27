@@ -7,9 +7,14 @@
 
 void ValueBoxComponent::mouseDown(const juce::MouseEvent& event)
 {
+    const auto point = event.getEventRelativeTo(this).getPosition();
+    if (hasTopInternalControls() && RangeIndicator::potentiometerBounds(*this, getValueBounds()).contains(point))
+        return;
+
     if (selectionGesture.begin(*this, event))
     {
         pointerDown = false;
+        setPressPreviewPosition(-1.0);
         return;
     }
     if (const auto* field = findParentComponentOfClass<ParameterField>(); field != nullptr)
@@ -39,15 +44,6 @@ void ValueBoxComponent::mouseDown(const juce::MouseEvent& event)
     const auto clickIsInsideThisValueBox = clickedComponent != nullptr
         && (clickedComponent == this || isParentOf(clickedComponent));
 
-    // A Shift-click on a discrete control always means "previous", even
-    // when the pointer happens to land on the range indicator itself.
-    const auto reverseChoiceClick = choiceCount() > 1 && event.mods.isShiftDown()
-        && !event.mods.isCtrlDown() && !event.mods.isAltDown();
-    if (!reverseChoiceClick && areRangeIndicatorsVisible() && clickIsInsideThisValueBox
-        && canAdjustValue() && momentaryAction == nullptr && choiceCount() != 2)
-        if (directIndicator->begin(event.getEventRelativeTo(this), RangeIndicator::potentiometerBounds(*this, getValueBounds()), slider,
-                                   choiceCount())) return;
-
     if (clickIsInsideThisValueBox && event.mods.isLeftButtonDown() && event.mods.isCtrlDown()
         && event.mods.isShiftDown() && !event.mods.isAltDown() && onResetRequested != nullptr
         && !textInputActive)
@@ -61,27 +57,33 @@ void ValueBoxComponent::mouseDown(const juce::MouseEvent& event)
 
     if (clickedComponent != this) return;
 
-    if (momentaryAction != nullptr)
+    if (momentaryAction != nullptr || isBinaryToggle())
     {
-        const auto point = event.getEventRelativeTo(this).getPosition();
-        const auto onControl = getValueBounds().contains(point);
-        if (canAdjustValue() && !event.mods.isPopupMenu() && onControl)
-        {
-            momentaryPressed = pointerDown = true;
-            if (momentaryPressFeedbackEnabled)
-            {
-                slider.setValue(slider.getMaximum(), juce::sendNotificationSync);
-                revealValue();
-                repaintValueOverlay(*this);
-            }
-        }
+        if (!canAdjustValue() || event.mods.isPopupMenu() || !getValueBounds().contains(point))
+            return;
+        pointerDown = true;
+        momentaryPressed = momentaryAction != nullptr;
+        const auto next = momentaryPressed || RangeIndicator::rangePosition(slider) < 0.5 ? 1 : 0;
+        if (momentaryPressed ? momentaryPressFeedbackEnabled
+            : isDiscreteChoiceEnabled == nullptr || isDiscreteChoiceEnabled(next))
+            setPressPreviewPosition(double(next));
         return;
     }
 
     pointerDown = true;
-    if (canAdjustValue() && choiceCount() != 2
-        && getValueBounds().contains(event.getEventRelativeTo(this).getPosition()))
+    if (canAdjustValue() && getValueBounds().contains(point))
         directIndicator->beginFromValue(event.getEventRelativeTo(this), RangeIndicator::potentiometerBounds(*this, getValueBounds()), slider, choiceCount());
+}
+
+void ValueBoxComponent::setPressPreviewPosition(double position)
+{
+    if (juce::exactlyEqual(pressPreviewPosition, position)) return;
+    pressPreviewPosition = position;
+    if (position >= 0.0)
+        revealValue();
+    else if (!pointerOnValue())
+        valueTransitionAt = juce::Time::getMillisecondCounterHiRes() + valueTransitionDelayMs;
+    repaintValueOverlay(*this);
 }
 
 void ValueBoxComponent::setMomentaryRestingState(bool active)
@@ -105,12 +107,8 @@ void ValueBoxComponent::cancelMomentaryPress()
     }
     if (!momentaryPressed) return;
     momentaryPressed = pointerDown = false;
-    if (momentaryPressFeedbackEnabled)
-    {
-        slider.setValue(momentaryRestingState ? slider.getMaximum() : slider.getMinimum(), juce::sendNotificationSync);
-        if (!pointerOnValue()) valueTransitionAt = juce::Time::getMillisecondCounterHiRes() + valueTransitionDelayMs;
-        repaintValueOverlay(*this);
-    }
+    slider.setValue(momentaryRestingState ? slider.getMaximum() : slider.getMinimum(), juce::sendNotificationSync);
+    setPressPreviewPosition(-1.0);
 }
 
 void ValueBoxComponent::mouseDrag(const juce::MouseEvent& event)
@@ -127,6 +125,9 @@ void ValueBoxComponent::mouseDrag(const juce::MouseEvent& event)
         action(event, false);
         return;
     }
+    if (pressPreviewPosition >= 0.0 && event.mouseWasDraggedSinceMouseDown())
+        setPressPreviewPosition(-1.0);
+
     if (directIndicator->isActive())
     {
         directIndicator->drag(event);
@@ -200,6 +201,7 @@ void ValueBoxComponent::mouseUp(const juce::MouseEvent& event)
         && ! event.mods.isPopupMenu();
 
     pointerDown = false;
+    setPressPreviewPosition(-1.0);
 
     if (clicked)
     {
@@ -305,26 +307,6 @@ void ValueBoxComponent::mouseEnter(const juce::MouseEvent& event)
     if (isManualControlSelected(*this)) repaintValueOverlay(*this);
     else repaint();
     if (auto* parent = getParentComponent()) parent->repaint();
-}
-
-void ValueBoxComponent::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
-{
-    if (auto* viewport = findParentComponentOfClass<juce::Viewport>())
-    {
-        // The dock is a horizontal (or rotated vertical) strip, not a page.
-        // Route its wheel gestures through its own axis-aware handler.
-        if (auto* dock = viewport->findParentComponentOfClass<QuickAccessStrip>())
-        {
-            dock->mouseWheelMove(event.getEventRelativeTo(dock), wheel);
-            return;
-        }
-        const auto viewedHeight = viewport->getViewedComponent() != nullptr
-            ? viewport->getViewedComponent()->getHeight()
-            : 0;
-        scrollViewportWithWheel(*viewport, viewedHeight, wheel, event.mods.isShiftDown());
-    }
-    else
-        juce::Component::mouseWheelMove(event, wheel);
 }
 
 void ValueBoxComponent::showEditor()

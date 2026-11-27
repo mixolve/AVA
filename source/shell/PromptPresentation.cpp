@@ -121,18 +121,6 @@ void AvaAudioProcessorEditor::showChoicePrompt(const juce::Rectangle<int>& ancho
     promptComponent->toFront(true);
 }
 
-void AvaAudioProcessorEditor::toggleAboutSection()
-{
-    aboutExpanded = true;
-    if (aboutExpanded)
-    {
-        dismissTextPrompt();
-    }
-    storeEditorStateToValueTree();
-    updateSectionStates();
-    resized();
-}
-
 void AvaAudioProcessorEditor::prepareChildPrompt()
 {
     if (textPromptOverlay != nullptr
@@ -193,104 +181,73 @@ void AvaAudioProcessorEditor::ensureModuleList()
     if (moduleList != nullptr && moduleListBand == band) return;
     if (moduleList != nullptr)
     {
-        modulesContent.removeChildComponent(moduleList.get());
         moduleList.reset();
     }
     moduleListBand = band;
     const auto range = audioProcessor.getSelectedCrossoverRange();
-    const auto buildItems = [this,range]() -> std::vector<ModuleListItem>
+    auto safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this);
+    ModuleList::Actions actions;
+    actions.readChain = [this, range]
     {
         std::vector<ModuleListItem> items;
-        const auto slots = audioProcessor.getModuleStackForRange(range);
-        std::array<int, ava::module_stack::typeCount> instancesByType {};
-        for (const auto& slot : slots)
-            if (juce::isPositiveAndBelow(slot.type, int(instancesByType.size())))
-                ++instancesByType[size_t(slot.type)];
-        for (const auto& slot : slots)
-        {
-            ModuleListItem item;
-            item.id=slot.uid;
-            item.name=module_order::descriptions[size_t(slot.type)].name;
-            item.serial=ava::module_stack::displayOrdinal(slots, slot.uid);
-            item.enabled = slot.shown;
-            item.canDelete = instancesByType[size_t(slot.type)] > 1;
-            items.push_back(std::move(item));
-        }
+        const auto stack = audioProcessor.getModuleStackForRange(range);
+        std::array<int, ava::module_stack::typeCount> counts {}, ordinal {};
+        for (const auto& slot : stack)
+            if (slot.shown) ++counts[size_t(slot.type)];
+        for (const auto& slot : stack)
+            if (slot.shown)
+            {
+                const auto type = size_t(slot.type);
+                items.push_back({slot.uid, module_order::descriptions[type].name,
+                                 counts[type] > 1 ? ++ordinal[type] : 0});
+            }
         return items;
     };
-    auto items=buildItems();
-    ModuleList::Order order;
-    for(const auto& item:items)order.push_back(item.id);
-    auto moduleListView = std::make_unique<ModuleList>(std::move(order),
-        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this),range](const ModuleList::Order& next)
+    actions.reorder = [safe, range](const ModuleList::Order& active)
+    {
+        if (safe == nullptr) return;
+        const auto stack = safe->audioProcessor.getModuleStackForRange(range);
+        if (size_t(std::count_if(stack.begin(), stack.end(), [](const auto& slot) { return slot.shown; })) != active.size())
+            return;
+        std::vector<int> order;
+        auto next = active.begin();
+        for (const auto& slot : stack)
+            order.push_back(slot.shown ? *next++ : slot.uid);
+        if (!safe->audioProcessor.moveModuleSlots(range, order)) return;
+        safe->resized();
+        safe->scheduleHistorySnapshot();
+    };
+    actions.insert = [safe, range](int type, size_t index)
+    {
+        if (safe == nullptr || safe->audioProcessor.insertModuleAt(range, type, index) == -1) return;
+        safe->rebindActiveModuleEditors();
+        safe->updateSectionStates();
+        safe->resized();
+        if (safe->controlSearchPanel != nullptr) safe->controlSearchPanel->refreshMatches();
+        safe->scheduleHistorySnapshot();
+    };
+    actions.remove = [safe, range](int uid, bool permanently)
+    {
+        if (safe == nullptr) return;
+        const auto stack = safe->audioProcessor.getModuleStackForRange(range);
+        const auto* slot = ava::module_stack::find(stack, uid);
+        if (slot == nullptr || !slot->shown) return;
+        const auto copies = std::count_if(stack.begin(), stack.end(), [type = slot->type](const auto& entry)
         {
-            if (safe == nullptr) return;
-            if (!safe->audioProcessor.moveModuleSlots(range,next))return;
-            safe->resized();
-            safe->scheduleHistorySnapshot();
-        }, std::move(items));
-    moduleListView->setInstanceActions(
-        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this),range](int id) -> int
-        {
-            if (safe == nullptr) return -1;
-            const int createdUid = safe->audioProcessor.addModuleCopy(range, id);
-            if (createdUid >= 0) {
-                // MODULES and ALL both reflect the processor stack, but ALL
-                // owns separate parameter-attached editors for its copies.
-                // Refresh these bindings before laying out the added instance.
-                // ADD must not change the ALL viewport's scroll position.
-                // The new slot appears in MODULES and ALL at its stack position.
-                safe->rebindActiveModuleEditors();
-                safe->updateSectionStates();
-                safe->resized();
-                if (safe->controlSearchPanel != nullptr)
-                    safe->controlSearchPanel->refreshMatches();
-                safe->scheduleHistorySnapshot();
-            }
-            return createdUid;
-        },
-        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this),range](int id) -> bool
-        {
-            if (safe == nullptr) return false;
-            // Remove parameter-attached copy editors while their processors
-            // are still alive. Deleting the processor first can leave JUCE
-            // attachments referring to freed parameters until resized().
-            const auto oldSlots = safe->audioProcessor.getModuleStackForRange(range);
-            const auto* removed = ava::module_stack::find(oldSlots, id);
-            if (removed == nullptr) return false;
-            const auto type = removed->type;
-            if (std::count_if(oldSlots.begin(), oldSlots.end(), [type](const auto& slot)
-                { return slot.type == type; }) <= 1) return false;
-            safe->copiedModuleEditors.erase(id);
-            safe->eqlCopyEditors.erase(id);
-            if (!safe->audioProcessor.deleteModuleSlot(range, id)) return false;
-            safe->scheduleHistorySnapshot();
-            safe->rebindActiveModuleEditors();
-            safe->resized();
-            return true;
-        },
-        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this),range](int id)
-        {
-            if(safe==nullptr)return;
-            const auto slots=safe->audioProcessor.getModuleStackForRange(range);
-            const auto* slot=ava::module_stack::find(slots,id);
-            if(slot==nullptr)return;
-            if(safe->audioProcessor.setModuleSlotShown(range,id,!slot->shown))
-                safe->scheduleHistorySnapshot();
-        },
-        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)](int id)
-        {
-            if(safe==nullptr)return;
-            safe->audioProcessor.selectModuleCopy(id);
-            safe->rebindActiveModuleEditors();
-            safe->resized();
-        },
-        buildItems);
-    moduleListView->setLayoutChanged(
-        [safe = juce::Component::SafePointer<AvaAudioProcessorEditor>(this)]
-        {
-            if (safe != nullptr) safe->resized();
+            return entry.type == type;
         });
-    moduleList = std::move(moduleListView);
-    modulesContent.addAndMakeVisible(*moduleList);
+        if (permanently || (uid >= ava::module_stack::originalCount && copies > 1))
+        {
+            safe->copiedModuleEditors.erase(uid);
+            safe->eqlCopyEditors.erase(uid);
+            if (!safe->audioProcessor.deleteModuleSlot(range, uid)) return;
+            safe->rebindActiveModuleEditors();
+        }
+        else if (!safe->audioProcessor.setModuleSlotShown(range, uid, false)) return;
+        safe->resized();
+        if (safe->controlSearchPanel != nullptr) safe->controlSearchPanel->refreshMatches();
+        safe->scheduleHistorySnapshot();
+    };
+    moduleList = std::make_unique<ModuleList>(std::move(actions), valueTreeState);
+    instanceContent.addAndMakeVisible(*moduleList);
 }

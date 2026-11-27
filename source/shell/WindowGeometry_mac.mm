@@ -2,6 +2,7 @@
 #import <AppKit/AppKit.h>
 
 #include "WindowGeometry.h"
+#include "DragCursor.h"
 
 namespace window_geometry
 {
@@ -47,4 +48,17 @@ void setPosition(juce::Component& component, juce::Point<int> position)
         [window setFrameTopLeftPoint:NSMakePoint(position.x, desktopTop() - position.y)];
 }
 
+}
+
+namespace drag_cursor_detail
+{
+void hideSystemCursor()
+{
+    [NSCursor hide];
+}
+
+void showSystemCursor()
+{
+    [NSCursor unhide];
+}
 }

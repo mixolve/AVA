@@ -14,5 +14,8 @@ inline constexpr int controlBlockFrameThickness = 2;
 inline constexpr int controlBlockFrameOutset = controlBlockFrameGap + controlBlockFrameThickness;
 inline constexpr int controlBlockPadding = uiGap;
 
-inline constexpr int controlEdgeInset = 4;
 inline constexpr int controlInnerGap = 2;
+// The 1px frame occupies the first pixel of the edge inset.
+inline constexpr int controlEdgeInset = controlInnerGap + 1;
+inline constexpr int controlBlockHeaderButtonInset = 4;
+inline constexpr int unitIndicatorSize = 12;

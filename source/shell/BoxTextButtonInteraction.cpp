@@ -162,7 +162,8 @@ void BoxTextButton::mouseUp(const juce::MouseEvent& event)
         return;
     }
 
-    triggerClick();
+    if (clickOnRelease == ClickOnRelease::withoutFlash) internalClickCallback(clickModifiers);
+    else if (clickOnRelease == ClickOnRelease::withFlash) triggerClick();
 }
 
 void BoxTextButton::mouseExit(const juce::MouseEvent&)

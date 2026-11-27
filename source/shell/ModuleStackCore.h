@@ -43,14 +43,13 @@ inline Slot* find(Order& order,int uid) {
     const auto it = std::find_if(order.begin(),order.end(),[uid](const Slot& s){ return s.uid == uid; });
     return it == order.end() ? nullptr : &*it;
 }
-inline bool insertCopy(Order& order,int sourceUid,int newUid,int serial) {
-    if (newUid < originalCount || order.size() >= maximumSlotsPerBand
-        || find(order, newUid) != nullptr) return false;
-    const auto it = std::find_if(order.begin(),order.end(),[sourceUid](const Slot& s){return s.uid==sourceUid;});
-    if (it == order.end() || serial < 2) return false;
-    const auto insertion = static_cast<size_t>(std::distance(order.begin(),it));
-    const int type = it->type;
-    order.insert(order.begin()+std::ptrdiff_t(insertion+1), Slot{newUid,type,serial,true,true});
+inline bool insertCopy(Order& order, int type, int newUid, int serial)
+{
+    if (newUid < originalCount || type < 0 || type >= typeCount || serial < 2
+        || order.size() >= maximumSlotsPerBand || find(order, newUid) != nullptr)
+        return false;
+    const auto source = std::find_if(order.begin(), order.end(), [type](const Slot& slot) { return slot.type == type; });
+    order.insert(source == order.end() ? source : source + 1, Slot{newUid, type, serial, true, true});
     return true;
 }
 inline bool remove(Order& order,int uid) {

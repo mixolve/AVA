@@ -105,7 +105,7 @@ CrossoverModuleComponent::CrossoverModuleComponent(Config configIn)
     updateSoloState();
 
     pageViewport.setInterceptsMouseClicks(false, true);
-    pageViewport.setScrollBarsShown(false, false, true, false);
+    pageViewport.setScrollBarsShown(true, false, false, false);
     pageViewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
     pageViewport.setWantsKeyboardFocus(false);
     pageViewport.setName("viewport");

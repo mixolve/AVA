@@ -21,14 +21,156 @@ private:
     juce::Component::SafePointer<juce::Component> target;
 };
 
-bool scrollViewportWithWheel(juce::Viewport& viewport,
-                             int contentHeight,
-                             const juce::MouseWheelDetails& wheel,
-                             bool fineControl = false);
+class CursorDragScrollBar : public juce::ScrollBar
+{
+public:
+    enum class TrackClick { ignore, drag };
+
+    explicit CursorDragScrollBar(bool vertical, TrackClick trackClick = TrackClick::ignore)
+        : juce::ScrollBar(vertical), trackClickMode(trackClick) {}
+
+    struct HeaderRegions
+    {
+        juce::Rectangle<int> title, bypass;
+        bool hideThumb = false;
+    };
+    std::function<HeaderRegions()> headerRegions;
+
+    bool hitTest(int x, int y) override
+    {
+        if (headerRegions)
+        {
+            const auto regions = headerRegions();
+            if (regions.title.contains(x, y) || regions.bypass.contains(x, y)) return false;
+        }
+        return juce::ScrollBar::hitTest(x, y);
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        stopDrag();
+        const auto track = getTrackBounds();
+        const auto thumb = getThumb(track);
+        const auto axis = isVertical() ? event.position.y : event.position.x;
+        const auto thumbStart = float(thumb.getStart());
+        anchorOffset = axis - thumbStart;
+        dragging = event.mods.isLeftButtonDown()
+            && getCurrentRangeSize() < getRangeLimit().getLength() && thumb.getLength() > 0
+            && (trackClickMode == TrackClick::drag || (axis >= thumbStart && axis < float(thumb.getEnd())));
+        if (!dragging) return;
+
+        anchorOffset = juce::jlimit(0.0f, float(thumb.getLength() - 1), anchorOffset);
+        dragPosition = getCurrentRangeStart();
+        lastPointer = event.position;
+        dragAxisChosen = trackClickMode != TrackClick::drag;
+        dragVertically = isVertical();
+        dragCursor.hold(event, true, true);
+        dragCursor.setReturnPosition(event.getMouseDownScreenPosition().toFloat());
+        repaint();
+    }
+
+    void mouseDrag(const juce::MouseEvent& event) override
+    {
+        if (!dragging) return;
+
+        const auto delta = event.position - lastPointer;
+        if (!dragAxisChosen)
+        {
+            if (delta.isOrigin()) return;
+            dragVertically = std::abs(delta.y) > std::abs(delta.x);
+            dragAxisChosen = true;
+        }
+        lastPointer = event.position;
+        const auto track = getTrackBounds();
+        const auto thumb = getThumb(track);
+        const auto travel = (isVertical() ? track.getHeight() : track.getWidth()) - thumb.getLength();
+        const auto min = getMinimumRangeLimit();
+        const auto max = getMaximumRangeLimit() - getCurrentRangeSize();
+        if (travel <= 0 || max <= min) return;
+
+        const auto movement = dragVertically ? delta.y : delta.x;
+        // Discard motion past either limit so reversing always moves the thumb straight away.
+        dragPosition = juce::jlimit(min, max, dragPosition + movement * (max - min) / travel);
+        setCurrentRangeStart(dragPosition, juce::sendNotificationSync);
+        repaint();
+
+        if (dragging && dragCursor.isHeld())
+        {
+            dragCursor.hold(event, true, true);
+            const auto newThumb = getThumb(track);
+            const auto along = float(newThumb.getStart())
+                + juce::jmin(anchorOffset, float(juce::jmax(0, newThumb.getLength() - 1)));
+            dragCursor.setReturnPosition(localPointToGlobal(isVertical() ? juce::Point<float>(float(track.getCentreX()), along)
+                                                                         : juce::Point<float>(along, float(track.getCentreY()))));
+        }
+    }
+
+    void mouseUp(const juce::MouseEvent& event) override
+    {
+        stopDrag();
+        juce::ScrollBar::mouseUp(event);
+    }
+
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override {}
+    bool keyPressed(const juce::KeyPress&) override { return false; }
+
+    void visibilityChanged() override
+    {
+        if (!isVisible()) stopDrag();
+    }
+
+private:
+    void stopDrag()
+    {
+        dragging = false;
+        dragCursor.end();
+    }
+
+    juce::Rectangle<int> getTrackBounds() const
+    {
+        const auto bounds = getLocalBounds();
+        if (trackClickMode != TrackClick::drag) return bounds;
+        constexpr auto inset = controlBlockPadding + controlBlockFrameThickness;
+        return bounds.withSizeKeepingCentre(bounds.getWidth() - 2 * inset, editorScrollBarWidth);
+    }
+
+    juce::Range<int> getThumb(juce::Rectangle<int> track)
+    {
+        const auto total = getRangeLimit().getLength();
+        const auto visible = getCurrentRangeSize();
+        const auto length = isVertical() ? getHeight() : getWidth();
+        const auto minimum = getLookAndFeel().getMinimumScrollbarThumbSize(*this);
+        if (visible >= total || length <= minimum) return {};
+        const auto thumbLength = juce::jmax(minimum, juce::roundToInt(length * visible / total));
+        if (thumbLength >= length) return {};
+        const auto start = juce::roundToInt((length - thumbLength)
+            * (getCurrentRangeStart() - getMinimumRangeLimit()) / (total - visible));
+        const auto trackStart = isVertical() ? track.getY() : track.getX();
+        const auto scale = double(isVertical() ? track.getHeight() : track.getWidth()) / length;
+        return {trackStart + juce::roundToInt(start * scale),
+                trackStart + juce::roundToInt((start + thumbLength) * scale)};
+    }
+
+    const TrackClick trackClickMode;
+    DragCursor dragCursor;
+    juce::Point<float> lastPointer;
+    double dragPosition = 0.0;
+    float anchorOffset = 0.0f;
+    bool dragging = false;
+    bool dragAxisChosen = false;
+    bool dragVertically = false;
+};
 
 class UiScrollViewport : public juce::Viewport
 {
 public:
+    UiScrollViewport()
+    {
+        recreateScrollbars();
+        setScrollBarThickness(editorScrollBarWidth);
+        setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
+    }
+
     std::function<void()> onViewChanged;
     std::function<void()> onBackgroundClick;
     void mouseDown(const juce::MouseEvent&) override
@@ -39,18 +181,17 @@ public:
     {
         if (onViewChanged) onViewChanged();
     }
-    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
-    {
-        const auto height = getViewedComponent() != nullptr ? getViewedComponent()->getHeight() : 0;
-        if (!scrollViewportWithWheel(*this, height, wheel, event.mods.isShiftDown()))
-            juce::Component::mouseWheelMove(event, wheel);
-    }
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override {}
+    bool keyPressed(const juce::KeyPress&) override { return false; }
+
+private:
+    juce::ScrollBar* createScrollBarComponent(bool vertical) override { return new CursorDragScrollBar(vertical); }
 };
 
 inline juce::Rectangle<int> moduleNameplateBypassBounds(juce::Rectangle<int> frame)
 {
     const auto header = frame.withHeight(controlBlockHeaderHeight);
-    constexpr int inset = controlEdgeInset;
+    constexpr int inset = controlBlockHeaderButtonInset;
     const auto side = header.getHeight() - 2 * inset;
     return {header.getRight() - inset - side,
             header.getY() + inset,
@@ -83,7 +224,7 @@ public:
                 headerHighlighted,
                 bool(getProperties().getWithDefault("headerOnlyBlock", false)) || isBlockCollapsed(frame.title),
                 frame.centreInkVertically);
-            if (moduleHeaderToggle && frame.colour == uiGreyDark)
+            if (moduleHeaderToggle && frame.colour == uiGreyDark && !isExpandedNameHover(frame.title))
             {
                 const auto bp = moduleNameplateBypassBounds(frame.bounds);
                 const bool bypassed = moduleHeaderBypassed && moduleHeaderBypassed();
@@ -94,6 +235,12 @@ public:
             }
         }
     }
+    bool isExpandedNameHover(const juce::String& title) const
+    {
+        return hoveredBlockVisualReady && hoveredBlockName && hoveredBlockTitle == title
+            && !isBlockCollapsed(title);
+    }
+    bool hasModuleNameplateBypass() const noexcept { return bool(moduleHeaderToggle); }
     void setModuleNameplateBypass(std::function<bool()> isBypassed,
                                   std::function<void()> toggle)
     {
@@ -122,7 +269,7 @@ public:
     juce::MouseCursor getMouseCursor() override;
     std::vector<ControlBlockFrame> controlBlockFrames;
 private:
-    juce::String blockHeaderAt(juce::Point<int>) const;
+    juce::String blockHeaderAt(juce::Point<int>, bool titleOnly = false) const;
     void updateHoveredBlock(juce::Point<int>);
     void setBlockCollapsed(const juce::String& title, bool collapsed);
     juce::Identifier collapseProperty(const juce::String& title) const;
@@ -134,6 +281,7 @@ private:
     juce::String hoveredBlockTitle;
     juce::String hoveredBypassTitle;
     juce::String searchHighlightedTitle;
+    bool hoveredBlockName = false;
     bool hoveredBlockVisualReady = false;
     int hoverGeneration = 0;
     bool collapsible = true;
@@ -146,6 +294,7 @@ class CopyPasteTextEditor : public juce::TextEditor
 public:
     CopyPasteTextEditor();
     bool keyPressed(const juce::KeyPress& key) override;
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override {}
     void paint(juce::Graphics& g) override;
     void setText(const juce::String& text, bool sendChangeMessage = true)
     { juce::TextEditor::setText(uppercaseText(text), sendChangeMessage); }
@@ -245,6 +394,7 @@ public:
     void setTextInputEnabled(bool enabled) { textInputEnabled = enabled; }
     void enablementChanged() override;
     void setDiscreteChoiceIndicator(int count, int selected = -1);
+    void setAlwaysUseChoiceList(bool enabled) noexcept { alwaysUseChoiceList = enabled; }
     std::function<void()> onResetRequested;
     void setIdleTextProvider(std::function<juce::String()> provider);
     juce::Rectangle<int> getValueBounds() const;
@@ -262,7 +412,6 @@ public:
     void mouseMove(const juce::MouseEvent&) override;
     void mouseEnter(const juce::MouseEvent&) override;
     void mouseExit(const juce::MouseEvent&) override;
-    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
     void modifierKeysChanged(const juce::ModifierKeys& modifiers) override;
 
     std::function<juce::String()> displayTextProvider;
@@ -279,6 +428,8 @@ private:
     bool canUseBottomIndicator(int index) const;
     bool canAdjustValue() const noexcept;
     void cancelMomentaryPress();
+    void setPressPreviewPosition(double position);
+    double getVisualPosition() const;
     void paintValueFrame(juce::Graphics&, juce::Rectangle<int>, bool overlayOnly = false);
     void finishIndicatorDrag();
     std::function<juce::String()> idleTextProvider;
@@ -287,6 +438,8 @@ private:
     void revealValue();
     bool pointerOnValue() const;
     int choiceCount() const noexcept { return discreteChoiceCount; }
+    bool isBinaryToggle() const noexcept { return choiceCount() == 2 && !alwaysUseChoiceList; }
+    bool alwaysUseChoiceList = false;
     double valueTransitionAt = 0.0;
     void sliderValueChanged(juce::Slider*) override;
     void showEditor();
@@ -297,6 +450,7 @@ private:
     juce::Slider& slider;
     bool interactionEnabled = true;
     bool pointerDown = false;
+    double pressPreviewPosition = -1.0;
     bool momentaryPressed = false;
     bool momentaryDragging = false, dragTargetHighlighted = false;
     juce::MouseCursor momentaryDragCursor;
@@ -331,6 +485,8 @@ public:
     void setDragTargetHighlighted(bool shouldShow) noexcept;
     void setMoveTargetAvailable(bool available);
     void setDragRequiresControl(bool required) noexcept { dragRequiresControl = required; }
+    enum class ClickOnRelease { none, withoutFlash, withFlash };
+    void setClickOnRelease(ClickOnRelease mode) noexcept { clickOnRelease = mode; }
     void setBottomIndicator(int index, ValueBoxComponent::BottomIndicator indicator, juce::String label = {});
     juce::Rectangle<int> getBottomIndicatorBounds(int index) const;
     int bottomIndicatorAt(juce::Point<int> point) const;
@@ -369,6 +525,7 @@ private:
     bool marqueeRepaintPending = false;
     bool controlDragActive = false;
     bool dragRequiresControl = true;
+    ClickOnRelease clickOnRelease = ClickOnRelease::withFlash;
     std::array<ValueBoxComponent::BottomIndicator, 3> bottomIndicators;
     std::array<int, 3> lastBottomIndicatorStates { -2, -2, -2 };
     std::array<juce::String, 3> bottomIndicatorLabels { "SL", "BP", "" };

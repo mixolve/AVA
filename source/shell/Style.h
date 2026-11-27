@@ -9,13 +9,14 @@
 void paintPluginBackground(juce::Graphics& graphics);
 juce::Rectangle<int> getControlBlockFrameBounds(juce::Rectangle<int> content) noexcept;
 juce::Rectangle<int> getModuleBlockFrameBounds(juce::Rectangle<int> blocks) noexcept;
+juce::Rectangle<int> getControlBlockTitleZone(juce::Rectangle<int> header, const juce::String& title);
 void paintControlBlockFrame(juce::Graphics&, juce::Rectangle<int>, const juce::String& title,
                             juce::Colour colour = juce::Colour(0xffffffff), bool hovered = false,
                             bool collapsed = false, bool centreInkVertically = false);
 int getEditorContentInset(const juce::Component& component) noexcept;
 int getEditorHeight(const juce::Component& component) noexcept;
 int getEditorWidth(const juce::Component& component) noexcept;
-int getExpandedEditorWidth() noexcept;
+int getExpandedEditorWidth(int columns = viewportControlColumns) noexcept;
 int getDockLength(bool vertical, int controls = viewportControlColumns) noexcept;
 
 inline constexpr int defaultUiCornerRadius = 0;
@@ -42,7 +43,6 @@ juce::Rectangle<int> layoutControlGrid(const juce::Component& owner, juce::Recta
                                         const std::vector<ControlGridCell>& cells);
 
 inline constexpr int squareControlSize = 80;
-int getPinnedRoutingTileHeight(const juce::Component&) noexcept;
 inline constexpr int standardControlTextZoneHeight = 44;
 inline constexpr int maximumStoredEditorDimension = 4096;
 inline constexpr int rowHeight = 30;

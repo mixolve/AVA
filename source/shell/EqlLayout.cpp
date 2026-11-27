@@ -1,5 +1,6 @@
 #include "ChoiceControl.h"
 #include "ModuleList.h"
+#include "ValueEditor.h"
 #include "EqlCopyEditor.h"
 #include "Editor.h"
 #include "EditorStateSchema.h"
@@ -34,11 +35,11 @@ void AvaAudioProcessorEditor::layoutEqlModuleSections(juce::Rectangle<int>& view
     {
         controlSearchPanel->setPinned(filterViewport.getViewPositionY() > 0);
         const auto searchTop = 2 * gap;
-        const bool searchEnabled = bool(getRootWindowState().getProperty(shell_editor_ui::key("search_visible"), true));
+        const bool searchEnabled = shell_editor_ui::isSearchVisible(getRootWindowState());
         const auto searchHeight = searchEnabled
             ? controlSearchPanel->getDisplayedHeight() + gap : 0;
         const auto pinnedHeight = bool(getRootWindowState().getProperty(shell_editor_ui::key("pin_routing"), true))
-            ? getPinnedRoutingTileHeight(*this) + gap : 0;
+            ? getSquareControlSize(*this) + gap : 0;
         const auto top = searchTop + searchHeight + pinnedHeight;
         const auto bottom = quickAccessStrip.getY();
         viewportBounds = {viewportBounds.getX(), top, viewportBounds.getWidth(),
@@ -214,7 +215,6 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         oscPanel->setSize(innerBlockWidth, squareSize);
         const auto oscHeight = oscPanel->getPreferredHeight();
         const auto syncCollapsed = unitSyncContent.isBlockCollapsed("SYNC");
-        const auto slotsCollapsed = slotsContent.isBlockCollapsed("SLOTS");
         std::vector<ControlGridCell> syncCells {{unitNumberControl.get()}, {receiveControl.get()}, {sendControl.get()}, {linksCountControl.get()}};
         for (int index = 0; index < linkDestinationCount; ++index)
             syncCells.push_back({linkToControls[size_t(index)].get()});
@@ -222,64 +222,15 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
             : measureControlGrid(unitSyncContent,
                 {paddingUnit, controlBlockHeaderHeight + paddingUnit,
                  innerBlockWidth - 2 * paddingUnit, 0}, syncCells).getBottom() + paddingUnit;
-        const auto slotCount = static_cast<int>(hostSlotButtons.size());
-        const auto slotsHeight = slotsCollapsed ? controlBlockHeaderHeight
-            : controlBlockHeaderHeight + 2 * paddingUnit
-                + slotCount * squareSize + juce::jmax(0, slotCount - 1) * getUiRowGap(*this);
         int blockY = controlBlockHeaderHeight + unitGap;
-        const auto unitMainCollapsed = unitMainContent.isBlockCollapsed("MAIN");
-        const auto unitMainHeight = unitMainCollapsed ? controlBlockHeaderHeight
-            : controlBlockHeaderHeight + 2 * paddingUnit + 3 * squareSize + 2 * getUiRowGap(*this);
-        unitMainContent.setBounds(instanceInset, blockY, innerBlockWidth, unitMainHeight);
-        unitMainContent.controlBlockFrames = {
-            {{0, 0, innerBlockWidth, unitMainHeight}, "MAIN", uiGreyDark}};
-        for (auto* control : std::array<juce::Component*, 14> {
-                undoButton.get(), redoButton.get(), abControl.get(), abCopyButton.get(),
-                globalBypassButton.get(), bypassCompensationControl.get(),
-                unitCopyButton.get(), unitPasteButton.get(),
-                unitZoomControl.get(), unitDockSizeControl.get(), aboutControl.get(), pinRoutingControl.get(),
-                unitSearchControl.get(), unitSampleRateLabel.get() })
-        {
-            control->setVisible(!unitMainCollapsed);
-            if (unitMainCollapsed) control->setBounds({});
-        }
-        if (!unitMainCollapsed)
-        {
-            const auto mainRow = juce::Rectangle<int> { paddingUnit,
-                controlBlockHeaderHeight + paddingUnit, innerBlockWidth - 2 * paddingUnit, squareSize };
-            layoutControlGrid(unitMainContent, mainRow,
-                {{undoButton.get()}, {redoButton.get()}, {abControl.get()},
-                 {abCopyButton.get()}, {globalBypassButton.get()},
-                 {bypassCompensationControl.get()}});
-            layoutControlGrid(unitMainContent,
-                mainRow.translated(0, squareSize + getUiRowGap(*this)),
-                {{unitCopyButton.get()}, {unitPasteButton.get()}, {unitZoomControl.get()},
-                 {unitDockSizeControl.get()}, {pinRoutingControl.get()}, {unitSearchControl.get()}});
-            layoutControlGrid(unitMainContent,
-                mainRow.translated(0, 2 * (squareSize + getUiRowGap(*this))),
-                {{unitSampleRateLabel.get()}, {aboutControl.get()}});
-        }
-        blockY += unitMainHeight + unitGap;
-        const auto routingCollapsed = unitRoutingContent.isBlockCollapsed("ROUTING");
-        const auto graphSize = innerBlockWidth - 2 * paddingUnit;
-        const auto graphHeight = graphSize / 2;
-        const auto routingHeight = routingCollapsed ? controlBlockHeaderHeight
-            : controlBlockHeaderHeight + 2 * paddingUnit + graphHeight;
-        unitRoutingContent.setBounds(instanceInset, blockY, innerBlockWidth, routingHeight);
-        unitRoutingContent.controlBlockFrames = {
-            {{0, 0, innerBlockWidth, routingHeight}, "ROUTING", uiGreyDark}};
-        routingPanel->setVisible(!routingCollapsed);
-        if (!routingCollapsed)
-            routingPanel->setBounds(paddingUnit, controlBlockHeaderHeight + paddingUnit,
-                                    graphSize, graphHeight);
-        else
-            routingPanel->setBounds({});
-        routingPanel->placeContainersButton(unitContent,
-            unitRoutingContent.getBounds().withTrimmedTop(controlBlockHeaderHeight)
-                .withTrimmedLeft(controlBlockFrameThickness)
-                .withTrimmedRight(controlBlockFrameThickness)
-                .withTrimmedBottom(controlBlockFrameThickness));
-        blockY += routingHeight + unitGap;
+        const std::array<juce::Component*, 17> controls {
+            routingControl.get(), slotsControl.get(), undoButton.get(), redoButton.get(), abControl.get(), abCopyButton.get(),
+            globalBypassButton.get(), bypassCompensationControl.get(),
+            unitCopyButton.get(), unitPasteButton.get(), unitZoomControl.get(), unitWidthControl.get(), unitDockSizeControl.get(),
+            pinRoutingControl.get(), unitSearchControl.get(), unitSampleRateLabel.get(), aboutControl.get()
+        };
+        unitMainRow.layout({instanceInset, blockY, innerBlockWidth, controlBlockHeaderHeight}, controls);
+        blockY = unitMainContent.getBottom() + unitGap;
         oscPanel->setBounds(instanceInset, blockY, innerBlockWidth, oscHeight);
         blockY += oscHeight + unitGap;
         unitSyncContent.setBounds(instanceInset, blockY, innerBlockWidth, syncHeight);
@@ -306,112 +257,40 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
         }
         unitSyncContent.controlBlockFrames = {
             {{0, 0, innerBlockWidth, syncHeight}, "SYNC", uiGreyDark}};
-        blockY += syncHeight + unitGap;
-        slotsContent.setBounds(instanceInset, blockY, innerBlockWidth, slotsHeight);
-        const auto slotLabelWidth = innerBlockWidth - 2 * paddingUnit - squareSize - unitGap;
-        for (int index = 0; index < slotCount; ++index)
-        {
-            const auto visible = !slotsCollapsed;
-            hostSlotNameFields[size_t(index)]->setVisible(visible);
-            hostSlotButtons[size_t(index)]->setVisible(visible);
-            if (!visible)
-            {
-                hostSlotNameFields[size_t(index)]->setBounds({});
-                hostSlotButtons[size_t(index)]->setBounds({});
-                continue;
-            }
-            const auto y = controlBlockHeaderHeight + paddingUnit
-                + index * (squareSize + getUiRowGap(*this));
-            hostSlotNameFields[size_t(index)]->setBounds(paddingUnit, y, squareSize, squareSize);
-            hostSlotButtons[size_t(index)]->setBounds(
-                paddingUnit + squareSize + unitGap, y, slotLabelWidth, squareSize);
-        }
-        slotsContent.controlBlockFrames = {
-            {{0, 0, innerBlockWidth, slotsHeight}, "SLOTS", uiGreyDark}};
-        unitHeight = blockY + slotsHeight + unitGap + controlBlockFrameThickness;
+        unitHeight = blockY + syncHeight + unitGap + controlBlockFrameThickness;
     }
     unitMainContent.setVisible(!unitCollapsed);
-    unitRoutingContent.setVisible(!unitCollapsed);
-    if (unitCollapsed)
-        routingPanel->setVisible(false);
+    unitMainRow.syncScrollBar();
     oscPanel->setVisible(!unitCollapsed);
     unitSyncContent.setVisible(!unitCollapsed);
-    slotsContent.setVisible(!unitCollapsed);
     unitContent.setBounds(0, 0, blockWidth, unitHeight);
     unitContent.controlBlockFrames = {
         {{0, 0, blockWidth, unitHeight}, "UNIT", uiWhite, {}, true}};
     unitContent.setVisible(true);
     const auto instanceY = unitHeight + unitGap;
 
-    std::array<std::vector<ControlGridCell>, 4> rows;
-    const auto append = [&rows](size_t row, juce::Component* control)
-    {
-        if (control != nullptr) rows[row].push_back({control});
+    std::vector<juce::Component*> instanceControls {
+        linkInstanceControl.get(), settings.secondary[0], settings.secondary[1],
+        sync[0], sync[1], settings.secondary[2]
     };
-    append(0, linkInstanceControl.get());
-    append(0, settings.secondary[0]);
-    append(0, settings.secondary[1]);
-    append(0, sync[0]);
-    append(0, sync[1]);
-    append(0, settings.secondary[2]);
-    for (auto* control : settings.splits) append(1, control);
-    for (auto* band : bands) append(2, band);
-    append(3, settings.actions[0]);
-    append(3, settings.actions[1]);
-    append(3, settings.actions[2]);
-    append(3, settings.actions[3]);
+    instanceControls.insert(instanceControls.end(), settings.splits.begin(), settings.splits.end());
+    instanceControls.insert(instanceControls.end(), bands.begin(), bands.end());
+    instanceControls.insert(instanceControls.end(), settings.actions.begin(), settings.actions.end());
+    std::erase(instanceControls, nullptr);
+    instanceMainRow.layout({instanceInset, controlBlockHeaderHeight + unitGap,
+                            innerBlockWidth, controlBlockHeaderHeight}, instanceControls);
 
-    const auto mainCollapsed = mainContent.isBlockCollapsed("MAIN");
-    for (const auto& row : rows)
-        for (const auto& cell : row)
-        {
-            auto* control = cell.component;
-            if (control->getParentComponent() != &mainContent)
-                mainContent.addChildComponent(*control);
-            control->setVisible(!mainCollapsed);
-        }
-
-    const auto padding = controlBlockPadding + controlBlockFrameThickness;
-    const auto gridWidth = innerBlockWidth - 2 * padding;
-    int mainHeight = controlBlockHeaderHeight;
-    if (!mainCollapsed)
-    {
-        auto rowTop = controlBlockHeaderHeight + uiGap;
-        for (const auto& row : rows)
-        {
-            if (row.empty()) continue;
-            const auto placed = layoutControlGrid(*this,
-                {padding, rowTop, gridWidth, 0}, row);
-            if (&row == &rows[3] && row.size() == 4)
-            {
-                const auto step = getSquareControlSize(*this) + getUiGap(*this);
-                row[2].component->setTopLeftPosition(padding + 4 * step, rowTop);
-                row[3].component->setTopLeftPosition(padding + 5 * step, rowTop);
-            }
-            rowTop = placed.getBottom() + getUiRowGap(*this);
-        }
-        mainHeight = rowTop + controlBlockFrameThickness;
-    }
-    mainContent.setBounds(instanceInset, controlBlockHeaderHeight + uiGap, innerBlockWidth, mainHeight);
-    mainContent.controlBlockFrames = {{{0, 0, innerBlockWidth, mainHeight}, "MAIN", uiGreyDark}};
-    mainContent.setVisible(true);
     // The INSTANCE frame now contains MAIN and the entire module stack.  Set
     // the width before reparenting modules, so children can size themselves.
     instanceContent.setBounds(0, instanceY, blockWidth, controlBlockHeaderHeight);
     ensureModuleList();
-    const auto modulesCollapsed = modulesContent.isBlockCollapsed("MODULES");
-    const auto modulesY = mainContent.getBottom() + getUiGap(*this);
-    const int modulePanelHeight = modulesCollapsed || moduleList == nullptr ? 0
-        : moduleList->getContentHeight(innerBlockWidth);
-    const int modulesHeight = controlBlockHeaderHeight + modulePanelHeight;
-    modulesContent.setBounds(instanceInset, modulesY, innerBlockWidth, modulesHeight);
-    modulesContent.controlBlockFrames = {{{0, 0, innerBlockWidth, modulesHeight}, "MODULES", uiGreyDark}};
-    modulesContent.setVisible(true);
+    const auto modulesY = mainContent.getBottom() + unitGap;
     if (moduleList != nullptr)
     {
-        moduleList->setVisible(!modulesCollapsed);
-        moduleList->setBounds(0, controlBlockHeaderHeight,
-                                      innerBlockWidth, modulePanelHeight);
+        const juce::Rectangle<int> boundsForModules {instanceInset, modulesY, innerBlockWidth,
+                                                     moduleList->getContentHeight()};
+        if (moduleList->getBounds() == boundsForModules) moduleList->resized();
+        else moduleList->setBounds(boundsForModules);
     }
     const auto activeBand = audioProcessor.getSelectedCrossoverRange();
     const auto slots = audioProcessor.getModuleStackForRange(activeBand);
@@ -551,13 +430,17 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
 
     const auto instanceCollapsed = instanceContent.isBlockCollapsed("INSTANCE");
     mainContent.setVisible(!instanceCollapsed);
-    modulesContent.setVisible(!instanceCollapsed);
+    instanceMainRow.syncScrollBar();
+    if (moduleList != nullptr) moduleList->setVisible(!instanceCollapsed);
     // All module blocks are children of INSTANCE, so a single collapse hides
     // the complete stack.  Each module still owns its individual collapse key.
     // OFF is a true per-slot DSP bypass (see AudioProcessing.cpp). Apply the
     // same flag here so disabled copies disappear from ALL rather than leaving
     // stale EQL / CHAIN / DYN headers visible.
-    int y = modulesContent.getBottom();
+    std::array<int, ava::module_stack::typeCount> shownCounts {}, shownOrdinals {};
+    for (const auto& slot : slots)
+        if (slot.shown) ++shownCounts[size_t(slot.type)];
+    int y = moduleList != nullptr ? moduleList->getBottom() : mainContent.getBottom();
     for (const auto& slot : slots)
     {
         juce::Component* block = nullptr;
@@ -600,8 +483,10 @@ void AvaAudioProcessorEditor::layoutUnifiedBlocks(juce::Rectangle<int>& bounds)
             page->setModuleNameplateBypass(readBypass, toggleBypass);
         else if (auto* dyn = dynamic_cast<CrossoverModuleComponent*>(block))
             dyn->setModuleNameplateBypass(readBypass, toggleBypass);
-        const auto caption = juce::String(module_order::descriptions[size_t(slot.type)].name).toUpperCase()
-            + " (" + juce::String(ava::module_stack::displayOrdinal(slots, slot.uid)).paddedLeft('0', 2) + ")";
+        const auto type = size_t(slot.type);
+        auto caption = juce::String(module_order::descriptions[type].name).toUpperCase();
+        if (shownCounts[type] > 1)
+            caption += " (" + juce::String(++shownOrdinals[type]).paddedLeft('0', 2) + ")";
         if (slot.type == module_order::dyn)
         {
             if (auto* dynEditor = dynamic_cast<CrossoverModuleComponent*>(block))
@@ -638,9 +523,9 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
     if (controlSearchPanel == nullptr || updatingPinnedSearchPosition) return;
     const juce::ScopedValueSetter<bool> guard(updatingPinnedSearchPosition, true);
     const auto* visibleEditor = activeInstanceEditor != nullptr ? activeInstanceEditor.get() : this;
-    const bool showingEditor = !isDockOnly() && !visibleEditor->aboutExpanded
+    const bool showingEditor = !isDockOnly() && !visibleEditor->hasUnitPage()
         && filterViewport.isVisible();
-    const bool searchEnabled = bool(getRootWindowState().getProperty(shell_editor_ui::key("search_visible"), true));
+    const bool searchEnabled = shell_editor_ui::isSearchVisible(getRootWindowState());
     const bool showSearch = showingEditor && activeInstanceEditor == nullptr && searchEnabled;
     if (unitSearchControl != nullptr && unitSearchControl->getSelectedChoiceIndex() != int(searchEnabled))
         unitSearchControl->setSelectedChoiceIndex(searchEnabled ? 1 : 0, false);
@@ -668,12 +553,12 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
     const auto width = visibleEditor->filterViewport.getWidth();
     const auto unitWidth = juce::jmax(0, width - gap);
     const auto routingTop = searchTop + (searchEnabled ? searchHeight + gap : 0);
-    const auto tileHeight = getPinnedRoutingTileHeight(*this);
+    const auto tileHeight = getSquareControlSize(*this);
+    const auto pinnedZoneHeight = tileHeight + gap;
     int routingInset = 0;
     if (showUnitStatus)
     {
-        const auto side = getSquareControlSize(*this);
-        const auto indicatorSize = RangeIndicator::bottomControlSize(*this, {0, 0, side, side});
+        constexpr auto indicatorSize = unitIndicatorSize;
         const auto baseFont = makeUiFont().withHeight(float(indicatorSize));
         const auto lineHeight = juce::jmin(tileHeight / 4, tileHeight - 3 * indicatorSize);
         const auto numberFont = baseFont.withPointHeight(baseFont.getHeightInPoints() + 4.0f);
@@ -689,7 +574,7 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
         };
         unitReceiveIndicator.setBounds(square(0));
         unitSendIndicator.setBounds(square(indicatorSize + spacing(1)));
-        unitNumberLabel.setBounds(0, 2 * indicatorSize + spacing(2), columnWidth, lineHeight);
+        unitNumberLabel.setBounds(1, 2 * indicatorSize + spacing(2), columnWidth, lineHeight);
         unitSyncPauseToggle.setBounds(square(tileHeight - indicatorSize));
     }
     if (showSearch)
@@ -699,7 +584,7 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
     }
     if (showRootRouting)
     {
-        pinnedRoutingViewport.setBounds(x + routingInset, routingTop, juce::jmax(0, unitWidth - routingInset), tileHeight);
+        pinnedRoutingViewport.setBounds(x + routingInset, routingTop, juce::jmax(0, unitWidth - routingInset), pinnedZoneHeight);
         // Never expose a previously hidden ribbon at stale coordinates.
         pinnedRoutingViewport.setVisible(true);
         pinnedRoutingViewport.toFront(false);
@@ -708,7 +593,7 @@ void AvaAudioProcessorEditor::updatePinnedSearchPosition()
     if (showUnitStatus) unitSyncPlate.toFront(false);
 
     if (activeInstanceEditor != nullptr) return;
-    const auto top = routingTop + (reserveRouting ? getPinnedRoutingTileHeight(*this) + gap : 0);
+    const auto top = routingTop + (reserveRouting ? pinnedZoneHeight : 0);
     const auto bottom = quickAccessStrip.getY();
     const juce::Rectangle<int> visibleBounds{x, top, width, juce::jmax(0, bottom - top)};
     if (filterViewport.getBounds() != visibleBounds)

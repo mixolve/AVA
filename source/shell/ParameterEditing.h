@@ -35,7 +35,7 @@ public:
     bool hasBottomInternalControls() const noexcept;
     juce::Rectangle<int> getBottomSideZone(juce::Rectangle<int> bounds, int side) const;
     // Layout for the filled bottom-row text indicators (one or several).
-    // Exactly 2px separate adjacent zones and the corner slot/bypass markers.
+    // Adjacent zones share the standard gap, including the slot/bypass markers.
     juce::Rectangle<int> getBottomTextZone(juce::Rectangle<int> bounds, int index = 0, int count = 1) const;
     int getLayoutCellSpan() const noexcept { return int(getProperties().getWithDefault("layoutCellSpan", 1)); }
 

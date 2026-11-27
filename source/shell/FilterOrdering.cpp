@@ -190,7 +190,7 @@ void AvaAudioProcessorEditor::cancelFilterDrag()
 void AvaAudioProcessorEditor::handleFilterDrag(const int filterIndex, juce::Point<float> screenPosition, const bool released)
 {
     const auto activeCount = getActiveFilterCount();
-    if (aboutExpanded
+    if (hasUnitPage()
         || !juce::isPositiveAndBelow(filterIndex, activeCount)) { cancelFilterDrag(); return; }
     if (released && filterDragSourceIndex != filterIndex) return;
     if (!released && filterDragSourceIndex < 0) filterDragSourceIndex = filterIndex;

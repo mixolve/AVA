@@ -38,6 +38,7 @@ private:
     class SearchTextEditor final : public juce::TextEditor
     {
     public:
+        void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override {}
         explicit SearchTextEditor(ControlSearchPanel& ownerIn) : owner(ownerIn) {}
         bool keyPressed(const juce::KeyPress& key) override;
         void focusGained(FocusChangeType cause) override;

@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <optional>
 #include <vector>
 #include <utility>
 
@@ -142,7 +143,8 @@ public:
     module_order::Order getModuleOrder() const noexcept;
     module_order::Order getModuleOrderForRange(size_t rangeIndex) const noexcept;
     std::vector<ava::module_stack::Slot> getModuleStackForRange(size_t rangeIndex) const;
-    int addModuleCopy(size_t rangeIndex, int sourceUid);
+    int addModuleCopy(size_t rangeIndex, int type, std::optional<size_t> shownIndex = std::nullopt);
+    int insertModuleAt(size_t rangeIndex, int type, size_t shownIndex);
     bool deleteModuleSlot(size_t rangeIndex, int uid);
     bool setModuleSlotEnabled(size_t rangeIndex, int uid, bool enabled);
     bool isModuleSlotBypassed(size_t rangeIndex, int uid) const;

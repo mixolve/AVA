@@ -126,8 +126,32 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::drawScrollbar(juce::Graphics& g,
     juce::ScrollBar& bar, int x, int y, int width, int height, bool vertical,
     int thumbStart, int thumbSize, bool hovered, bool held)
 {
-    g.setColour(uiPanelBackground);
-    g.fillRect(x, y, width, height);
+    const juce::Graphics::ScopedSaveState saved(g);
+    const auto* customBar = dynamic_cast<const CursorDragScrollBar*>(&bar);
+    if (customBar != nullptr && customBar->headerRegions)
+    {
+        const auto regions = customBar->headerRegions();
+        if (regions.hideThumb && !held) return;
+        constexpr auto headerBarHeight = editorScrollBarWidth;
+        constexpr auto inset = controlBlockPadding + controlBlockFrameThickness;
+        const auto trackWidth = juce::jmax(0, width - 2 * inset);
+        if (trackWidth == 0) return;
+        const auto scale = double(trackWidth) / width;
+        const auto thumbEnd = juce::roundToInt((thumbStart + thumbSize) * scale);
+        thumbStart = juce::roundToInt(thumbStart * scale);
+        thumbSize = thumbEnd - thumbStart;
+        x += inset;
+        width = trackWidth;
+        y += (height - headerBarHeight) / 2;
+        height = headerBarHeight;
+        g.excludeClipRegion(regions.title.expanded(getUiGap(bar), 0));
+        if (!regions.bypass.isEmpty()) g.excludeClipRegion(regions.bypass.expanded(getUiGap(bar), 0));
+    }
+    else
+    {
+        g.setColour(uiPanelBackground);
+        g.fillRect(x, y, width, height);
+    }
     const auto until = double(bar.getProperties().getWithDefault("scrollActiveUntil", 0.0));
     const bool scrolling = juce::Time::getMillisecondCounterHiRes() < until;
     const auto delayedHover = isHoverInversionReady(bar, hovered && !held && !scrolling, "scrollbar");
@@ -152,7 +176,35 @@ void AvaAudioProcessorEditor::AvaLookAndFeel::drawScrollbar(juce::Graphics& g,
     state.set("scrollFadeStarted", started);
     // Interpolate opaque colours, preserving the solid scrollbar surface.
     colour = from.interpolatedWith(target, float(juce::jlimit(0.0, 1.0, (now - started) / fadeMs)));
+    if (scrolling || double(state.getWithDefault("scrollFadeUntil", 0.0)) > now)
+        trackScrollbarAnimation(bar);
     g.setColour(colour);
     if (vertical) g.fillRect(x, y + thumbStart, width, thumbSize);
     else g.fillRect(x + thumbStart, y, thumbSize, height);
+}
+
+void AvaAudioProcessorEditor::AvaLookAndFeel::trackScrollbarAnimation(juce::ScrollBar& bar)
+{
+    const auto containsBar = [&bar](const auto& item) { return item.getComponent() == &bar; };
+    if (std::none_of(animatedScrollbars.begin(), animatedScrollbars.end(), containsBar))
+        animatedScrollbars.emplace_back(&bar);
+    if (!isTimerRunning()) startTimerHz(60);
+}
+
+void AvaAudioProcessorEditor::AvaLookAndFeel::timerCallback()
+{
+    const auto now = juce::Time::getMillisecondCounterHiRes();
+    std::erase_if(animatedScrollbars, [now](const auto& item)
+    {
+        auto* bar = item.getComponent();
+        if (bar == nullptr || !bar->isShowing()) return true;
+        auto& state = bar->getProperties();
+        const auto scrollUntil = double(state.getWithDefault("scrollActiveUntil", 0.0));
+        const auto fadeUntil = double(state.getWithDefault("scrollFadeUntil", 0.0));
+        if (scrollUntil <= now) state.remove("scrollActiveUntil");
+        if (fadeUntil <= now) state.remove("scrollFadeUntil");
+        bar->repaint();
+        return scrollUntil <= now && fadeUntil <= now;
+    });
+    if (animatedScrollbars.empty()) stopTimer();
 }

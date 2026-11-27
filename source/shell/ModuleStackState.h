@@ -72,7 +72,7 @@ inline std::optional<Decoded> decode(const juce::String& serialized, size_t expe
         const auto* serials = serialsValue.getArray();
         const auto addedCreated = object->getProperty("addedCreated");
         if (entries == nullptr || serials == nullptr
-            || entries->size() < typeCount || entries->size() > maximumSlotsPerBand
+            || entries->size() > maximumSlotsPerBand
             || serials->size() != originalCount
             || (typeCount > originalCount && addedCreated.getDynamicObject() == nullptr))
             return std::nullopt;
@@ -112,10 +112,7 @@ inline std::optional<Decoded> decode(const juce::String& serialized, size_t expe
             if (!serial.isInt() || int(serial) < 1 || int(serial) > maximumSavedSerial)
                 return std::nullopt;
             counters[size_t(type)] = int(serial);
-            // Every current module type is represented, even when its
-            // original was deleted and replaced by a copy.
-            if (std::none_of(order.begin(), order.end(), [type](const Slot& s) { return s.type == type; }))
-                return std::nullopt;
+
         }
         for (const auto& slot : order)
             if (slot.created > counters[size_t(slot.type)]) return std::nullopt;

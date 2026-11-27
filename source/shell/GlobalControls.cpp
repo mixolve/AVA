@@ -29,14 +29,14 @@ void AvaAudioProcessorEditor::setupShellControls()
     // COMPENSATION is not assignable to an SL slot from UNIT / MAIN.
     // Keep all other control behaviour and indicator policies unchanged.
     bypassCompensationControl->setBottomIndicatorsVisible(false, true);
-    unitMainContent.addAndMakeVisible(*bypassCompensationControl);
+    unitMainRow.content.addAndMakeVisible(*bypassCompensationControl);
 
     globalBypassButton->onValueChanged = [this] {
         const auto bypassActive = globalBypassButton->getValue() >= 0.5;
         globalBypassButton->setSelectionHighlighted(bypassActive);
     };
     globalBypassButton->onValueChanged();
-    unitMainContent.addAndMakeVisible(*globalBypassButton);
+    unitMainRow.content.addAndMakeVisible(*globalBypassButton);
 
     undoButton = std::make_unique<PushControl>("UNDO");
     undoButton->setBottomIndicatorsVisible(false, false);
@@ -45,7 +45,7 @@ void AvaAudioProcessorEditor::setupShellControls()
         performHistoryStep(HistoryAction::undo);
         clearKeyboardFocus(*this);
     };
-    unitMainContent.addAndMakeVisible(*undoButton);
+    unitMainRow.content.addAndMakeVisible(*undoButton);
 
     redoButton = std::make_unique<PushControl>("REDO");
     redoButton->setBottomIndicatorsVisible(false, false);
@@ -54,7 +54,7 @@ void AvaAudioProcessorEditor::setupShellControls()
         performHistoryStep(HistoryAction::redo);
         clearKeyboardFocus(*this);
     };
-    unitMainContent.addAndMakeVisible(*redoButton);
+    unitMainRow.content.addAndMakeVisible(*redoButton);
 
     // A/B is a persistent two-state choice, not a momentary action button.
     abControl = std::make_unique<LocalChoiceControl>("A/B", juce::StringArray { "OFF", "ON" },
@@ -66,7 +66,7 @@ void AvaAudioProcessorEditor::setupShellControls()
         if (abControl->getSelectedChoiceIndex() != audioProcessor.getABCompareActiveSlot())
             switchABState();
     };
-    unitMainContent.addAndMakeVisible(*abControl);
+    unitMainRow.content.addAndMakeVisible(*abControl);
 
     // Copy the current live A/B state into the opposite snapshot. This is a
     // momentary action (commit on release), not a second A/B selection toggle.
@@ -80,7 +80,7 @@ void AvaAudioProcessorEditor::setupShellControls()
                                             audioProcessor.getABCompareSnapshot(activeSlot));
         clearKeyboardFocus(*this);
     };
-    unitMainContent.addAndMakeVisible(*abCopyButton);
+    unitMainRow.content.addAndMakeVisible(*abCopyButton);
 
     unitCopyButton = std::make_unique<PushControl>("COPY");
     unitCopyButton->setBottomIndicatorsVisible(false, false);
@@ -88,7 +88,7 @@ void AvaAudioProcessorEditor::setupShellControls()
     {
         ava::clipboard::copyPlugin(*owner);
     };
-    unitMainContent.addAndMakeVisible(*unitCopyButton);
+    unitMainRow.content.addAndMakeVisible(*unitCopyButton);
 
     unitPasteButton = std::make_unique<PushControl>("PASTE");
     unitPasteButton->setBottomIndicatorsVisible(false, false);
@@ -97,7 +97,7 @@ void AvaAudioProcessorEditor::setupShellControls()
         // Restore may replace editor objects; defer until the click returns.
         juce::MessageManager::callAsync([owner] { ava::clipboard::pastePlugin(*owner); });
     };
-    unitMainContent.addAndMakeVisible(*unitPasteButton);
+    unitMainRow.content.addAndMakeVisible(*unitPasteButton);
 
     unitZoomControl = std::make_unique<LocalChoiceControl>("ZOOM", shell_editor_ui::zoomChoices(),
         shell_editor_ui::zoomChoiceIndex(shell_editor_ui::zoomStep(getRootWindowState())));
@@ -107,7 +107,20 @@ void AvaAudioProcessorEditor::setupShellControls()
         getRootWindowState().setProperty(shell_editor_ui::key("zoom_step"),
             shell_editor_ui::zoomStepForChoice(unitZoomControl->getSelectedChoiceIndex()), nullptr);
     };
-    unitMainContent.addAndMakeVisible(*unitZoomControl);
+    unitMainRow.content.addAndMakeVisible(*unitZoomControl);
+    juce::StringArray widths;
+    for (int columns = shell_editor_ui::minEditorColumns; columns <= shell_editor_ui::maxEditorColumns; ++columns)
+        widths.add(juce::String(columns));
+    unitWidthControl = std::make_unique<LocalChoiceControl>("WINDOW\nWIDTH", widths,
+        shell_editor_ui::editorColumns(getRootWindowState()) - shell_editor_ui::minEditorColumns);
+    unitWidthControl->setBottomIndicatorsVisible(false, false);
+    unitWidthControl->onValueChanged = [this]
+    {
+        getRootWindowState().setProperty(shell_editor_ui::key("editor_columns"),
+            unitWidthControl->getSelectedChoiceIndex() + shell_editor_ui::minEditorColumns, nullptr);
+    };
+    unitMainRow.content.addAndMakeVisible(*unitWidthControl);
+
     juce::StringArray dockSizes;
     for (int size = 0; size <= 16; ++size) dockSizes.add(juce::String(size));
     unitDockSizeControl = std::make_unique<LocalChoiceControl>("DOCK\nSIZE", dockSizes,
@@ -119,7 +132,7 @@ void AvaAudioProcessorEditor::setupShellControls()
         if (size == 0) setDockOnly(false);
         getRootWindowState().setProperty(shell_editor_ui::key("dock_count"), size, nullptr);
     };
-    unitMainContent.addAndMakeVisible(*unitDockSizeControl);
+    unitMainRow.content.addAndMakeVisible(*unitDockSizeControl);
 
     pinRoutingControl = std::make_unique<LocalChoiceControl>(
         "PIN\nINSTS", juce::StringArray { "OFF", "ON" },
@@ -138,11 +151,11 @@ void AvaAudioProcessorEditor::setupShellControls()
         }
         resized();
     };
-    unitMainContent.addAndMakeVisible(*pinRoutingControl);
+    unitMainRow.content.addAndMakeVisible(*pinRoutingControl);
 
     unitSearchControl = std::make_unique<LocalChoiceControl>(
         "PIN\nSEARCH", juce::StringArray { "OFF", "ON" },
-        bool(getRootWindowState().getProperty(shell_editor_ui::key("search_visible"), true)) ? 1 : 0);
+        shell_editor_ui::isSearchVisible(getRootWindowState()) ? 1 : 0);
     unitSearchControl->setBottomIndicatorsVisible(false, false);
     unitSearchControl->onValueChanged = [this]
     {
@@ -157,7 +170,7 @@ void AvaAudioProcessorEditor::setupShellControls()
                 root->activeInstanceEditor->resized();
         }
     };
-    unitMainContent.addAndMakeVisible(*unitSearchControl);
+    unitMainRow.content.addAndMakeVisible(*unitSearchControl);
 
     unitSampleRateLabel = std::make_unique<SquareTextLabel>();
     unitSampleRateLabel->setName("sample-rate");
@@ -168,9 +181,7 @@ void AvaAudioProcessorEditor::setupShellControls()
     unitSampleRateLabel->getProperties().set("disableDockSelection", true);
     unitSampleRateLabel->setWantsKeyboardFocus(false);
     unitSampleRateLabel->setInterceptsMouseClicks(false, false);
-    unitMainContent.addAndMakeVisible(*unitSampleRateLabel);
-
-    slotsContent.onBackgroundClick = [this](const juce::MouseEvent&) { cancelHostSlotMove(); };
+    unitMainRow.content.addAndMakeVisible(*unitSampleRateLabel);
 
     for (int slotIndex = 0; slotIndex < static_cast<int>(hostSlotButtons.size()); ++slotIndex)
     {

@@ -167,7 +167,7 @@ void AvaAudioProcessorEditor::storeEditorUiState()
     auto& state = valueTreeState.state;
     const auto put = [&state](const char* name, juce::var value) { state.setProperty(shell_editor_ui::key(name), value, nullptr); };
     put("active_instance", activeInstanceId);
-    put("about.expanded", aboutExpanded);
+    put("about.expanded", unitPage == UnitPage::about);
 
     {
         // Layout can temporarily clamp the viewport to zero while the page is
@@ -187,7 +187,8 @@ void AvaAudioProcessorEditor::restoreEditorUiState()
     const juce::ScopedValueSetter<bool> restoreGuard(restoringEditorUiState, true);
     const auto& state = valueTreeState.state;
     const auto get = [&state](const char* name, juce::var fallback) { return state.getProperty(shell_editor_ui::key(name), fallback); };
-    aboutExpanded = static_cast<bool>(get("about.expanded", false));
+    if (unitPage == UnitPage::main || unitPage == UnitPage::about)
+        unitPage = bool(get("about.expanded", false)) ? UnitPage::about : UnitPage::main;
     if (routingPanel != nullptr) routingPanel->restoreUiState();
 
     const auto expanded = static_cast<int>(state.getProperty(shell_editor_ui::key("eql.expanded." + juce::String(static_cast<int>(audioProcessor.getSelectedCrossoverRange()))), -1));

@@ -102,7 +102,7 @@ void AvaAudioProcessorEditor::handlePinnedRoutingDrag(const int sourceId,
             ava::pinned_routing::moveToIndex(pinnedRoutingButtons, sourceIndex, targetIndex);
             ava::pinned_routing::moveToIndex(pinnedRoutingButtonIds, sourceIndex, targetIndex);
             for (int i = 0, x = firstX; i < count; ++i, x += step)
-                pinnedRoutingButtons[size_t(i)]->setBounds(x, 0, side, getPinnedRoutingTileHeight(*this));
+                pinnedRoutingButtons[size_t(i)]->setBounds(x, 0, side, side);
         }
     }
 
@@ -163,7 +163,6 @@ void AvaAudioProcessorEditor::refreshPinnedRoutingStrip()
     const auto orderedIds = pinnedInstanceIds(topology, getRootWindowState());
     const int gap = getUiGap(*this);
     const int side = getSquareControlSize(*this);
-    const int tileHeight = getPinnedRoutingTileHeight(*this);
     const auto firstColumnX = 3 * gap + 2 * controlBlockFrameThickness;
     const int firstX = juce::jmax(0, firstColumnX - pinnedRoutingViewport.getX());
     juce::String signature = juce::String(shell_editor_ui::zoomStep(getRootWindowState()));
@@ -178,7 +177,7 @@ void AvaAudioProcessorEditor::refreshPinnedRoutingStrip()
             if (index < pinnedRoutingButtons.size())
             {
                 auto& button = *pinnedRoutingButtons[index];
-                button.setBounds(x, 0, side, tileHeight);
+                button.setBounds(x, 0, side, side);
                 button.setSelectionHighlighted(id == selected);
                 // These switches read parameters directly rather than using
                 // attachments. A peer solo/automation change must repaint an
@@ -188,7 +187,7 @@ void AvaAudioProcessorEditor::refreshPinnedRoutingStrip()
             x += side + gap;
             ++index;
         }
-        pinnedRoutingContent.setSize(juce::jmax(1, x), tileHeight);
+        pinnedRoutingContent.setSize(juce::jmax(1, x), side);
         return;
     }
     pinnedRoutingSignature = signature;
@@ -210,6 +209,7 @@ void AvaAudioProcessorEditor::refreshPinnedRoutingStrip()
         button->getProperties().set("routingPinnedTile", true);
         button->setSelectionHighlighted(id == selected);
         button->setDragRequiresControl(false);
+        button->setClickOnRelease(BoxTextButton::ClickOnRelease::withoutFlash);
         button->onControlDragStarted = [this, id, tile = button.get()]
         {
             pinnedRoutingDragSourceId = id;
@@ -245,12 +245,12 @@ void AvaAudioProcessorEditor::refreshPinnedRoutingStrip()
         bindSwitch(0, AvaAudioProcessor::paramSoloInstanceId, "S");
         bindSwitch(1, AvaAudioProcessor::paramInstanceMuteId, "MT");
         bindSwitch(2, AvaAudioProcessor::paramGlobalBypassId, "BP");
-        button->setBounds(x, 0, side, tileHeight);
+        button->setBounds(x, 0, side, side);
         pinnedRoutingContent.addAndMakeVisible(*button);
         pinnedRoutingButtons.push_back(std::move(button));
         pinnedRoutingButtonIds.push_back(id);
         x += side + gap;
     }
-    pinnedRoutingContent.setSize(juce::jmax(1, x), tileHeight);
+    pinnedRoutingContent.setSize(juce::jmax(1, x), side);
     pinnedRoutingViewport.setViewPosition(previousScrollX, 0);
 }

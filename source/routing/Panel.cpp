@@ -252,13 +252,9 @@ public:
         groupBodies.clear();
         const auto width = instanceSize();
         const auto group = measureGroup(layoutState.entryInstanceId, width);
-        const auto canvasHeight = availableHeight > 0 ? juce::jmax(availableHeight, group.height) : getHeight();
-        // The first petal starts one standard UI gap inside the ROUTING canvas.
-        // Longer chains may scroll horizontally; all chains are centred vertically.
-        layoutGroup(layoutState.entryInstanceId,
-                    canvasPaddingX(),
-                    juce::jmax(0, (canvasHeight - group.height) / 2),
-                    width);
+        const auto maxTop = juce::jmax(0, availableHeight - group.height);
+        const auto groupTop = juce::jlimit(0, maxTop, centeringY - group.height / 2);
+        layoutGroup(layoutState.entryInstanceId, canvasPaddingX(), groupTop, width);
         repaint();
     }
 
@@ -284,6 +280,15 @@ public:
         if (moveSourceId != 0 && event.mods.isLeftButtonDown())
             clearMove();
     }
+
+    void mouseUp(const juce::MouseEvent& event) override
+    {
+        if (onBackgroundClick != nullptr && !event.mouseWasDraggedSinceMouseDown()
+            && !event.mods.isPopupMenu() && getComponentAt(event.getPosition()) == this)
+            onBackgroundClick();
+    }
+
+    std::function<void()> onBackgroundClick;
 
     void setContainersVisible(const bool active)
     {
@@ -334,9 +339,15 @@ public:
     double getReflowProgress() const noexcept { return reflow.value(); }
     bool isReflowRunning() const noexcept { return reflow.isRunning(); }
 
-    void setAvailableHeight(const int height)
+    void setCanvasSize(int width, int height, int visibleHeight, int centerY)
     {
-        availableHeight = height;
+        const bool needsRecentering = availableHeight != visibleHeight || centeringY != centerY;
+        availableHeight = visibleHeight;
+        centeringY = centerY;
+        if (getWidth() != width || getHeight() != height)
+            setSize(width, height);
+        else if (needsRecentering)
+            resized();
     }
 
     juce::String getDisplayNameFor(const int instanceId) const
@@ -1141,7 +1152,7 @@ private:
         return outer;
     }
 
-    int groupHeaderHeight() const { return juce::jmax(2 * getUiGap(*this), getCompactControlSize(*this) / 2 + 2 * controlEdgeInset); }
+    int groupHeaderHeight() const { return juce::jmax(2 * getUiGap(*this), getCompactControlSize(*this) / 2 + 2 * controlBlockHeaderButtonInset); }
 
     int instanceSize() const
     {
@@ -1235,8 +1246,8 @@ private:
                         -buttons->second.fullBounds.getX(), -buttons->second.fullBounds.getY()));
                 }
                 const auto cSize = getCompactControlSize(*this) / 2;
-                buttons->second.compensation->setBounds(currentX + currentWidth - cSize - controlEdgeInset - buttons->second.fullBounds.getX(),
-                    currentY + controlEdgeInset - buttons->second.fullBounds.getY(), cSize, cSize);
+                buttons->second.compensation->setBounds(currentX + currentWidth - cSize - controlBlockHeaderButtonInset - buttons->second.fullBounds.getX(),
+                    currentY + controlBlockHeaderButtonInset - buttons->second.fullBounds.getY(), cSize, cSize);
                 updateGroupAppearance(firstId);
             }
         }
@@ -1492,6 +1503,7 @@ private:
     std::optional<SlideDirection> pendingDirection;
     std::optional<SlideOrigin> pendingOrigin;
     int availableHeight = 0;
+    int centeringY = 0;
     int reflowGeneration = 0;
     bool retiredCleanupPending = false;
     std::map<int, juce::Rectangle<int>> locations;
@@ -1528,16 +1540,23 @@ RoutingPanel::RoutingPanel(AvaAudioProcessor& processor)
     viewport.onViewChanged = [this]
     {
         repaint();
-        if (updatingViewport || ! isShowing()) return;
+        if (updatingViewport) return;
+        syncScrollbars();
+        if (!isShowing()) return;
         const auto position = viewport.getViewPosition();
         parameters.state.setProperty(shell_editor_ui::key("scroll.routing.x"), position.x, nullptr);
         parameters.state.setProperty(shell_editor_ui::key("scroll.routing.y"), position.y, nullptr);
     };
     viewport.setViewedComponent(content.get(), false);
-    viewport.setScrollBarsShown(false, false, true, true);
-    viewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
+    viewport.setScrollBarsShown(false, false, false, false);
     viewport.setWantsKeyboardFocus(false);
     addAndMakeVisible(viewport);
+    for (auto* bar : {&horizontalScrollBar, &verticalScrollBar})
+    {
+        bar->setWantsKeyboardFocus(false);
+        bar->addListener(this);
+        addAndMakeVisible(*bar);
+    }
     containersButton = std::make_unique<BoxTextButton>();
     containersButton->setButtonText("CN");
     containersButton->setComponentID("routing.containers");
@@ -1563,8 +1582,15 @@ RoutingPanel::RoutingPanel(AvaAudioProcessor& processor)
 RoutingPanel::~RoutingPanel()
 {
     stopTimer();
+    horizontalScrollBar.removeListener(this);
+    verticalScrollBar.removeListener(this);
     viewport.onViewChanged = {};
     viewport.setViewedComponent(nullptr, false);
+}
+
+void RoutingPanel::setOnBackgroundClick(std::function<void()> action)
+{
+    content->onBackgroundClick = std::move(action);
 }
 
 void RoutingPanel::setOnOpenRoot(std::function<void()> action)
@@ -1626,35 +1652,66 @@ void RoutingPanel::scrollToOrigin()
     repaint();
 }
 
-void RoutingPanel::placeContainersButton(juce::Component& parent, const juce::Rectangle<int> routingFrame)
+void RoutingPanel::setLayoutBounds(juce::Rectangle<int> bounds, int length, int centerY)
 {
-    if (containersButton->getParentComponent() != &parent)
-        parent.addChildComponent(*containersButton);
-    const auto size = getCompactControlSize(*this) / 2;
-    containersButton->setBounds(routingFrame.getRight() - controlEdgeInset - size,
-                               routingFrame.getY() + controlEdgeInset, size, size);
-    containersButton->setVisible(isVisible());
-    containersButton->toFront(false);
+    const bool needsLayout = scrollbarLength != length || graphCenterY != centerY;
+    scrollbarLength = length;
+    graphCenterY = centerY;
+    if (bounds != getBounds())
+        setBounds(bounds);
+    else if (needsLayout)
+        resized();
 }
 
-void RoutingPanel::visibilityChanged()
+void RoutingPanel::syncScrollbars()
 {
-    if (containersButton != nullptr) containersButton->setVisible(isVisible());
+    const auto position = viewport.getViewPosition();
+    horizontalScrollBar.setRangeLimits(0.0, content->getWidth(), juce::dontSendNotification);
+    horizontalScrollBar.setCurrentRange(position.x, viewport.getWidth(), juce::dontSendNotification);
+    verticalScrollBar.setRangeLimits(0.0, content->getHeight(), juce::dontSendNotification);
+    verticalScrollBar.setCurrentRange(position.y, viewport.getHeight(), juce::dontSendNotification);
+}
+
+void RoutingPanel::scrollBarMoved(juce::ScrollBar* bar, double position)
+{
+    auto view = viewport.getViewPosition();
+    if (bar == &horizontalScrollBar) view.x = juce::roundToInt(position);
+    else view.y = juce::roundToInt(position);
+    viewport.setViewPosition(view);
+}
+
+void RoutingPanel::mouseUp(const juce::MouseEvent& event)
+{
+    if (content->onBackgroundClick != nullptr && !event.mouseWasDraggedSinceMouseDown()
+        && !event.mods.isPopupMenu() && getComponentAt(event.getPosition()) == this)
+        content->onBackgroundClick();
 }
 
 void RoutingPanel::resized()
 {
     const juce::ScopedValueSetter<bool> layoutGuard(updatingViewport, true);
-    viewport.setBounds(getLocalBounds());
-    if (containersButton != nullptr && containersButton->getParentComponent() == this)
+    const auto gap = getUiGap(*this);
+    const auto barArea = editorScrollBarWidth + gap;
+    const auto contentWidth = content->getPreferredWidth();
+    const auto contentHeight = content->getPreferredHeight();
+    const auto needsHorizontal = contentWidth > getWidth();
+    const auto showVertical = contentHeight > getHeight() - (needsHorizontal ? barArea : 0);
+    const auto canvasWidth = juce::jmax(0, getWidth() - (showVertical ? barArea : 0));
+    const auto showHorizontal = contentWidth > canvasWidth;
+    const auto canvasHeight = juce::jmax(0, getHeight() - (showHorizontal ? barArea : 0));
+
+    viewport.setBounds(0, 0, canvasWidth, canvasHeight);
+    verticalScrollBar.setBounds(getWidth() - editorScrollBarWidth, 0,
+                                editorScrollBarWidth, juce::jmin(scrollbarLength, canvasHeight));
+    horizontalScrollBar.setBounds(0, getHeight() - editorScrollBarWidth, getWidth(), editorScrollBarWidth);
+    if (containersButton != nullptr)
     {
         const auto size = getCompactControlSize(*this) / 2;
-        containersButton->setBounds(juce::jmax(0, getWidth() - controlEdgeInset - size), controlEdgeInset, size, size);
+        containersButton->setBounds(juce::jmax(0, canvasWidth - size), 0, size, size);
         containersButton->toFront(false);
     }
-    content->setAvailableHeight(viewport.getHeight());
-    content->setSize(juce::jmax(viewport.getWidth(), content->getPreferredWidth()),
-                     juce::jmax(viewport.getHeight(), content->getPreferredHeight()));
+    content->setCanvasSize(juce::jmax(canvasWidth, contentWidth), juce::jmax(canvasHeight, contentHeight),
+                           canvasHeight, graphCenterY);
     if (scrollReflowGeneration != content->getReflowGeneration())
     {
         scrollReflowGeneration = content->getReflowGeneration();
@@ -1663,10 +1720,8 @@ void RoutingPanel::resized()
     }
     if (scrollReflowActive)
     {
-        const auto finalWidth = viewport.getWidth();
-        const auto finalHeight = viewport.getHeight();
-        const auto targetX = juce::jlimit(0, juce::jmax(0, content->getTargetPreferredWidth() - finalWidth), scrollReflowStart.x);
-        const auto targetY = juce::jlimit(0, juce::jmax(0, content->getTargetPreferredHeight() - finalHeight), scrollReflowStart.y);
+        const auto targetX = juce::jlimit(0, juce::jmax(0, content->getTargetPreferredWidth() - canvasWidth), scrollReflowStart.x);
+        const auto targetY = juce::jlimit(0, juce::jmax(0, content->getTargetPreferredHeight() - canvasHeight), scrollReflowStart.y);
         const auto progress = content->getReflowProgress();
         viewport.setViewPosition(juce::roundToInt(scrollReflowStart.x + (targetX - scrollReflowStart.x) * progress),
                                  juce::roundToInt(scrollReflowStart.y + (targetY - scrollReflowStart.y) * progress));
@@ -1678,6 +1733,7 @@ void RoutingPanel::resized()
                                  static_cast<int>(parameters.state.getProperty(shell_editor_ui::key("scroll.routing.y"), 0)));
         restoreScrollPending = false;
     }
+    syncScrollbars();
     repaint();
 }
 

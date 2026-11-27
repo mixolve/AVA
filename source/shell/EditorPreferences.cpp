@@ -15,7 +15,7 @@ int editorPropertyPolicy(const juce::Identifier& property)
             AvaAudioProcessor::oscEnabledStateKey, AvaAudioProcessor::oscInputPortStateKey,
             AvaAudioProcessor::oscOutputHostStateKey, AvaAudioProcessor::oscOutputPortStateKey })
         if (property == juce::Identifier(name)) { policy = preservedPreference; break; }
-    for (const auto* name : { "zoom_step", "scroll.routing.x", "scroll.routing.y" })
+    for (const auto* name : { "zoom_step", "editor_columns", "scroll.routing.x", "scroll.routing.y" })
         if (property == shell_editor_ui::key(name)) { policy = preservedPreference; break; }
     const auto name = property.toString();
     if (name.startsWith(shell_editor_ui::key("selected.").toString())

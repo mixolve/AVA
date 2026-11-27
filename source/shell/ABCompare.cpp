@@ -29,15 +29,13 @@ bool AvaAudioProcessorEditor::restoreABStateSnapshot(const juce::MemoryBlock& sn
 
     struct PreservedUiState
     {
-        bool about = false;
-        bool unitMainExpanded = false;
+        UnitPage page = UnitPage::main;
         int filterScrollY = 0;
     };
 
     const PreservedUiState preservedUiState
     {
-        aboutExpanded,
-        !unitMainContent.isBlockCollapsed("MAIN"),
+        unitPage,
         filterViewport.getViewPositionY()
     };
 
@@ -65,16 +63,7 @@ bool AvaAudioProcessorEditor::restoreABStateSnapshot(const juce::MemoryBlock& sn
     refreshFilterPresetList();
     if (getActiveEqlProcessor() != nullptr) refreshEqlFilterSectionsFromProcessor();
 
-    aboutExpanded = preservedUiState.about;
-    // A/B snapshots may store different collapse preferences. The user must
-    // keep access to the A/B control in UNIT > MAIN after switching states.
-    // UNIT > MAIN is the only block owned by unitMainContent, so use
-    // its public collapse API rather than the private per-block setter.
-    if (preservedUiState.unitMainExpanded)
-        unitMainContent.expandAllBlocks();
-    else
-        unitMainContent.collapseAllBlocks();
-
+    unitPage = preservedUiState.page;
     storeEditorStateToValueTree();
     updateEditorResizeLimits();
     updateSectionStates();

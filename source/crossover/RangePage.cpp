@@ -109,6 +109,14 @@ CrossoverRangePage::ParameterGroup::ParameterGroup(juce::String name,
 
 }
 
+CrossoverRangePage::ParameterGroup::~ParameterGroup() = default;
+
+void CrossoverRangePage::ParameterGroup::enableHorizontalLayout()
+{
+    horizontalRow = std::make_unique<HeaderControlRow>(*this, label);
+    horizontalRow->attach(label.toLowerCase());
+}
+
 int CrossoverRangePage::ParameterGroup::getPreferredHeight() const
 {
     return getLayoutHeight(getWidth());
@@ -116,6 +124,7 @@ int CrossoverRangePage::ParameterGroup::getPreferredHeight() const
 
 int CrossoverRangePage::ParameterGroup::getLayoutHeight(int width) const
 {
+    if (horizontalRow != nullptr) return horizontalRow->getPreferredHeight();
     const auto padding = bool(getProperties().getWithDefault("independentBlock", false)) ? controlBlockPadding + controlBlockFrameThickness : controlBlockPadding;
     if (isBlockCollapsed(label))
         return controlBlockHeaderHeight
@@ -130,9 +139,7 @@ int CrossoverRangePage::ParameterGroup::getLayoutHeight(int width) const
 
 int CrossoverRangePage::ParameterGroup::getPreferredWidth() const
 {
-    // LISTEN uses six grid columns even though only four controls occupy
-    // each row. Reserve the blank middle columns in its preferred width.
-    if (blockIndex == int(ava::modules::chain::blocks::Id::listen))
+    if (horizontalRow != nullptr)
         return 6 * getSquareControlSize(*this) + 5 * getUiGap(*this)
             + 2 * controlBlockPadding;
     return measureRows(members, columns).x + 2 * controlBlockPadding;
@@ -153,6 +160,16 @@ void CrossoverRangePage::ParameterGroup::resized()
     const auto independent = bool(getProperties().getWithDefault("independentBlock", false));
     const auto padding = independent ? controlBlockPadding + controlBlockFrameThickness : controlBlockPadding;
     const auto collapsed = isBlockCollapsed(label);
+    if (horizontalRow != nullptr)
+    {
+        std::vector<juce::Component*> controls;
+        for (const auto& member : members)
+            if (!member->layoutHidden) controls.push_back(member.get());
+        const auto displayTitle = controlBlockFrames.empty() ? juce::String{} : controlBlockFrames.front().displayTitle;
+        controlBlockFrames = {{getLocalBounds(), label, independent ? uiGreyDark : uiWhite, displayTitle}};
+        horizontalRow->layoutContents(controls);
+        return;
+    }
     juce::Rectangle<int> occupied;
     for (const auto& member : members)
     {
@@ -167,29 +184,6 @@ void CrossoverRangePage::ParameterGroup::resized()
                 .withTrimmedBottom(uiGap + controlBlockFrameThickness)
             : getLocalBounds().reduced(padding).withTrimmedTop(controlBlockHeaderHeight);
         layoutRows(members, 0, members.size(), controlsBounds, columns);
-
-        // LISTEN: LC / RC and MC / SC stay in columns 1-2; the other
-        // two controls in each row belong at the *right end* of the grid.
-        // Retain four logical controls per row for height calculation,
-        // then position LL / RR and MS+3 / SS in the last two columns.
-        if (blockIndex == int(ava::modules::chain::blocks::Id::listen)
-            && members.size() == 8)
-        {
-            const auto size = getSquareControlSize(*this);
-            const auto gap = getUiGap(*this);
-            const auto stride = size + gap;
-            const auto availableColumns = (controlsBounds.getWidth() + gap) / stride;
-            if (availableColumns >= 6)
-            {
-                const auto rightPairX = controlsBounds.getX() + (availableColumns - 2) * stride;
-                for (size_t row = 0; row < 2; ++row)
-                    for (size_t offset = 0; offset < 2; ++offset)
-                    {
-                        auto& control = *members[4 * row + 2 + offset];
-                        control.setTopLeftPosition(rightPairX + int(offset) * stride, control.getY());
-                    }
-            }
-        }
 
         for (const auto& member : members)
             if (!member->layoutHidden) occupied = occupied.getUnion(member->getBounds());
@@ -222,13 +216,16 @@ void CrossoverRangePage::groupBlockControls()
         group->blockIndex = int(block.id);
         group->label = block.name;
         group->collapseBlockInitially(group->label);
-        group->columns = block.id == ava::modules::chain::blocks::Id::listen ? 4 : 0;
         if (owner.config.uiState != nullptr)
             group->bindCollapseState(*owner.config.uiState,
                 (owner.config.collapseScope.isNotEmpty() ? owner.config.collapseScope : owner.config.moduleKey)
                 + ".band-" + juce::String(int(rangeIndex + 1)) + ".groups");
         rows.erase(first, last);
         addAndMakeVisible(*group);
+        if (block.id == ava::modules::chain::blocks::Id::listen
+            || block.id == ava::modules::chain::blocks::Id::shift
+            || block.id == ava::modules::chain::blocks::Id::sibil)
+            group->enableHorizontalLayout();
         rows.insert(rows.begin() + std::ptrdiff_t(insertIndex), std::move(group));
     }
 }
@@ -266,6 +263,11 @@ CrossoverRangePage::CrossoverRangePage(CrossoverModuleComponent& ownerIn,
         }
         refreshBlockVisibility();
     }
+    if (owner.config.moduleKey == "dyn")
+    {
+        dynRow = std::make_unique<HeaderControlRow>(*this, "DYN");
+        dynRow->attach("dyn");
+    }
     refreshRows();
 }
 
@@ -292,23 +294,7 @@ void CrossoverRangePage::refreshExternalState()
 
 int CrossoverRangePage::getPreferredHeight() const
 {
-    const bool isDyn = owner.config.moduleKey == "dyn";
-    if (isDyn)
-    {
-        if (isBlockCollapsed("DYN"))
-            return controlBlockHeaderHeight;
-        std::vector<ControlGridCell> cells;
-        cells.reserve(rows.size());
-        for (const auto& row : rows)
-            if (!row->layoutHidden)
-                cells.push_back({row.get(), 1,
-                    bool(row->getProperties().getWithDefault("startNewControlRow", false))});
-        const auto inset = controlBlockPadding + controlBlockFrameThickness;
-        const auto innerWidth = juce::jmax(1, getWidth() - getUiGap(*this) - 2 * inset);
-        const auto content = measureControlGrid(*this,
-            {inset, controlBlockHeaderHeight + uiGap, innerWidth, 0}, cells);
-        return content.getBottom() + uiGap + controlBlockFrameThickness;
-    }
+    if (dynRow != nullptr) return dynRow->getPreferredHeight();
     return measureRows(rows, 0, juce::jmax(1, getWidth() - int(getProperties().getWithDefault("contentRightInset", 0)))).y
         + 2 * (getEditorContentInset(*this) - 2 * getUiGap(*this));
 }
@@ -316,38 +302,17 @@ int CrossoverRangePage::getPreferredHeight() const
 void CrossoverRangePage::resized()
 {
     if (bool(getProperties().getWithDefault("flatBlocks", false))) return;
-    const bool isDyn = owner.config.moduleKey == "dyn";
-    if (isDyn)
+    if (dynRow != nullptr)
     {
-        controlBlockFrames.clear();
+        std::vector<juce::Component*> controls;
+        controls.reserve(rows.size());
+        for (auto& row : rows)
+            if (!row->layoutHidden) controls.push_back(row.get());
+
         const auto frameWidth = juce::jmax(0, getWidth() - getUiGap(*this));
-        if (isBlockCollapsed("DYN"))
-        {
-            for (auto& row : rows) { row->setVisible(false); row->setBounds({}); }
-            controlBlockFrames.push_back({{0, 0, frameWidth,
-                controlBlockHeaderHeight}, "DYN", uiGreyDark});
-        }
-        else
-        {
-            std::vector<ControlGridCell> cells;
-            cells.reserve(rows.size());
-            for (auto& row : rows)
-            {
-                row->setVisible(!row->layoutHidden);
-                if (!row->layoutHidden)
-                    cells.push_back({row.get(), 1,
-                        bool(row->getProperties().getWithDefault("startNewControlRow", false))});
-                else row->setBounds({});
-            }
-            const auto inset = controlBlockPadding + controlBlockFrameThickness;
-            const auto innerWidth = juce::jmax(1, frameWidth - 2 * inset);
-            const auto occupied = layoutControlGrid(*this,
-                {inset, controlBlockHeaderHeight + uiGap, innerWidth, 0}, cells);
-            controlBlockFrames.push_back({{0, 0, frameWidth,
-                occupied.getBottom() + uiGap + controlBlockFrameThickness}, "DYN", uiGreyDark});
-        }
-        controlBlockFrames.back().displayTitle = owner.getProperties()
-            .getWithDefault("moduleDisplayTitle", "DYN").toString();
+        const auto caption = owner.getProperties().getWithDefault("moduleDisplayTitle", "DYN").toString();
+        controlBlockFrames = {{{0, 0, frameWidth, dynRow->getPreferredHeight()}, "DYN", uiGreyDark, caption}};
+        dynRow->layoutContents(controls);
         return;
     }
     for (auto& row : rows) row->setVisible(!row->layoutHidden);
@@ -558,13 +523,15 @@ std::vector<std::pair<int, juce::Component*>> CrossoverRangePage::independentBlo
     std::vector<std::pair<int, juce::Component*>> result;
     for (auto& row : rows)
     {
-        if (row->layoutHidden) { row->setVisible(false); continue; }
+        // The stack layout reveals only rows with an active slot. A deleted
+        // original module can still have an editor row in this range.
+        row->setVisible(false);
+        if (row->layoutHidden) continue;
         row->getProperties().set("independentBlock", true);
         // CHAIN rows are reparented out of CrossoverModuleComponent when
         // shown in MODULES; keep their local-thumb painting policy with them.
         row->getProperties().set("paintRangeLocally", true);
-        if (row->getParentComponent() != &parent) parent.addAndMakeVisible(*row);
-        row->setVisible(true);
+        if (row->getParentComponent() != &parent) parent.addChildComponent(*row);
         row->setSize(width, row->getLayoutHeight(width));
         result.emplace_back(row->blockIndex, row.get());
     }

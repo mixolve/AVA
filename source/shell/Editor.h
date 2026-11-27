@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <span>
 #include <vector>
 
 class BoxTextButton;
@@ -42,6 +43,13 @@ public:
         if (onBackgroundClick != nullptr) onBackgroundClick(event);
         ControlBlockComponent::mouseDown(event);
     }
+    void mouseUp(const juce::MouseEvent& event) override
+    {
+        if (onBackgroundRelease != nullptr && !event.mouseWasDraggedSinceMouseDown()
+            && !event.mods.isPopupMenu() && getComponentAt(event.getPosition()) == this)
+            onBackgroundRelease();
+        ControlBlockComponent::mouseUp(event);
+    }
     void paint(juce::Graphics& graphics) override
     {
         if (isOpaque())
@@ -51,6 +59,7 @@ public:
         }
     }
     std::function<void(const juce::MouseEvent&)> onBackgroundClick;
+    std::function<void()> onBackgroundRelease;
 };
 
 class DockSlotContent final : public juce::Component
@@ -75,15 +84,10 @@ private:
 class QuickAccessStrip final : public juce::Component
 {
 public:
-    std::function<void(const juce::MouseWheelDetails&)> onScroll;
     void paint(juce::Graphics& g) override
     {
         g.setColour(uiPanelBackground);
         g.fillAll();
-    }
-    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
-    {
-        if (onScroll) onScroll(wheel);
     }
 };
 
@@ -123,7 +127,6 @@ public:
     DockSortOverlay() { setMouseCursor(juce::MouseCursor::NormalCursor); }
     ~DockSortOverlay() override { if (dragging) beginDragAutoRepeat(0); }
     std::function<void(const juce::MouseEvent&, int)> onGesture;
-    std::function<void(const juce::MouseWheelDetails&)> onScroll;
     void mouseDown(const juce::MouseEvent& event) override
     {
         if (!event.mods.isLeftButtonDown()) return;
@@ -144,94 +147,45 @@ public:
         beginDragAutoRepeat(0);
         if (onGesture) onGesture(event, 2);
     }
-    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
-    { if (onScroll) onScroll(wheel); }
 private:
     bool dragging = false;
 };
 
-// Never jump to a new position when the user clicks the empty scrollbar track.
-// Mouse-down and subsequent drag/up are forwarded only for gestures on the thumb.
-class DragOnlyScrollBar final : public juce::ScrollBar
-{
-public:
-    explicit DragOnlyScrollBar(bool vertical) : juce::ScrollBar(vertical), verticalBar(vertical) {}
-
-    void mouseDown(const juce::MouseEvent& event) override
-    {
-        thumbDragging = event.mods.isLeftButtonDown() && isInsideThumb(event.getPosition());
-        if (thumbDragging) juce::ScrollBar::mouseDown(event);
-    }
-    void mouseDrag(const juce::MouseEvent& event) override
-    {
-        if (thumbDragging) juce::ScrollBar::mouseDrag(event);
-    }
-    void mouseUp(const juce::MouseEvent& event) override
-    {
-        if (thumbDragging) juce::ScrollBar::mouseUp(event);
-        thumbDragging = false;
-    }
-private:
-    bool isInsideThumb(juce::Point<int> point) const
-    {
-        const auto total = getRangeLimit().getLength();
-        const auto size = getCurrentRangeSize();
-        const auto length = verticalBar ? getHeight() : getWidth();
-        if (total <= 0.0 || size >= total || length <= 0) return false;
-        const auto thumbLength = juce::jmin(length, juce::jmax(8, juce::roundToInt(length * size / total)));
-        const auto span = total - size;
-        const auto offset = juce::roundToInt((length - thumbLength)
-            * (getCurrentRangeStart() - getMinimumRangeLimit()) / span);
-        const auto axis = verticalBar ? point.y : point.x;
-        return axis >= offset && axis < offset + thumbLength;
-    }
-    bool verticalBar = true;
-    bool thumbDragging = false;
-};
-
-// Fixed routing ribbon. Each 80px-wide tile has a white outer frame, a dark
-// body and a 72x44 text zone; the ribbon itself has no shared border.
-// Wheel and trackpad motion scroll horizontally by pixels, never by whole tabs.
-class RoutingTabsViewport final : public juce::Viewport
+class HorizontalControlViewport final : public UiScrollViewport
 {
 public:
     void paint(juce::Graphics& graphics) override
     {
-        // Cover the scrolling editor underneath, using its normal background.
         graphics.fillAll(uiPanelBackground);
     }
+};
 
-    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
-    {
-        const bool horizontalGesture = std::abs(wheel.deltaX) > std::abs(wheel.deltaY);
-        const auto* viewed = getViewedComponent();
-        const int maxX = viewed != nullptr ? juce::jmax(0, viewed->getWidth() - getWidth()) : 0;
-        if (maxX == 0)
-        {
-            // Horizontal movement stays in the ribbon; only vertical wheel
-            // gestures may scroll the page beneath an empty ribbon.
-            if (!horizontalGesture) juce::Component::mouseWheelMove(event, wheel);
-            return;
-        }
+class HeaderControlRow final : private juce::ScrollBar::Listener, private juce::ComponentListener
+{
+public:
+    explicit HeaderControlRow(ControlBlockComponent& blockIn, juce::String titleIn = "MAIN")
+        : block(blockIn), title(std::move(titleIn)) {}
+    ~HeaderControlRow() override;
 
-        const float delta = std::abs(wheel.deltaX) > std::abs(wheel.deltaY)
-            ? wheel.deltaX : wheel.deltaY;
-        // Keep fractional trackpad movement instead of snapping to tile edges.
-        wheelRemainderPixels -= delta * 200.0f;
-        const int step = int(std::trunc(wheelRemainderPixels));
-        wheelRemainderPixels -= float(step);
-        if (step == 0) return;
+    void attach(const juce::String& name);
+    void layout(juce::Rectangle<int> header, std::span<juce::Component* const> controls);
+    void layoutContents(std::span<juce::Component* const> controls);
+    int getPreferredHeight() const;
+    void syncScrollBar();
 
-        const int current = getViewPositionX();
-        const int target = juce::jlimit(0, maxX, current + step);
-        if (target != current)
-            setViewPosition(target, 0);
-        else if (!horizontalGesture)
-            juce::Component::mouseWheelMove(event, wheel);
-    }
+    DockSlotContent content;
+    HorizontalControlViewport viewport;
 
 private:
-    float wheelRemainderPixels = 0.0f;
+    void scrollBarMoved(juce::ScrollBar*, double position) override;
+    void componentMovedOrResized(juce::Component&, bool moved, bool) override;
+    void componentParentHierarchyChanged(juce::Component&) override;
+    void componentVisibilityChanged(juce::Component&) override;
+    juce::Rectangle<int> getFrameBounds() const;
+
+    ControlBlockComponent& block;
+    const juce::String title;
+    CursorDragScrollBar scrollbar {false, CursorDragScrollBar::TrackClick::drag};
 };
 
 class AvaAudioProcessorEditor final : public juce::AudioProcessorEditor,
@@ -250,7 +204,8 @@ public:
     // Scroll metadata can lag behind the viewport (e.g. thumb dragging).
     bool keyPressed(const juce::KeyPress& key) override;
     void mouseDown(const juce::MouseEvent& event) override;
-    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
+    void mouseUp(const juce::MouseEvent& event) override;
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override {}
     void paint(juce::Graphics& g) override;
     void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
@@ -264,7 +219,6 @@ public:
     bool isControlManuallySelected(const juce::Component& component) const;
     void toggleControlManualSelection(juce::Component& component);
     void refreshQuickAccessControls();
-    bool allowsViewportScroll(const juce::Component& viewport) const;
 
 private:
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
@@ -274,7 +228,10 @@ private:
     class EqlCopyEditor;
 
     juce::Identifier controlSelectionStateKey(const juce::Component& component) const;
-    void showAllSection();
+    enum class UnitPage { main, about, routing, slots };
+    bool hasUnitPage() const noexcept { return unitPage != UnitPage::main; }
+    void showUnitPage(UnitPage page);
+    void layoutUnitPage(juce::Rectangle<int> bounds);
     void openRoutingInstance(int instanceId);
     void closeRoutingInstance();
     void selectFilterSection(int filterIndex);
@@ -305,7 +262,6 @@ public:
                         std::function<juce::String()> valueToText = {},
                         std::function<void()> resetAction = {},
                         juce::Component* anchorComponent = nullptr);
-    void toggleAboutSection();
     void setReturnToRoutingAction(std::function<void()> action);
     void showChoicePrompt(const juce::Rectangle<int>& anchorBounds,
                           const juce::StringArray& choices,
@@ -457,6 +413,7 @@ private:
     std::unique_ptr<PushControl> unitCopyButton;
     std::unique_ptr<PushControl> unitPasteButton;
     std::unique_ptr<LocalChoiceControl> unitZoomControl;
+    std::unique_ptr<LocalChoiceControl> unitWidthControl;
     std::unique_ptr<LocalChoiceControl> unitDockSizeControl;
     std::unique_ptr<SquareTextLabel> unitSampleRateLabel;
     std::unique_ptr<PushControl> sortFiltersButton;
@@ -465,10 +422,12 @@ private:
     std::array<std::unique_ptr<FilterSection>, EqlModuleProcessor::maxFilterCount> filterSections;
     juce::AudioProcessorValueTreeState* boundEqlState = nullptr;
     BackgroundClickComponent slotsContent;
+    UiScrollViewport slotsViewport;
+    juce::Rectangle<int> getMainScrollBarBounds() const;
     void syncMainScrollBar();
     void scrollBarMoved(juce::ScrollBar*, double) override;
     UiScrollViewport filterViewport;
-    DragOnlyScrollBar mainScrollBar { true };
+    CursorDragScrollBar mainScrollBar {true, CursorDragScrollBar::TrackClick::ignore};
     int mainScrollPosition = 0;
     BackgroundClickComponent moduleContent;
     QuickAccessStrip quickAccessStrip;
@@ -498,7 +457,7 @@ private:
     int dockDragSource = -1;
     int dockDropTarget = -1;
     void dragDockControl(const juce::MouseEvent&, int phase);
-    juce::Viewport quickAccessViewport;
+    UiScrollViewport quickAccessViewport;
     DockSlotContent quickAccessContent;
     struct QuickAccessItem
     {
@@ -516,7 +475,7 @@ private:
     std::unique_ptr<juce::TooltipWindow> dockTooltipWindow;
     BackgroundClickComponent unitContent;
     std::unique_ptr<ControlSearchPanel> controlSearchPanel;
-    RoutingTabsViewport pinnedRoutingViewport;
+    HorizontalControlViewport pinnedRoutingViewport;
     juce::Component pinnedRoutingContent;
     std::vector<std::unique_ptr<BoxTextButton>> pinnedRoutingButtons;
     std::vector<int> pinnedRoutingButtonIds;
@@ -530,10 +489,10 @@ private:
     uint32_t searchFlashStarted = 0;
     bool searchFlashOn = false;
     BackgroundClickComponent unitMainContent;
-    BackgroundClickComponent unitRoutingContent;
+    HeaderControlRow unitMainRow {unitMainContent};
     ControlBlockComponent unitSyncContent;
     BackgroundClickComponent mainContent;
-    BackgroundClickComponent modulesContent;
+    HeaderControlRow instanceMainRow {mainContent};
     std::unique_ptr<ModuleList> moduleList;
     int moduleListBand = -1;
     BackgroundClickComponent instanceContent;
@@ -542,7 +501,9 @@ private:
     std::unique_ptr<juce::MouseListener> svgExportClickListener;
     std::unique_ptr<juce::MouseListener> hostStateActionTracker;
     std::unique_ptr<juce::MouseListener> windowMoveGesture;
-    std::unique_ptr<LocalChoiceControl> aboutControl;
+    std::unique_ptr<PushControl> aboutControl;
+    std::unique_ptr<PushControl> routingControl;
+    std::unique_ptr<PushControl> slotsControl;
     std::unique_ptr<LocalChoiceControl> pinRoutingControl;
     std::unique_ptr<LocalChoiceControl> unitSearchControl;
     std::unique_ptr<juce::Component> aboutPanel;
@@ -562,7 +523,7 @@ private:
     // Newly added MODULES entries must also be shown on the underlying ALL page.
     // The popup obscures that page, so reveal the new entry when it closes.
     AvaAudioProcessor::ActiveModule displayedModule = AvaAudioProcessor::ActiveModule::none;
-    bool aboutExpanded = false;
+    UnitPage unitPage = UnitPage::main;
     bool updatingEditorResizeLimits = false;
     // Keep the expanded window height independently of the compact dock size.
     int expandedHeightBeforeDock = 0;

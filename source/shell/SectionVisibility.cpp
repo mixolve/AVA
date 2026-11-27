@@ -158,25 +158,17 @@ void AvaAudioProcessorEditor::updateSectionStates()
 {
     const juce::ScopeGuard promptVisibility {[this] { applyPromptVisibility(); applyDockVisibility(); }};
     const auto activeFilterCount = getActiveFilterCount();
-    if (aboutExpanded) cancelFilterDrag();
+    if (hasUnitPage()) cancelFilterDrag();
 
-    // UNIT MAIN owns ABOUT, with visibility controlled by its
-    // collapse state rather than a removed global sidebar.
-    if (aboutControl != nullptr)
-    {
-        aboutControl->setSelectedChoiceIndex(aboutExpanded ? 1 : 0, false);
-        aboutControl->setSelectionHighlighted(aboutExpanded);
-    }
-    if (aboutPanel != nullptr) aboutPanel->setVisible(aboutExpanded);
-
-    if (routingPanel != nullptr)
-        routingPanel->setVisible(!unitContent.isBlockCollapsed("UNIT")
-            && !unitRoutingContent.isBlockCollapsed("ROUTING") && !aboutExpanded);
+    const auto showPage = !isDockOnly();
+    setComponentVisible(aboutPanel.get(), showPage && unitPage == UnitPage::about);
+    setComponentVisible(routingPanel.get(), showPage && unitPage == UnitPage::routing);
+    slotsViewport.setVisible(showPage && unitPage == UnitPage::slots);
 
     updateInstanceHeadings();
 
-    const auto modulePageVisible = !aboutExpanded;
-    if (!modulePageVisible && hostSlotMoveSourceIndex >= 0) cancelHostSlotMove();
+    const auto modulePageVisible = !hasUnitPage();
+    if (!slotsViewport.isVisible() && hostSlotMoveSourceIndex >= 0) cancelHostSlotMove();
     setComponentVisible(crossoverEditor.get(), modulePageVisible);
     const auto moduleContentVisible = modulePageVisible && crossoverEditor != nullptr;
 
@@ -193,17 +185,20 @@ void AvaAudioProcessorEditor::updateSectionStates()
     updateEqlSectionStates(activeFilterCount);
 }
 
-void AvaAudioProcessorEditor::showAllSection()
+void AvaAudioProcessorEditor::showUnitPage(UnitPage page)
 {
+    if (unitPage == page) return;
     dismissTextPrompt();
-    if (audioProcessor.getSelectedModuleCopy() >= ava::module_stack::originalCount) {
-        audioProcessor.selectModuleCopy(-1);
-        rebindActiveModuleEditors();
-    }
-    aboutExpanded = false;
-    storeEditorStateToValueTree();
+    if (unitPage == UnitPage::routing && routingPanel != nullptr)
+        routingPanel->cancelMoveMode();
+    unitPage = page;
+    storeEditorUiState();
     updateSectionStates();
     resized();
-    filterViewport.setViewPosition(0, 0);
+    if (auto* parent = findParentComponentOfClass<AvaAudioProcessorEditor>())
+    {
+        parent->applyDockVisibility();
+        parent->updatePinnedSearchPosition();
+    }
+    grabKeyboardFocus();
 }
-

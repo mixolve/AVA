@@ -71,19 +71,28 @@ bool ControlBlockComponent::collapseAllBlocks()
     return changed;
 }
 
-juce::String ControlBlockComponent::blockHeaderAt(juce::Point<int> position) const
+juce::String ControlBlockComponent::blockHeaderAt(juce::Point<int> position, bool titleOnly) const
 {
     // Header hover/click is disabled only for non-collapsible pages.
     if (!collapsible) return {};
     for (auto it = controlBlockFrames.rbegin(); it != controlBlockFrames.rend(); ++it)
-        if (it->bounds.withHeight(controlBlockHeaderHeight).contains(position))
+    {
+        const auto header = it->bounds.withHeight(controlBlockHeaderHeight);
+        if (!header.contains(position)) continue;
+        if (!titleOnly && (!bool(getProperties().getWithDefault("headerScrollbarVisible", false))
+            || isBlockCollapsed(it->title)))
             return it->title;
+        const auto& title = it->displayTitle.isNotEmpty() ? it->displayTitle : it->title;
+        if (getControlBlockTitleZone(header, title).contains(position))
+            return it->title;
+    }
     return {};
 }
 
 void ControlBlockComponent::updateHoveredBlock(juce::Point<int> position)
 {
     const auto title = blockHeaderAt(position);
+    const bool nameHovered = title.isNotEmpty() && blockHeaderAt(position, true) == title;
     juce::String bypassTitle;
     if (moduleHeaderToggle)
         for (const auto& frame : controlBlockFrames)
@@ -94,7 +103,8 @@ void ControlBlockComponent::updateHoveredBlock(juce::Point<int> position)
                 break;
             }
 
-    if (hoveredBlockTitle == title && hoveredBypassTitle == bypassTitle) return;
+    if (hoveredBlockTitle == title && hoveredBypassTitle == bypassTitle && hoveredBlockName == nameHovered) return;
+    hoveredBlockName = nameHovered;
     hoveredBypassTitle = bypassTitle;
     if (hoveredBlockTitle == title)
     {
@@ -140,6 +150,7 @@ void ControlBlockComponent::mouseExit(const juce::MouseEvent&)
 {
     if (hoveredBlockTitle.isEmpty() && hoveredBypassTitle.isEmpty()) return;
     hoveredBlockTitle.clear();
+    hoveredBlockName = false;
     hoveredBypassTitle.clear();
     hoveredBlockVisualReady = false;
     ++hoverGeneration;
@@ -166,7 +177,7 @@ void ControlBlockComponent::mouseUp(const juce::MouseEvent& event)
                 return;
             }
     const auto title = blockHeaderAt(event.getPosition());
-    if (title.isEmpty()) return;
+    if (title.isEmpty() || title != blockHeaderAt(event.getMouseDownPosition())) return;
     setBlockCollapsed(title, !isBlockCollapsed(title));
     // Reflow the entire shared block page; it recalculates every frame height
     // and preserves scroll position when the section is collapsed or expanded.

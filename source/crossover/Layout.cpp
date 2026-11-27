@@ -25,34 +25,6 @@ void CrossoverModuleComponent::mouseDown(const juce::MouseEvent&)
     clearFocus();
 }
 
-void CrossoverModuleComponent::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
-{
-    if (bool(getProperties().getWithDefault("stackedModule", false)))
-    {
-        if (auto* editor = findParentComponentOfClass<AvaAudioProcessorEditor>())
-            editor->mouseWheelMove(event.getEventRelativeTo(editor), wheel);
-        return;
-    }
-    scrollPageViewport(event, wheel);
-}
-
-void CrossoverModuleComponent::scrollPageViewport(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
-{
-    if (pageViewport.getViewedComponent() == nullptr)
-        return;
-
-    const auto editorPosition = event.getEventRelativeTo(this).getPosition();
-
-    if (! pageViewport.getBounds().contains(editorPosition))
-        return;
-
-    scrollViewportWithWheel(pageViewport,
-                            pageViewport.getViewedComponent()->getHeight(),
-                            wheel,
-                            event.mods.isShiftDown());
-    saveUiState();
-}
-
 void CrossoverModuleComponent::refreshRangeControls()
 {
     for (auto& page : rangePages)
@@ -160,8 +132,13 @@ void CrossoverModuleComponent::updatePageViewport()
     }
 
     currentPage->getProperties().set("contentRightInset", getProperties().getWithDefault("contentRightInset", 0));
-    const auto pageWidth = viewportBounds.getWidth();
+    auto pageWidth = viewportBounds.getWidth();
     currentPage->setSize(pageWidth, currentPage->getHeight());
+    if (getCurrentPagePreferredHeight() > viewportBounds.getHeight())
+    {
+        pageWidth = juce::jmax(0, pageWidth - pageViewport.getScrollBarThickness());
+        currentPage->setSize(pageWidth, currentPage->getHeight());
+    }
     const auto pageHeight = juce::jmax(viewportBounds.getHeight(), getCurrentPagePreferredHeight());
     currentPage->setSize(pageWidth, pageHeight);
     pageViewport.setViewPosition(0, juce::jlimit(0, juce::jmax(0, pageHeight - viewportBounds.getHeight()), previousScrollY));
