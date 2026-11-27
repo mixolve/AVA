@@ -1,4 +1,5 @@
 #include "ControlSearch.h"
+#include "ControlHelp.h"
 #include "Editor.h"
 #include "Style.h"
 
@@ -16,6 +17,7 @@ ControlSearchPanel::ControlSearchPanel() : input(*this), resultsCanvas(*this)
 {
     setName("all-control-search");
     input.setName("SEARCH");
+    resultsCanvas.setName("control-search-results");
     input.setMultiLine(false);
     input.setReturnKeyStartsNewLine(false);
     input.setScrollbarsShown(false);
@@ -47,7 +49,7 @@ ControlSearchPanel::ControlSearchPanel() : input(*this), resultsCanvas(*this)
 
 bool ControlSearchPanel::SearchTextEditor::keyPressed(const juce::KeyPress& key)
 {
-    if (owner.handleSearchKey(key)) return true;
+    if (owner.helpText.isNotEmpty() || owner.handleSearchKey(key)) return true;
     return juce::TextEditor::keyPressed(key);
 }
 
@@ -87,6 +89,12 @@ void ControlSearchPanel::SearchTextEditor::mouseUp(const juce::MouseEvent& event
 
 void ControlSearchPanel::SearchTextEditor::paintOverChildren(juce::Graphics& g)
 {
+    if (owner.helpText.isNotEmpty())
+    {
+        if (control_help::paint(g, owner.helpText, getLocalBounds(), owner.helpStartedAtMs))
+            scheduleMarqueeRepaint(*this, helpMarqueePending);
+        return;
+    }
     juce::TextEditor::paintOverChildren(g);
     const auto value = getText();
     if (value.isEmpty()) return;
@@ -175,6 +183,29 @@ void ControlSearchPanel::chooseRow(int index)
         editor->grabKeyboardFocus();
 }
 
+void ControlSearchPanel::setHelpText(const juce::String& text)
+{
+    if (helpText == text) return;
+    const auto previousHeight = getDisplayedHeight();
+    const bool wasShowingHelp = helpText.isNotEmpty();
+    const bool showingHelp = text.isNotEmpty();
+    if (showingHelp && !wasShowingHelp)
+        resultsScrollBeforeHelp = listViewport.getViewPosition();
+
+    helpText = text;
+    helpStartedAtMs = juce::Time::getMillisecondCounterHiRes();
+    if (wasShowingHelp != showingHelp)
+    {
+        input.setReadOnly(showingHelp);
+        input.setCaretVisible(!showingHelp);
+        if (previousHeight != getDisplayedHeight() && onDisplayChanged)
+            onDisplayChanged();
+        if (!showingHelp)
+            listViewport.setViewPosition(resultsScrollBeforeHelp);
+    }
+    input.repaint();
+}
+
 void ControlSearchPanel::focusSearch()
 {
     if (!isShowing()) return;
@@ -220,7 +251,7 @@ int ControlSearchPanel::getPreferredHeight() const noexcept
 
 int ControlSearchPanel::getDisplayedHeight() const noexcept
 {
-    return resultsDismissed ? controlBlockHeaderHeight : getPreferredHeight();
+    return resultsDismissed || helpText.isNotEmpty() ? controlBlockHeaderHeight : getPreferredHeight();
 }
 
 void ControlSearchPanel::updateQuery()

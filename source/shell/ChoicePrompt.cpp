@@ -76,6 +76,8 @@ public:
         {
             auto button = std::make_unique<BoxTextButton>();
             button->setButtonText(choices[index]);
+            button->getProperties().set("controlHelp", choices[index]
+                + (itemEnabled(index) ? ". Selects this option for the open control." : ". This option is unavailable in the current context."));
             button->setTextJustification(itemJustification);
             button->setBorderVisible(true);
 

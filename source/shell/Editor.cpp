@@ -374,6 +374,7 @@ AvaAudioProcessorEditor::AvaAudioProcessorEditor(AvaAudioProcessor& processorToE
         dockSortOverlay.setVisible(dockControls.sort.getToggleState());
         dockSortOverlay.repaint();
     };
+    dockSortOverlay.setName("dock-sort-overlay");
     dockSortOverlay.onGesture = [this](const juce::MouseEvent& event, int phase) { dragDockControl(event, phase); };
     dockControls.collapse.onClick = [this] { setDockOnly(dockControls.collapse.getToggleState()); };
     dockControls.vertical.onClick = [this]

@@ -29,6 +29,7 @@ AvaAudioProcessorEditor::FilterSection::FilterSection(juce::AudioProcessorValueT
     // filters are added, removed or reordered. Never allow any of its UI
     // controls (including its header and phase accessory) into the dock.
     header->setBottomIndicatorsVisible(false, false);
+    header->getProperties().set("controlHelp", "FILTER TILE. Click to select this filter for editing. Drag to move it in the filter list.");
     body.getProperties().set("disableDockSelection", true);
     for (auto* control : std::array<juce::Component*, 6> {
             header.get(), typeControl.get(), orderControl.get(),

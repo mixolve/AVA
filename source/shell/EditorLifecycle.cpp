@@ -1,6 +1,7 @@
 #include "EqlCopyEditor.h"
 #include "ModuleList.h"
 #include "Editor.h"
+#include "ControlHelp.h"
 #include "EditorStateSchema.h"
 #include "LookAndFeel.h"
 #include "FilterSection.h"
@@ -137,6 +138,90 @@ void AvaAudioProcessorEditor::timerCallback()
     if (oscPanel != nullptr)
         oscPanel->refresh();
 
+    updateControlHelp();
+}
+
+void AvaAudioProcessorEditor::updateControlHelp()
+{
+    // The root owns the gesture even when the hovered control is in a nested
+    // instance editor or a pinned row belonging to the unit.
+    if (routingInstanceId != 0) return;
+
+    const auto clearPanel = [this]
+    {
+        if (controlHelpPanel != nullptr)
+            controlHelpPanel->setHelpText({});
+        controlHelpPanel = nullptr;
+    };
+    const auto showOverlay = [this](bool show)
+    {
+        if (controlHelpOverlayVisible == show) return;
+        controlHelpOverlayVisible = show;
+        repaint();
+    };
+    const auto modifiers = shell_editor_ui::pluginModifierKeys(*this);
+    if (!isShowing() || !modifiers.isCtrlDown() || !modifiers.isShiftDown())
+    {
+        clearPanel();
+        showOverlay(false);
+        controlHelpText.clear();
+        controlHelpReflowPointer.reset();
+        return;
+    }
+    if (modifiers.isAnyMouseButtonDown()) return;
+
+    const auto screen = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition().roundToInt();
+    auto* visibleEditor = activeInstanceEditor != nullptr ? activeInstanceEditor.get() : this;
+    auto* panel = visibleEditor->controlSearchPanel.get();
+    if (panel != nullptr && !panel->isShowing()) panel = nullptr;
+    const bool destinationChanged = controlHelpPanel != panel
+        || (panel == nullptr && !controlHelpOverlayVisible);
+
+    juce::String text;
+    if (controlHelpReflowPointer != screen || destinationChanged)
+    {
+        controlHelpReflowPointer.reset();
+        auto* hit = juce::Desktop::getInstance().findComponentAt(screen);
+        if (hit != nullptr && isParentOf(hit))
+            for (auto* target = hit; target != nullptr && target != this; target = target->getParentComponent())
+            {
+                text = control_help::describe(*target, screen);
+                if (text.isNotEmpty()) break;
+            }
+    }
+
+    const auto newHint = text.isNotEmpty() && text != controlHelpText;
+    if (!newHint && !destinationChanged) return;
+    if (newHint) controlHelpText = std::move(text);
+    if (controlHelpText.isEmpty()) return;
+
+    if (destinationChanged)
+    {
+        clearPanel();
+        controlHelpPanel = panel;
+    }
+    showOverlay(panel == nullptr);
+    if (panel == nullptr)
+    {
+        controlHelpStartedAtMs = juce::Time::getMillisecondCounterHiRes();
+        repaint();
+        return;
+    }
+    // Results disappearing can move a different control under a stationary
+    // pointer. Preserve the hint that opened help until the pointer moves.
+    if (panel->getDisplayedHeight() > controlBlockHeaderHeight)
+        controlHelpReflowPointer = screen;
+    panel->setHelpText(controlHelpText);
+}
+
+void AvaAudioProcessorEditor::paintControlHelpOverlay(juce::Graphics& graphics)
+{
+    if (!controlHelpOverlayVisible || controlHelpText.isEmpty()) return;
+    const auto gap = getUiGap(*this);
+    const auto bounds = getLocalBounds().reduced(gap, 0).withTrimmedTop(2 * gap)
+        .withHeight(controlBlockHeaderHeight);
+    if (control_help::paint(graphics, controlHelpText, bounds, controlHelpStartedAtMs))
+        scheduleMarqueeRepaint(*this, controlHelpMarqueePending);
 }
 
 bool AvaAudioProcessorEditor::keyPressed(const juce::KeyPress& key)

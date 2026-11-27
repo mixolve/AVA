@@ -1,4 +1,5 @@
 #include "Prompt.h"
+#include "ChoiceControl.h"
 #include "ValueEditor.h"
 #include "UppercaseText.h"
 #include "ParameterEditing.h"
@@ -86,6 +87,13 @@ public:
             // the full height of the component (including those indicators).
             textEditor.setBorder(juce::BorderSize<int>(
                 text.getY() - area.getY(), 1, area.getBottom() - text.getBottom(), 1));
+        }
+        else if (component.findParentComponentOfClass<LocalContinuousControl>() != nullptr)
+        {
+            // Centre the editable value in the tile's text area between its strips.
+            textEditor.setBorder(juce::BorderSize<int>(
+                text.getY() - area.getY(), text.getX() - area.getX(),
+                area.getBottom() - text.getBottom(), area.getRight() - text.getRight()));
         }
         for (auto& previous : anchorAncestors)
             if (previous) previous->removeComponentListener(this);

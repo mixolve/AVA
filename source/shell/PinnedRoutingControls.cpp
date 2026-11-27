@@ -73,6 +73,10 @@ AvaAudioProcessorEditor::UnitSyncControls::UnitSyncControls()
     receive.setName("unit-receive");
     send.setName("unit-send");
     pause.setTitle("Pause unit sync");
+    receive.getProperties().set("controlHelp", "RECEIVE INDICATOR. Flashes when this unit receives a sync edit. To allow incoming edits, enable RECEIVE.");
+    send.getProperties().set("controlHelp", "SEND INDICATOR. Flashes when this unit sends an edit. Configure destinations with LINK TO.");
+    connect.getProperties().set("controlHelp", "CONNECT. Drag this pad onto a different AVA window. The source enables SEND and adds the destination to LINK TO. The destination enables RECEIVE.");
+    pause.getProperties().set("controlHelp", "PAUSE SYNC. Temporarily pauses outgoing and incoming unit edits. Click again to resume with the same link settings.");
     addAndMakeVisible(receive);
     addAndMakeVisible(send);
     addAndMakeVisible(connect);

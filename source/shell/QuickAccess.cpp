@@ -760,6 +760,13 @@ void AvaAudioProcessorEditor::refreshQuickAccessControls()
         }
         }
         if (copy == nullptr) continue;
+        if (source != nullptr)
+        {
+            const auto identity = source->getComponentID().isNotEmpty() ? source->getComponentID() : source->getName();
+            if (identity.isNotEmpty()) copy->getProperties().set("controlHelpIdentity", identity);
+            if (source->getProperties().contains("controlHelp"))
+                copy->getProperties().set("controlHelp", source->getProperties()["controlHelp"]);
+        }
         std::unique_ptr<AccessoryButton> accessoryCopy;
         if (auto* mirror = dynamic_cast<ParameterField*>(copy.get()))
         {

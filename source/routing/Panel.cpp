@@ -578,6 +578,8 @@ public:
             for (int index = 0; index < 4; ++index)
             {
                 group.petals[static_cast<size_t>(index)] = makePetal();
+                constexpr const char* directions[] {"before", "after", "above", "below"};
+                group.petals[static_cast<size_t>(index)]->setComponentID(juce::String("routing.petal.") + directions[index]);
                 group.petals[static_cast<size_t>(index)]->onClick = [this, id = node.id, index]
                 {
                     auto changed = false;
@@ -882,6 +884,10 @@ private:
             if (changed) notifyTopologyChanged();
             else { pendingDirection.reset(); pendingOrigin.reset(); }
         };
+        instance.addSerial->setComponentID("routing.petal.after");
+        instance.addSerialBefore->setComponentID("routing.petal.before");
+        instance.addParallelBefore->setComponentID("routing.petal.above");
+        instance.addParallel->setComponentID("routing.petal.below");
         instance.addSerial->onClick = [action, petal = instance.addSerial.get()] { action(true, false, *petal); };
         instance.addSerialBefore->onClick = [action, petal = instance.addSerialBefore.get()] { action(true, true, *petal); };
         instance.addParallel->onClick = [action, petal = instance.addParallel.get()] { action(false, false, *petal); };

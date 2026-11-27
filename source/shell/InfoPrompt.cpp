@@ -151,6 +151,11 @@ public:
             };
         }
 
+        linkButton.getProperties().set("controlHelp", urlText.startsWithIgnoreCase("ava-manual://")
+            ? juce::String("MANUAL. Opens the bundled AVA manual in your default browser.")
+            : urlText.startsWithIgnoreCase("ava-licenses://")
+                ? juce::String("LICENSES. Opens the bundled third-party licenses in your default browser.")
+                : linkButton.getButtonText() + ". Opens this link in your default browser.");
         addAndMakeVisible(linkButton);
     }
 

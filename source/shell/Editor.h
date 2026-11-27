@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -522,6 +523,14 @@ private:
     std::vector<QuickAccessItem> quickAccessItems;
     juce::String quickAccessOrderCache;
     std::unique_ptr<juce::TooltipWindow> dockTooltipWindow;
+    juce::Component::SafePointer<ControlSearchPanel> controlHelpPanel;
+    std::optional<juce::Point<int>> controlHelpReflowPointer;
+    juce::String controlHelpText;
+    double controlHelpStartedAtMs = 0.0;
+    bool controlHelpOverlayVisible = false;
+    bool controlHelpMarqueePending = false;
+    void paintControlHelpOverlay(juce::Graphics&);
+    void updateControlHelp();
     std::unique_ptr<ControlSearchPanel> controlSearchPanel;
     HorizontalControlViewport pinnedRoutingViewport;
     std::unique_ptr<LocalContinuousControl> pinnedRoutingScrollControl;

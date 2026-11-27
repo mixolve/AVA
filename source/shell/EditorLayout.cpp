@@ -28,7 +28,12 @@ void AvaAudioProcessorEditor::paintOverChildren(juce::Graphics& g)
         g.fillRect(bounds.withWidth(thickness));
         g.fillRect(bounds.withLeft(bounds.getRight() - thickness));
     };
-    if (activeInstanceEditor != nullptr) { paintOuterFrame(); return; }
+    if (activeInstanceEditor != nullptr)
+    {
+        paintOuterFrame();
+        paintControlHelpOverlay(g);
+        return;
+    }
     const auto modulePageVisible = !hasUnitPage();
     {
     const juce::Graphics::ScopedSaveState saved(g);
@@ -63,6 +68,7 @@ void AvaAudioProcessorEditor::paintOverChildren(juce::Graphics& g)
     // This is the final editor overlay so child panels cannot cover the
     // two-pixel #222222 plugin frame. It does not change window dimensions.
     paintOuterFrame();
+    paintControlHelpOverlay(g);
 }
 
 int AvaAudioProcessorEditor::getActiveFilterContentHeight() const

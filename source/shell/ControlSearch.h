@@ -29,6 +29,7 @@ public:
     std::function<void()> onDisplayChanged;
     void refreshMatches();
     void focusSearch();
+    void setHelpText(const juce::String& text);
     void resized() override;
     void paint(juce::Graphics&) override;
     void paintOverChildren(juce::Graphics&) override;
@@ -38,7 +39,10 @@ private:
     {
     public:
         void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override {}
-        explicit SearchTextEditor(ControlSearchPanel& ownerIn) : owner(ownerIn) {}
+        explicit SearchTextEditor(ControlSearchPanel& ownerIn) : owner(ownerIn)
+        {
+            setMouseCursor(juce::MouseCursor::NormalCursor);
+        }
         bool keyPressed(const juce::KeyPress& key) override;
         void focusGained(FocusChangeType cause) override;
         void focusLost(FocusChangeType cause) override;
@@ -48,6 +52,7 @@ private:
     private:
         ControlSearchPanel& owner;
         bool selectOnMouseUp = false;
+        bool helpMarqueePending = false;
     };
 
     bool handleSearchKey(const juce::KeyPress& key);
@@ -82,6 +87,9 @@ private:
     UiScrollViewport listViewport;
     ResultCanvas resultsCanvas;
     std::vector<ControlSearchEntry> results;
+    juce::String helpText;
+    double helpStartedAtMs = 0.0;
+    juce::Point<int> resultsScrollBeforeHelp;
     int selectedRow = -1;
     bool resultsDismissed = false;
     juce::Rectangle<int> frame;
