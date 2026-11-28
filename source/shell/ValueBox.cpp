@@ -358,14 +358,11 @@ void ValueBoxComponent::paintRangeIndicators(juce::Graphics& g, juce::Component&
     const auto& desktop = juce::Desktop::getInstance();
     for (const auto& source : desktop.getMouseSources())
     {
-        if (!source.isMouse()) continue;
+        // SL and BP share the value body's mouse target. During a press or
+        // drag, only the indicator that received mouse-down may highlight.
+        if (!source.isMouse() || source.isDragging()) continue;
         const auto point = root.getLocalPoint(nullptr, source.getScreenPosition());
-        // Preserve the pressed control's hover across a gesture, rather than
-        // dropping it while JUCE reports a dragging mouse source.
-        // JUCE reports isDragging() as soon as a mouse button goes down,
-        // even if the pointer has not moved. Keep normal hit-testing on a click.
-        auto* target = source.isDragging() && source.hasMovedSignificantlySincePressed()
-            ? source.getComponentUnderMouse() : root.getComponentAt(point.roundToInt());
+        auto* target = root.getComponentAt(point.roundToInt());
         if (target == nullptr || (target != &root && !root.isParentOf(target))) continue;
         for (; target != nullptr && target != &root; target = target->getParentComponent())
             if (auto* value = dynamic_cast<ValueBoxComponent*>(target))

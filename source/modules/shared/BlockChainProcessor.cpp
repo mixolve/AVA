@@ -87,7 +87,7 @@ bool BlockChainProcessor::setStateInformation(const void* data, const int sizeIn
                 restoredState.addChild(parameter, -1, nullptr);
             };
             addDefault(ava::modules::sibil::lookaheadId, 0.0);
-            addDefault(ava::modules::sibil::holdId, ava::modules::sibil::defaultHoldMs);
+            addDefault(ava::modules::sibil::holdId, 2.0);
         }
 
     if (!isCurrentState(restoredState, valueTreeState))

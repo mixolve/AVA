@@ -1,16 +1,18 @@
 #pragma once
 namespace ava::modules::sibil {
 inline constexpr float maximumLookaheadMs = 30.0f;
+inline constexpr float defaultLookaheadMs = 10.0f;
 inline constexpr auto lookaheadId = "sibil.lookahead";
 inline constexpr float maximumHoldMs = 100.0f;
-inline constexpr float defaultHoldMs = 2.0f;
+inline constexpr float defaultHoldMs = 10.0f;
 inline constexpr auto holdId = "sibil.hold";
+inline constexpr float defaultFadeMs = 0.0f;
 
 struct Parameters {
     bool hidden=true, bypassed=false, soloS=false, soloRest=false;
-    float level=-50.f, sensitivity=50.f, noise=20.f, fade=5.f;
+    float level=-50.f, sensitivity=50.f, noise=20.f, fade=defaultFadeMs;
     float gainS=0.f, gainRest=0.f;
-    float lookaheadMs=0.f;
+    float lookaheadMs=defaultLookaheadMs;
     float holdMs=defaultHoldMs;
 };
 
